@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ERP Marketplaces - Conexão</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: #F8FAFC;
+      color: #0F172A;
+      width: 360px;
+      padding: 14px;
+      font-size: 12px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding-bottom: 10px;
+      border-bottom: 1px solid #E2E8F0;
+      margin-bottom: 12px;
+    }
+    .logo-area {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .badge-icon {
+      background-color: #0F172A;
+      color: #FFFFFF;
+      font-weight: 700;
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+    .title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #1E293B;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 12px;
+      background-color: #F1F5F9;
+      color: #64748B;
+      font-weight: 500;
+    }
+    .status-badge.online {
+      background-color: #ECFDF5;
+      color: #065F46;
+    }
+    .status-badge.offline {
+      background-color: #FEF2F2;
+      color: #991B1B;
+    }
+    .status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background-color: currentColor;
+    }
+    .card {
+      background-color: #FFFFFF;
+      border: 1px solid #E2E8F0;
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 10px;
+      box-shadow: 0 1px 2px rgba(0,0,0,0.03);
+    }
+    .card-title {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      font-weight: 700;
+      color: #64748B;
+      margin-bottom: 8px;
+    }
+    .form-group {
+      margin-bottom: 8px;
+    }
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 500;
+      color: #475569;
+      margin-bottom: 4px;
+    }
+    input, select {
+      width: 100%;
+      padding: 7px 9px;
+      font-size: 12px;
+      border: 1px solid #CBD5E1;
+      border-radius: 4px;
+      background-color: #FFFFFF;
+      color: #0F172A;
+      outline: none;
+      transition: border-color 0.15s;
+    }
+    input:focus, select:focus {
+      border-color: #0284C7;
+      box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.1);
+    }
+    .btn {
+      width: 100%;
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 4px;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      transition: background 0.15s;
+      border: none;
+    }
+    .btn-primary {
+      background-color: #0F172A;
+      color: #FFFFFF;
+    }
+    .btn-primary:hover {
+      background-color: #1E293B;
+    }
+    .btn-secondary {
+      background-color: #F1F5F9;
+      color: #334155;
+      border: 1px solid #CBD5E1;
+    }
+    .btn-secondary:hover {
+      background-color: #E2E8F0;
+    }
+    .btn-action {
+      background-color: #0284C7;
+      color: #FFFFFF;
+    }
+    .btn-action:hover {
+      background-color: #0369A1;
+    }
+    .actions-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 6px;
+      margin-top: 8px;
+    }
+    .info-box {
+      background-color: #F8FAFC;
+      border-left: 3px solid #0284C7;
+      padding: 8px;
+      font-size: 11px;
+      color: #334155;
+      margin-bottom: 8px;
+      border-radius: 0 4px 4px 0;
+    }
+    .detected-prod {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+      font-size: 11px;
+      margin-bottom: 8px;
+    }
+    .detected-prod strong {
+      color: #0F172A;
+    }
+    .feedback-msg {
+      font-size: 11px;
+      padding: 6px 8px;
+      border-radius: 4px;
+      margin-top: 6px;
+      display: none;
+    }
+    .feedback-msg.success {
+      display: block;
+      background-color: #ECFDF5;
+      color: #065F46;
+      border: 1px solid #A7F3D0;
+    }
+    .feedback-msg.error {
+      display: block;
+      background-color: #FEF2F2;
+      color: #991B1B;
+      border: 1px solid #FECACA;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo-area">
+      <span class="badge-icon">ERP</span>
+      <span class="title">Inteligência de Mercado</span>
+    </div>
+    <div id="statusBadge" class="status-badge offline">
+      <span class="status-dot"></span>
+      <span id="statusText">Offline</span>
+    </div>
+  </div>
+
+  <!-- Cartão: Pareamento no Anúncio Atual -->
+  <div class="card" id="pairingCard">
+    <div class="card-title">Anúncio Atual (Aba Ativa)</div>
+    <div id="pageInfoBox" class="info-box">
+      Detectando anúncio na página...
+    </div>
+
+    <div class="form-group" id="listingSelectContainer" style="display: none;">
+      <label for="myListingSelect">Parear ao meu anúncio próprio (SKU):</label>
+      <select id="myListingSelect">
+        <option value="">-- Selecione para vincular --</option>
+      </select>
+    </div>
+
+    <button id="captureNowBtn" class="btn btn-action" style="display: none;">
+      Capturar e Vincular no ERP
+    </button>
+  </div>
+
+  <!-- Cartão: Configurações de Conexão -->
+  <div class="card">
+    <div class="card-title">Configurações do ERP</div>
+    <div class="form-group">
+      <label for="erpUrl">URL da API / SaaS:</label>
+      <input type="text" id="erpUrl" placeholder="http://localhost:3000">
+    </div>
+    <div class="form-group">
+      <label for="apiToken">Bearer Token / Chave de Acesso:</label>
+      <input type="password" id="apiToken" placeholder="eyJhbGciOiJIUzI1Ni...">
+    </div>
+
+    <div class="actions-grid">
+      <button id="testBtn" class="btn btn-secondary">Testar Conexão</button>
+      <button id="saveBtn" class="btn btn-primary">Salvar</button>
+    </div>
+
+    <div id="feedbackMsg" class="feedback-msg"></div>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
