@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
+import Link from "next/link";
 import {
   Bell,
   ChevronDown,
@@ -8,6 +9,7 @@ import {
   PlugZap,
   User,
   ShieldCheck,
+  AlertCircle,
 } from "lucide-react";
 
 interface HeaderProps {
@@ -15,14 +17,43 @@ interface HeaderProps {
 }
 
 export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
-  const [selectedOrg, setSelectedOrg] = useState("Distribuidora Matriz SP");
-  const [extensionOnline] = useState(true);
+  const [selectedOrg, setSelectedOrg] = useState("Sem Loja Vinculada");
+  const [hasConnectedChannel, setHasConnectedChannel] = useState(false);
+
+  useEffect(() => {
+    try {
+      const ml = localStorage.getItem("erp_ml_integration");
+      const shp = localStorage.getItem("erp_shopee_integration");
+      if (ml) {
+        const parsed = JSON.parse(ml);
+        if (parsed.connected && parsed.accountName) {
+          setSelectedOrg(parsed.accountName);
+          setHasConnectedChannel(true);
+          return;
+        }
+      }
+      if (shp) {
+        const parsed = JSON.parse(shp);
+        if (parsed.connected && parsed.shopId) {
+          setSelectedOrg(`Shopee: ${parsed.shopId}`);
+          setHasConnectedChannel(true);
+          return;
+        }
+      }
+      setSelectedOrg("Sem Loja Vinculada");
+      setHasConnectedChannel(false);
+    } catch {
+      // Ignora
+    }
+  }, []);
 
   return (
     <header className="h-12 bg-white border-b border-[#E2E8F0] px-4 flex items-center justify-between sticky top-0 z-30 shadow-xs">
       {/* Lado Esquerdo: Breadcrumb Corporativo */}
       <div className="flex items-center space-x-2 text-xs">
-        <span className="text-[#64748B] hover:text-[#0F172A] cursor-pointer">Início</span>
+        <Link href="/" className="text-[#64748B] hover:text-[#0F172A] cursor-pointer">
+          Início
+        </Link>
         <span className="text-[#CBD5E1]">/</span>
         <span className="text-[#64748B]">Inteligência Competitiva</span>
         <span className="text-[#CBD5E1]">/</span>
@@ -32,34 +63,37 @@ export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
       {/* Lado Direito: Seletor de Conta, Status da Extensão e Perfil */}
       <div className="flex items-center space-x-3 text-xs">
         {/* Status da Extensão Chrome */}
-        <div
-          title={extensionOnline ? "Extensão Chrome conectada e sincronizando" : "Extensão desconectada"}
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium transition-colors ${
-            extensionOnline
-              ? "bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46]"
-              : "bg-[#FEF2F2] border-[#FECACA] text-[#991B1B]"
-          }`}
+        <Link
+          href="/configuracoes"
+          title="Extensão pronta para receber capturas. Clique para ver credenciais e configurar."
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium bg-sky-50 border-sky-200 text-sky-800 hover:bg-sky-100 transition-colors cursor-pointer"
         >
           <span className="relative flex h-2 w-2">
-            {extensionOnline && (
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#10B981] opacity-75"></span>
-            )}
-            <span
-              className={`relative inline-flex rounded-full h-2 w-2 ${
-                extensionOnline ? "bg-[#10B981]" : "bg-[#EF4444]"
-              }`}
-            ></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-sky-500"></span>
           </span>
-          <PlugZap className="w-3 h-3" />
-          <span>{extensionOnline ? "Extensão Online" : "Extensão Offline"}</span>
-        </div>
+          <PlugZap className="w-3 h-3 text-sky-600" />
+          <span>Extensão Pronta (Local)</span>
+        </Link>
 
-        {/* Seletor de Organização / Empresa */}
-        <div className="relative flex items-center border border-[#E2E8F0] rounded px-2.5 py-1 bg-[#F8FAFC] hover:bg-[#F1F5F9] cursor-pointer text-[#334155]">
-          <Building2 className="w-3.5 h-3.5 mr-1.5 text-[#64748B]" />
-          <span className="font-medium mr-1 text-[11px]">{selectedOrg}</span>
-          <ChevronDown className="w-3 h-3 text-[#64748B]" />
-        </div>
+        {/* Seletor de Organização / Empresa (Reflete status real) */}
+        <Link
+          href="/configuracoes"
+          className={`relative flex items-center border rounded px-2.5 py-1 text-[11px] transition-colors cursor-pointer ${
+            hasConnectedChannel
+              ? "bg-[#F8FAFC] hover:bg-[#F1F5F9] border-[#E2E8F0] text-[#334155]"
+              : "bg-amber-50/60 hover:bg-amber-100/60 border-amber-200 text-amber-900"
+          }`}
+          title={hasConnectedChannel ? "Canal conectado. Clique para gerenciar." : "Nenhuma conta vinculada. Clique para conectar Mercado Livre ou Shopee."}
+        >
+          <Building2 className={`w-3.5 h-3.5 mr-1.5 ${hasConnectedChannel ? "text-[#64748B]" : "text-amber-600"}`} />
+          <span className="font-medium mr-1">{selectedOrg}</span>
+          {!hasConnectedChannel && (
+            <span className="ml-1 text-[9px] bg-amber-200 text-amber-800 px-1 py-0.2 rounded font-bold">
+              Conectar
+            </span>
+          )}
+          <ChevronDown className="w-3 h-3 text-[#64748B] ml-1" />
+        </Link>
 
         {/* Notificações de Alerta de Buybox */}
         <button

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Key,
   Globe,
@@ -20,10 +20,12 @@ import {
   CheckCircle2,
   Terminal,
   Zap,
+  Unlink,
+  Link as LinkIcon,
 } from "lucide-react";
 
 export function ConfiguracoesDashboard() {
-  const [activeTab, setActiveTab] = useState<"api" | "marketplaces" | "reprice" | "database">("api");
+  const [activeTab, setActiveTab] = useState<"api" | "marketplaces" | "reprice" | "database">("marketplaces");
 
   // Estados de API & Extensão
   const [copiedUrl, setCopiedUrl] = useState(false);
@@ -37,12 +39,50 @@ export function ConfiguracoesDashboard() {
     status: "idle",
   });
 
+  // Estados de Conexão das Contas de Marketplaces (Iniciam desconectadas)
+  const [mlConnected, setMlConnected] = useState(false);
+  const [mlAccountName, setMlAccountName] = useState("");
+  const [mlAppId, setMlAppId] = useState("");
+  const [mlSecretKey, setMlSecretKey] = useState("");
+  const [mlShippingType, setMlShippingType] = useState("FULL + FLEX (Híbrido)");
+
+  const [shopeeConnected, setShopeeConnected] = useState(false);
+  const [shopeeShopId, setShopeeShopId] = useState("");
+  const [shopeePartnerId, setShopeePartnerId] = useState("");
+  const [shopeePartnerKey, setShopeePartnerKey] = useState("");
+  const [shopeeCouponSync, setShopeeCouponSync] = useState("Ativa (Com Desconto)");
+
+  // Carrega configurações do localStorage
+  useEffect(() => {
+    try {
+      const storedML = localStorage.getItem("erp_ml_integration");
+      if (storedML) {
+        const parsed = JSON.parse(storedML);
+        setMlConnected(parsed.connected || false);
+        setMlAccountName(parsed.accountName || "");
+        setMlAppId(parsed.appId || "");
+        setMlSecretKey(parsed.secretKey || "");
+      }
+
+      const storedShopee = localStorage.getItem("erp_shopee_integration");
+      if (storedShopee) {
+        const parsed = JSON.parse(storedShopee);
+        setShopeeConnected(parsed.connected || false);
+        setShopeeShopId(parsed.shopId || "");
+        setShopeePartnerId(parsed.partnerId || "");
+        setShopeePartnerKey(parsed.partnerKey || "");
+      }
+    } catch {
+      // Ignora erro de parse em SSR
+    }
+  }, []);
+
   // Estados de Regras de Reprecificação
   const [diffValue, setDiffValue] = useState("0.10");
   const [minMarginPct, setMinMarginPct] = useState("12");
   const [costProtection, setCostProtection] = useState(true);
-  const [repriceStrategy, setRepriceStrategy] = useState("beat"); // 'beat' | 'match' | 'fixed'
-  const [autoRepriceML, setAutoRepriceML] = useState(true);
+  const [repriceStrategy, setRepriceStrategy] = useState("beat");
+  const [autoRepriceML, setAutoRepriceML] = useState(false);
   const [autoRepriceShopee, setAutoRepriceShopee] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
@@ -64,6 +104,66 @@ export function ConfiguracoesDashboard() {
     const newToken = `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ1c2VyLW1hc3RlciIsInJvbGUiOiJkZXYiLCJyYW5kIjoi${randomHex}fQ.erp-auth-key-${randomHex}`;
     setApiToken(newToken);
     alert("Novo Token de Acesso gerado! Lembre-se de atualizá-lo no popup da extensão Chrome.");
+  };
+
+  // Conectar / Desconectar Mercado Livre
+  const handleConnectML = () => {
+    if (!mlAppId.trim()) {
+      alert("Por favor, informe seu App ID (Client ID) do Mercado Livre ou autorize via OAuth.");
+      return;
+    }
+    const accountName = mlAccountName.trim() || "Minha Loja Mercado Livre";
+    setMlConnected(true);
+    setMlAccountName(accountName);
+    localStorage.setItem(
+      "erp_ml_integration",
+      JSON.stringify({
+        connected: true,
+        accountName,
+        appId: mlAppId,
+        secretKey: mlSecretKey,
+      })
+    );
+    alert("Conta do Mercado Livre vinculada com sucesso ao ERP!");
+  };
+
+  const handleDisconnectML = () => {
+    if (confirm("Deseja realmente desconectar a conta do Mercado Livre? A sincronização direta será pausada.")) {
+      setMlConnected(false);
+      setMlAccountName("");
+      setMlAppId("");
+      setMlSecretKey("");
+      localStorage.removeItem("erp_ml_integration");
+    }
+  };
+
+  // Conectar / Desconectar Shopee
+  const handleConnectShopee = () => {
+    if (!shopeePartnerId.trim() || !shopeeShopId.trim()) {
+      alert("Por favor, informe seu Partner ID e Shop ID da Shopee.");
+      return;
+    }
+    setShopeeConnected(true);
+    localStorage.setItem(
+      "erp_shopee_integration",
+      JSON.stringify({
+        connected: true,
+        shopId: shopeeShopId,
+        partnerId: shopeePartnerId,
+        partnerKey: shopeePartnerKey,
+      })
+    );
+    alert("Loja Shopee vinculada com sucesso ao ERP!");
+  };
+
+  const handleDisconnectShopee = () => {
+    if (confirm("Deseja realmente desconectar a loja da Shopee?")) {
+      setShopeeConnected(false);
+      setShopeeShopId("");
+      setShopeePartnerId("");
+      setShopeePartnerKey("");
+      localStorage.removeItem("erp_shopee_integration");
+    }
   };
 
   // Testador de Conexão com o endpoint local do ERP
@@ -100,18 +200,6 @@ export function ConfiguracoesDashboard() {
       {/* Abas Superiores Estilo Tiny ERP */}
       <div className="flex items-center space-x-1 border-b border-[#E2E8F0] bg-white px-3 pt-2 rounded-t">
         <button
-          onClick={() => setActiveTab("api")}
-          className={`px-4 py-2 text-xs font-semibold border-b-2 flex items-center space-x-2 transition-colors ${
-            activeTab === "api"
-              ? "border-sky-600 text-sky-700 bg-white"
-              : "border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300"
-          }`}
-        >
-          <PlugZap className="w-3.5 h-3.5" />
-          <span>Extensão Chrome & Chaves de API</span>
-        </button>
-
-        <button
           onClick={() => setActiveTab("marketplaces")}
           className={`px-4 py-2 text-xs font-semibold border-b-2 flex items-center space-x-2 transition-colors ${
             activeTab === "marketplaces"
@@ -121,6 +209,21 @@ export function ConfiguracoesDashboard() {
         >
           <ShoppingBag className="w-3.5 h-3.5" />
           <span>Contas de Marketplaces</span>
+          {(!mlConnected && !shopeeConnected) && (
+            <span className="w-2 h-2 rounded-full bg-amber-500" title="Pendente de vínculo"></span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setActiveTab("api")}
+          className={`px-4 py-2 text-xs font-semibold border-b-2 flex items-center space-x-2 transition-colors ${
+            activeTab === "api"
+              ? "border-sky-600 text-sky-700 bg-white"
+              : "border-transparent text-slate-500 hover:text-slate-900 hover:border-slate-300"
+          }`}
+        >
+          <PlugZap className="w-3.5 h-3.5" />
+          <span>Extensão Chrome & Chaves de API</span>
         </button>
 
         <button
@@ -148,7 +251,257 @@ export function ConfiguracoesDashboard() {
         </button>
       </div>
 
-      {/* CONTEÚDO 1: EXTENSÃO & CHAVES DE API */}
+      {/* CONTEÚDO 1: CONTAS DE MARKETPLACES (Mercado Livre & Shopee) */}
+      {activeTab === "marketplaces" && (
+        <div className="space-y-4">
+          {/* Alerta de Status Geral */}
+          {!mlConnected && !shopeeConnected && (
+            <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-800 flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong>Nenhum canal de marketplace conectado no momento.</strong>
+                <p className="text-[11px] text-amber-700 mt-0.5">
+                  Conecte sua conta do <strong>Mercado Livre</strong> e da <strong>Shopee</strong> abaixo para sincronizar seus anúncios próprios, estoque e reputação.
+                  Enquanto não conectar, você pode utilizar a <strong>Extensão Chrome</strong> para capturar e parear concorrentes em modo assistido.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* CARD MERCADO LIVRE */}
+            <div className={`bg-white border rounded p-4 shadow-2xs space-y-3 transition-colors ${
+              mlConnected ? "border-emerald-200" : "border-[#E2E8F0]"
+            }`}>
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <div className="flex items-center space-x-2">
+                  <span className="w-3 h-3 rounded-full bg-[#FFE600] border border-amber-400"></span>
+                  <span className="text-xs font-bold text-slate-900">Mercado Livre Oficial</span>
+                </div>
+                {mlConnected ? (
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded border border-emerald-200 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Conectado
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded border border-slate-300 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span> Desconectado
+                  </span>
+                )}
+              </div>
+
+              {mlConnected ? (
+                /* Estado Conectado ML */
+                <div className="space-y-3 text-xs">
+                  <div className="bg-emerald-50/50 border border-emerald-100 p-2.5 rounded">
+                    <div className="text-[11px] text-slate-500">Conta Vinculada:</div>
+                    <div className="font-bold text-slate-900 text-xs mt-0.5">
+                      {mlAccountName}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      App ID: <code>{mlAppId}</code>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium">Logística Padrão Ativa</label>
+                    <select
+                      value={mlShippingType}
+                      onChange={(e) => setMlShippingType(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 mt-1"
+                    >
+                      <option>FULL + FLEX (Híbrido)</option>
+                      <option>Apenas FULL</option>
+                      <option>Coleta Padrão</option>
+                    </select>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Sincronização Ativa
+                    </span>
+                    <button
+                      onClick={handleDisconnectML}
+                      className="px-2.5 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-200 rounded flex items-center gap-1 transition-colors"
+                    >
+                      <Unlink className="w-3 h-3" /> Desconectar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Estado Desconectado ML */
+                <div className="space-y-3 text-xs">
+                  <p className="text-[11px] text-slate-500">
+                    Insira as credenciais do seu aplicativo de desenvolvedor no Mercado Livre (Mercado Pago / Developers) ou autorize sua conta.
+                  </p>
+
+                  <div>
+                    <label className="text-[11px] text-slate-600 font-medium block mb-1">
+                      Apelido da Loja / Razão Social
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Minha Loja Oficial SP"
+                      value={mlAccountName}
+                      onChange={(e) => setMlAccountName(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 focus:outline-hidden focus:border-sky-500"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
+                        App ID (Client ID)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 8901234908..."
+                        value={mlAppId}
+                        onChange={(e) => setMlAppId(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
+                        Client Secret
+                      </label>
+                      <input
+                        type="password"
+                        placeholder="Chave secreta..."
+                        value={mlSecretKey}
+                        onChange={(e) => setMlSecretKey(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={handleConnectML}
+                    className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+                  >
+                    <LinkIcon className="w-3.5 h-3.5" /> Vincular Conta Mercado Livre
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* CARD SHOPEE */}
+            <div className={`bg-white border rounded p-4 shadow-2xs space-y-3 transition-colors ${
+              shopeeConnected ? "border-emerald-200" : "border-[#E2E8F0]"
+            }`}>
+              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+                <div className="flex items-center space-x-2">
+                  <span className="w-3 h-3 rounded-full bg-[#EE4D2D]"></span>
+                  <span className="text-xs font-bold text-slate-900">Shopee Brasil</span>
+                </div>
+                {shopeeConnected ? (
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded border border-emerald-200 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Conectado
+                  </span>
+                ) : (
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded border border-slate-300 font-semibold flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span> Desconectado
+                  </span>
+                )}
+              </div>
+
+              {shopeeConnected ? (
+                /* Estado Conectado Shopee */
+                <div className="space-y-3 text-xs">
+                  <div className="bg-emerald-50/50 border border-emerald-100 p-2.5 rounded">
+                    <div className="text-[11px] text-slate-500">Loja Vinculada:</div>
+                    <div className="font-bold text-slate-900 text-xs mt-0.5">
+                      Shop ID: <code>{shopeeShopId}</code>
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">
+                      Partner ID: <code>{shopeePartnerId}</code>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-500 font-medium">Sincronia de Cupons e Ofertas</label>
+                    <select
+                      value={shopeeCouponSync}
+                      onChange={(e) => setShopeeCouponSync(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 mt-1"
+                    >
+                      <option>Ativa (Com Desconto)</option>
+                      <option>Desativada</option>
+                    </select>
+                  </div>
+
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
+                    <span className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Sincronização Ativa
+                    </span>
+                    <button
+                      onClick={handleDisconnectShopee}
+                      className="px-2.5 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-200 rounded flex items-center gap-1 transition-colors"
+                    >
+                      <Unlink className="w-3 h-3" /> Desconectar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Estado Desconectado Shopee */
+                <div className="space-y-3 text-xs">
+                  <p className="text-[11px] text-slate-500">
+                    Insira as credenciais do Shopee Open Platform para integrar sua loja e sincronizar catálogo e pedidos.
+                  </p>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
+                        Shop ID
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 98127391"
+                        value={shopeeShopId}
+                        onChange={(e) => setShopeeShopId(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
+                        Partner ID
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="Ex: 2009812"
+                        value={shopeePartnerId}
+                        onChange={(e) => setShopeePartnerId(e.target.value)}
+                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] text-slate-600 font-medium block mb-1">
+                      Partner Key (Secret)
+                    </label>
+                    <input
+                      type="password"
+                      placeholder="Chave secreta do parceiro Shopee..."
+                      value={shopeePartnerKey}
+                      onChange={(e) => setShopeePartnerKey(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                    />
+                  </div>
+
+                  <button
+                    onClick={handleConnectShopee}
+                    className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+                  >
+                    <LinkIcon className="w-3.5 h-3.5" /> Vincular Loja Shopee
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* CONTEÚDO 2: EXTENSÃO & CHAVES DE API */}
       {activeTab === "api" && (
         <div className="space-y-4">
           {/* Banner de Status da Conexão */}
@@ -158,9 +511,9 @@ export function ConfiguracoesDashboard() {
                 <CheckCircle2 className="w-5 h-5" />
               </div>
               <div>
-                <h3 className="text-xs font-bold text-slate-900">API de Coleta da Extensão Ativa</h3>
+                <h3 className="text-xs font-bold text-slate-900">API de Coleta da Extensão Pronta</h3>
                 <p className="text-[11px] text-slate-500">
-                  O endpoint <code>/api/competitors/sync</code> está pronto para receber capturas do Mercado Livre e Shopee.
+                  O endpoint <code>/api/competitors/sync</code> está disponível para receber coletas de concorrentes mesmo sem vínculo direto às contas dos marketplaces.
                 </p>
               </div>
             </div>
@@ -318,100 +671,6 @@ export function ConfiguracoesDashboard() {
                 <p className="text-[11px] text-slate-500">
                   Abra qualquer anúncio no Mercado Livre ou Shopee e clique no botão flutuante <strong>Capturar Concorrente (ERP)</strong>.
                 </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* CONTEÚDO 2: CONTAS DE MARKETPLACES */}
-      {activeTab === "marketplaces" && (
-        <div className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Mercado Livre */}
-            <div className="bg-white border border-[#E2E8F0] rounded p-4 shadow-2xs space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                <div className="flex items-center space-x-2">
-                  <span className="w-3 h-3 rounded-full bg-[#FFE600] border border-amber-400"></span>
-                  <span className="text-xs font-bold text-slate-900">Mercado Livre Oficial</span>
-                </div>
-                <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200 font-semibold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Conectado
-                </span>
-              </div>
-
-              <div className="space-y-2 text-xs">
-                <div>
-                  <label className="text-[11px] text-slate-500 font-medium">Conta / Loja Integrada</label>
-                  <input
-                    type="text"
-                    value="Distribuidora Matriz SP (ID: MLB-7789021)"
-                    disabled
-                    className="w-full bg-slate-50 border border-slate-200 rounded px-2.5 py-1.5 text-xs text-slate-700"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] text-slate-500 font-medium">App ID / Client ID</label>
-                    <input
-                      type="text"
-                      value="7890123490812903"
-                      disabled
-                      className="w-full bg-slate-50 border border-slate-200 rounded px-2.5 py-1.5 text-xs text-slate-700 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-slate-500 font-medium">Logística Padrão</label>
-                    <select className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800">
-                      <option>FULL + FLEX (Híbrido)</option>
-                      <option>Apenas FULL</option>
-                      <option>Coleta Padrão</option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* Shopee */}
-            <div className="bg-white border border-[#E2E8F0] rounded p-4 shadow-2xs space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2">
-                <div className="flex items-center space-x-2">
-                  <span className="w-3 h-3 rounded-full bg-[#EE4D2D]"></span>
-                  <span className="text-xs font-bold text-slate-900">Shopee Brasil</span>
-                </div>
-                <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200 font-semibold flex items-center gap-1">
-                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Conectado
-                </span>
-              </div>
-
-              <div className="space-y-2 text-xs">
-                <div>
-                  <label className="text-[11px] text-slate-500 font-medium">Shop ID</label>
-                  <input
-                    type="text"
-                    value="SP_BR_STORE_98127391"
-                    disabled
-                    className="w-full bg-slate-50 border border-slate-200 rounded px-2.5 py-1.5 text-xs text-slate-700 font-mono"
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <label className="text-[11px] text-slate-500 font-medium">Partner ID</label>
-                    <input
-                      type="text"
-                      value="2009812"
-                      disabled
-                      className="w-full bg-slate-50 border border-slate-200 rounded px-2.5 py-1.5 text-xs text-slate-700 font-mono"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-[11px] text-slate-500 font-medium">Sincronia de Cupons</label>
-                    <select className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800">
-                      <option>Ativa (Com Desconto)</option>
-                      <option>Desativada</option>
-                    </select>
-                  </div>
-                </div>
               </div>
             </div>
           </div>
