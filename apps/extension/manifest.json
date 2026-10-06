@@ -11,7 +11,12 @@
   ],
   "host_permissions": [
     "*://*.mercadolivre.com.br/*",
-    "*://*.shopee.com.br/*"
+    "*://*.shopee.com.br/*",
+    "http://localhost/*",
+    "http://localhost:*/*",
+    "http://127.0.0.1/*",
+    "http://127.0.0.1:*/*",
+    "*://*/*"
   ],
   "background": {
     "service_worker": "background.js"

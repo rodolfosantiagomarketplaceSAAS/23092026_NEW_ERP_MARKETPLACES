@@ -39,33 +39,43 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 async function handleSyncCompetitor(payload) {
   const config = await chrome.storage.sync.get(["erpUrl", "apiToken"]);
   const erpUrl = (config.erpUrl || "http://localhost:3000").replace(/\/$/, "");
-  const apiToken = config.apiToken;
-
-  if (!apiToken) {
-    throw new Error("Token de Acesso não configurado. Abra o popup da extensão e configure seu Bearer Token.");
-  }
+  const apiToken = config.apiToken?.trim() || "";
 
   const endpoint = `${erpUrl}/api/competitors/sync`;
+
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  // Se o usuário configurou Bearer Token, anexa. Se não, o endpoint usa o usuário dev/padrão
+  if (apiToken) {
+    headers["Authorization"] = `Bearer ${apiToken}`;
+  }
 
   try {
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiToken}`,
-      },
+      headers,
       body: JSON.stringify(payload),
     });
 
-    const data = await response.json();
+    const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
-      throw new Error(data.error || `Erro HTTP ${response.status}: ${response.statusText}`);
+      const errDetails = data.details
+        ? typeof data.details === "object"
+          ? JSON.stringify(data.details)
+          : data.details
+        : "";
+      throw new Error(data.error || `Erro HTTP ${response.status}: ${response.statusText} ${errDetails}`);
     }
 
     return { success: true, data };
   } catch (error) {
     console.error("[ERP Background Worker] Erro no fetch de sync:", error);
+    if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
+      throw new Error(`Não foi possível conectar ao ERP em ${erpUrl}. Certifique-se de que o sistema está em execução (npm run dev).`);
+    }
     throw error;
   }
 }
@@ -75,25 +85,34 @@ async function handleSyncCompetitor(payload) {
  */
 async function handleTestConnection(erpUrl, apiToken) {
   const url = (erpUrl || "http://localhost:3000").replace(/\/$/, "");
-  if (!apiToken) {
-    throw new Error("Informe o token de autenticação.");
+  const token = apiToken?.trim() || "";
+
+  const headers = {};
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   try {
     const response = await fetch(`${url}/api/my-listings?platform=mercadolivre&limit=1`, {
       method: "GET",
-      headers: {
-        "Authorization": `Bearer ${apiToken}`,
-      },
+      headers,
     });
 
     if (response.ok) {
-      return { success: true, message: "Conexão com o ERP estabelecida com sucesso!" };
+      return {
+        success: true,
+        message: token
+          ? "Conexão com o ERP autenticada com sucesso!"
+          : "Conexão com o ERP estabelecida com sucesso (Modo Local/Dev)!",
+      };
     } else {
       const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `Erro de autenticação HTTP ${response.status}`);
+      throw new Error(errData.error || `Erro HTTP ${response.status}: ${response.statusText}`);
     }
   } catch (err) {
+    if (err.message.includes("Failed to fetch") || err.message.includes("NetworkError")) {
+      throw new Error(`Falha de conexão em ${url}. Verifique se o servidor está ativo.`);
+    }
     throw new Error(`Falha ao conectar no ERP: ${err.message}`);
   }
 }

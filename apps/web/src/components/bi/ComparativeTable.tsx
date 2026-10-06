@@ -16,6 +16,7 @@ import {
   TrendingUp,
   Minus,
   Sparkles,
+  Trash2,
 } from "lucide-react";
 import type { ComparativeListingGroup, CompetitorComparisonItem } from "@crm/types";
 import { RepriceModal } from "./RepriceModal";
@@ -25,6 +26,8 @@ interface ComparativeTableProps {
   highlightedIds?: Record<string, boolean>;
   onPriceUpdated?: (groupId: string, newPrice: number) => void;
   onOpenPairModal?: (groupId: string) => void;
+  onDeleteCompetitor?: (myListingId: string, competitorId: string) => void;
+  onDeleteMyListing?: (myListingId: string, title: string) => void;
 }
 
 export function ComparativeTable({
@@ -32,6 +35,8 @@ export function ComparativeTable({
   highlightedIds = {},
   onPriceUpdated,
   onOpenPairModal,
+  onDeleteCompetitor,
+  onDeleteMyListing,
 }: ComparativeTableProps) {
   const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({
     "ml-001": true, // Deixa o primeiro expandido por padrão
@@ -304,6 +309,18 @@ export function ComparativeTable({
                           >
                             <LinkIcon className="w-3.5 h-3.5" />
                           </button>
+
+                          <button
+                            onClick={() => {
+                              if (confirm(`Deseja remover o anúncio "${group.my_listing.title.slice(0, 35)}..." do catálogo de monitoramento?`)) {
+                                onDeleteMyListing && onDeleteMyListing(group.my_listing.id, group.my_listing.title);
+                              }
+                            }}
+                            className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-600 border border-transparent hover:border-red-200 transition-colors"
+                            title="Excluir este anúncio do monitoramento"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -393,17 +410,28 @@ export function ComparativeTable({
                                       )}
                                     </div>
 
-                                    {/* Link Concorrente */}
-                                    <div className="w-[6%] text-right">
+                                    {/* Ações Concorrente (Link Externo e Excluir) */}
+                                    <div className="w-[8%] flex items-center justify-end space-x-1">
                                       <a
                                         href={comp.permalink}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-slate-500 hover:text-slate-900 inline-flex p-1 rounded hover:bg-slate-100"
-                                        title="Abrir anúncio concorrente no canal"
+                                        className="text-slate-500 hover:text-slate-900 inline-flex p-1 rounded hover:bg-slate-100 transition-colors"
+                                        title="Abrir anúncio concorrente no marketplace"
                                       >
-                                        <ExternalLink className="w-3 h-3" />
+                                        <ExternalLink className="w-3.5 h-3.5" />
                                       </a>
+                                      <button
+                                        onClick={() => {
+                                          if (confirm(`Deseja remover o concorrente "${comp.seller_name} - ${comp.title.slice(0, 30)}..." do monitoramento?`)) {
+                                            onDeleteCompetitor && onDeleteCompetitor(group.my_listing.id, comp.id);
+                                          }
+                                        }}
+                                        className="text-slate-400 hover:text-red-600 inline-flex p-1 rounded hover:bg-red-50 transition-colors"
+                                        title="Remover este concorrente do monitoramento"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
                                     </div>
                                   </div>
                                 );

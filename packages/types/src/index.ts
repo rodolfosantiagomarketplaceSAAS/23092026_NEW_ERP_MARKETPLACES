@@ -156,11 +156,11 @@ export const competitorSyncSchema = z.object({
   original_price: z.number().positive().nullable().optional(),
   shipping_type: z.string().default("padrao"),
   promo_badge: z.string().nullable().optional(),
-  permalink: z.string().url("A URL do anúncio deve ser válida"),
-  thumbnail_url: z.string().url().nullable().optional(),
+  permalink: z.string().min(1, "A URL do anúncio deve ser válida"),
+  thumbnail_url: z.string().nullable().optional(),
   sales_count_approx: z.number().int().nonnegative().optional().default(0),
   rating: z.number().min(0).max(5).optional().default(5.0),
-  my_listing_id: z.string().uuid("ID de anúncio próprio inválido").nullable().optional(),
+  my_listing_id: z.string().nullable().optional(),
 });
 
 export type CompetitorSyncInput = z.infer<typeof competitorSyncSchema>;

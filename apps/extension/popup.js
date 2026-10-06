@@ -24,9 +24,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     erpUrlInput.value = res.erpUrl || "http://localhost:3000";
     apiTokenInput.value = res.apiToken || "";
 
-    if (res.apiToken) {
-      checkConnectionStatus(erpUrlInput.value, res.apiToken);
-    }
+    checkConnectionStatus(erpUrlInput.value, res.apiToken || "");
   });
 
   // 2. Detecta aba ativa
@@ -40,32 +38,35 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   // 3. Se estiver em página suportada, solicita dados extraídos do content script
-  if (currentDetectedPlatform && activeTab.id) {
+  if (currentDetectedPlatform && activeTab?.id) {
     chrome.tabs.sendMessage(activeTab.id, { action: "GET_PAGE_DATA" }, async (response) => {
       if (chrome.runtime.lastError || !response || !response.data) {
         pageInfoBox.innerHTML = `
-          <strong>Marketplace Detectado:</strong> ${currentDetectedPlatform.toUpperCase()}<br>
-          <span style="color:#64748B;">Navegue até a página de um produto específico para capturar concorrentes.</span>
+          <strong>Marketplace Detectado:</strong> ${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}<br>
+          <span style="color:#64748B;">Abra a página de um anúncio específico para capturar concorrentes.</span>
         `;
         return;
       }
 
       currentScrapedData = response.data;
+      const formattedPrice = currentScrapedData.current_price
+        ? `R$ ${currentScrapedData.current_price.toFixed(2)}`
+        : "Preço não detectado";
+
       pageInfoBox.innerHTML = `
         <div class="detected-prod">
           <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}</strong>
+          <span>Título: <em style="color:#1e293b;">${(currentScrapedData.title || "").slice(0, 45)}...</em></span>
           <span>ID: <code>${currentScrapedData.external_id}</code></span>
-          <span>Preço Atual: <strong>R$ ${currentScrapedData.current_price?.toFixed(2) || "0,00"}</strong></span>
-          <span>Vendedor: ${currentScrapedData.seller_name || "Desconhecido"}</span>
+          <span>Preço: <strong style="color:#0f766e;">${formattedPrice}</strong></span>
+          <span>Vendedor: <strong>${currentScrapedData.seller_name || "Desconhecido"}</strong></span>
         </div>
       `;
 
-      // Se temos token, busca anúncios próprios para preencher o select
+      // Carrega anúncios próprios para preencher o select
       const token = apiTokenInput.value;
-      const url = erpUrlInput.value;
-      if (token && url) {
-        await loadMyListings(url, token, currentDetectedPlatform);
-      }
+      const url = erpUrlInput.value || "http://localhost:3000";
+      await loadMyListings(url, token, currentDetectedPlatform);
 
       captureNowBtn.style.display = "block";
     });
@@ -77,13 +78,13 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 4. Salvar configurações
   saveBtn.addEventListener("click", () => {
-    const erpUrl = erpUrlInput.value.trim().replace(/\/$/, "");
+    const erpUrl = erpUrlInput.value.trim().replace(/\/$/, "") || "http://localhost:3000";
     const apiToken = apiTokenInput.value.trim();
 
     chrome.storage.sync.set({ erpUrl, apiToken }, () => {
       showFeedback("Configurações salvas com sucesso!", "success");
       checkConnectionStatus(erpUrl, apiToken);
-      if (currentDetectedPlatform && apiToken) {
+      if (currentDetectedPlatform) {
         loadMyListings(erpUrl, apiToken, currentDetectedPlatform);
       }
     });
@@ -91,13 +92,8 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 5. Testar Conexão
   testBtn.addEventListener("click", () => {
-    const erpUrl = erpUrlInput.value.trim().replace(/\/$/, "");
+    const erpUrl = erpUrlInput.value.trim().replace(/\/$/, "") || "http://localhost:3000";
     const apiToken = apiTokenInput.value.trim();
-
-    if (!apiToken) {
-      showFeedback("Insira o Bearer Token antes de testar.", "error");
-      return;
-    }
 
     testBtn.disabled = true;
     testBtn.innerText = "Testando...";
@@ -152,15 +148,16 @@ document.addEventListener("DOMContentLoaded", async () => {
   function showFeedback(text, type) {
     feedbackMsg.className = `feedback-msg ${type}`;
     feedbackMsg.innerText = text;
+    feedbackMsg.style.display = "block";
     setTimeout(() => {
       feedbackMsg.style.display = "none";
-    }, 4000);
+    }, 4500);
   }
 
   function setOnlineStatus(isOnline) {
     if (isOnline) {
       statusBadge.className = "status-badge online";
-      statusText.innerText = "Online";
+      statusText.innerText = "Conectado";
     } else {
       statusBadge.className = "status-badge offline";
       statusText.innerText = "Offline";
@@ -175,18 +172,24 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   async function loadMyListings(erpUrl, apiToken, platform) {
     try {
+      const headers = {};
+      if (apiToken) {
+        headers["Authorization"] = `Bearer ${apiToken}`;
+      }
+
       const res = await fetch(`${erpUrl}/api/my-listings?platform=${platform}`, {
-        headers: { Authorization: `Bearer ${apiToken}` },
+        headers,
       });
+
       if (!res.ok) return;
 
       const data = await res.json();
       if (Array.isArray(data.items) && data.items.length > 0) {
-        myListingSelect.innerHTML = `<option value="">-- Não vincular agora --</option>`;
+        myListingSelect.innerHTML = `<option value="">-- Não vincular agora (ou selecione abaixo) --</option>`;
         data.items.forEach((item) => {
           const opt = document.createElement("option");
           opt.value = item.id;
-          opt.innerText = `[${item.product_sku || "Sem SKU"}] ${item.title.slice(0, 35)}... (R$ ${Number(item.current_price).toFixed(2)})`;
+          opt.innerText = `[${item.product_sku || "Sem SKU"}] ${item.title.slice(0, 30)}... (R$ ${Number(item.current_price).toFixed(2)})`;
           myListingSelect.appendChild(opt);
         });
 

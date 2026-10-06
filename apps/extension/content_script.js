@@ -1,7 +1,8 @@
 /**
  * CONTENT SCRIPT - ERP MARKETPLACES INTELIGÊNCIA COMPETITIVA
  * Executa em páginas de produto do Mercado Livre (*.mercadolivre.com.br) e Shopee (*.shopee.com.br).
- * Fornece extração dupla (JSON Estruturado + Fallback de Seletores DOM) e botão flutuante ergonômico.
+ * Fornece extração multicamada (Meta Tags SEO Microdata + JSON Estruturado LD+JSON + Seletores DOM Modernos)
+ * e botão flutuante ergonômico no padrão Tiny ERP.
  */
 
 (function () {
@@ -23,6 +24,7 @@
   function parseBrlCurrency(text) {
     if (!text) return 0;
     const clean = text
+      .toString()
       .replace(/[^\d.,]/g, "")
       .replace(/\./g, "")
       .replace(",", ".");
@@ -31,34 +33,80 @@
   }
 
   /**
-   * Extração via Schema.org LD+JSON
+   * Helper: Normaliza URLs de imagem e links garantindo protocolo https://
+   */
+  function normalizeUrl(url) {
+    if (!url || typeof url !== "string") return null;
+    let trimmed = url.trim();
+    if (trimmed.startsWith("//")) return "https:" + trimmed;
+    if (trimmed.startsWith("http://")) return trimmed.replace("http://", "https://");
+    if (!trimmed.startsWith("https://") && !trimmed.startsWith("data:")) {
+      return "https://" + trimmed;
+    }
+    return trimmed;
+  }
+
+  /**
+   * Extração via Schema.org LD+JSON com busca profunda recursiva (incluindo @graph e coleções)
    */
   function extractFromJsonLd() {
     try {
       const scripts = document.querySelectorAll('script[type="application/ld+json"]');
+
+      function findProductInObject(obj) {
+        if (!obj || typeof obj !== "object") return null;
+        if (obj["@type"] === "Product") return obj;
+
+        if (Array.isArray(obj)) {
+          for (const item of obj) {
+            const found = findProductInObject(item);
+            if (found) return found;
+          }
+        }
+
+        if (obj["@graph"] && Array.isArray(obj["@graph"])) {
+          for (const item of obj["@graph"]) {
+            const found = findProductInObject(item);
+            if (found) return found;
+          }
+        }
+
+        for (const key of Object.keys(obj)) {
+          if (typeof obj[key] === "object" && obj[key] !== null) {
+            const found = findProductInObject(obj[key]);
+            if (found) return found;
+          }
+        }
+
+        return null;
+      }
+
       for (const script of scripts) {
         if (!script.textContent) continue;
-        const data = JSON.parse(script.textContent);
+        try {
+          const parsed = JSON.parse(script.textContent);
+          const target = findProductInObject(parsed);
 
-        const target = Array.isArray(data)
-          ? data.find((item) => item["@type"] === "Product")
-          : data["@type"] === "Product"
-          ? data
-          : null;
+          if (target) {
+            const offers = Array.isArray(target.offers) ? target.offers[0] : target.offers;
+            const price = offers?.price ? parseFloat(offers.price) : 0;
+            const seller = offers?.seller?.name || target.brand?.name || null;
+            const sku = target.sku || offers?.sku || null;
 
-        if (target) {
-          const offers = Array.isArray(target.offers) ? target.offers[0] : target.offers;
-          const price = offers?.price ? parseFloat(offers.price) : 0;
-          const seller = offers?.seller?.name || target.brand?.name || null;
-          const sku = target.sku || offers?.sku || null;
-
-          return {
-            title: target.name || null,
-            current_price: price > 0 ? price : null,
-            seller_name: seller,
-            sku: sku,
-            image: target.image ? (Array.isArray(target.image) ? target.image[0] : target.image) : null,
-          };
+            return {
+              title: target.name || null,
+              current_price: price > 0 ? price : null,
+              seller_name: seller,
+              sku: sku,
+              image: target.image
+                ? Array.isArray(target.image)
+                  ? normalizeUrl(target.image[0])
+                  : normalizeUrl(target.image)
+                : null,
+            };
+          }
+        } catch {
+          // Continua para o próximo script
         }
       }
     } catch (e) {
@@ -68,46 +116,120 @@
   }
 
   /**
-   * Extração Específica: MERCADO LIVRE
+   * Extração Específica: MERCADO LIVRE (Multicamada)
    */
   function extractMercadoLivre() {
     const jsonLd = extractFromJsonLd();
 
     // 1. External ID (MLB...)
     let externalId = "";
-    const canonical = document.querySelector('link[rel="canonical"]')?.getAttribute("href") || window.location.href;
-    const mlbMatch = canonical.match(/MLB-?(\d+)/i) || window.location.pathname.match(/MLB-?(\d+)/i);
+    const canonical =
+      document.querySelector('link[rel="canonical"]')?.getAttribute("href") ||
+      window.location.href;
+
+    const mlbMatch =
+      canonical.match(/MLB-?(\d+)/i) ||
+      window.location.pathname.match(/MLB-?(\d+)/i) ||
+      window.location.href.match(/MLB-?(\d+)/i);
+
     if (mlbMatch) {
       externalId = `MLB${mlbMatch[1]}`;
     } else {
-      const inputItemId = document.querySelector('input[name="item_id"]')?.value;
+      const inputItemId =
+        document.querySelector('input[name="item_id"]')?.value ||
+        document.querySelector('[data-item-id]')?.getAttribute("data-item-id");
       externalId = inputItemId || "MLB-" + Math.floor(Date.now() / 1000);
     }
 
-    // 2. Título
-    const titleEl = document.querySelector(".ui-pdp-title") || document.querySelector("h1.ui-pdp-title") || document.querySelector("h1");
-    const title = (titleEl?.innerText || jsonLd?.title || document.title || "").trim();
+    // 2. Título do Anúncio
+    let title = "";
+    const titleEl =
+      document.querySelector(".ui-pdp-title") ||
+      document.querySelector("h1.ui-pdp-title") ||
+      document.querySelector(".ui-pdp-header__title-container h1") ||
+      document.querySelector("h1.andes-typography--title") ||
+      document.querySelector("h1");
 
-    // 3. Preço Atual
+    if (titleEl && titleEl.innerText.trim()) {
+      title = titleEl.innerText.trim();
+    } else if (jsonLd?.title) {
+      title = jsonLd.title.trim();
+    } else {
+      const ogTitle = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
+      title = ogTitle || document.title.replace(/\|.*$/g, "").replace(/- Mercado Livre.*$/g, "").trim();
+    }
+
+    // 3. Preço Atual (Multicamada de Alta Precisão)
     let currentPrice = 0;
-    const priceContainer = document.querySelector(".ui-pdp-price__second-line") || document.querySelector(".ui-pdp-price");
-    if (priceContainer) {
-      const fraction = priceContainer.querySelector(".andes-money-amount__fraction")?.innerText || "";
-      const cents = priceContainer.querySelector(".andes-money-amount__cents")?.innerText || "00";
-      if (fraction) {
-        currentPrice = parseBrlCurrency(`${fraction},${cents}`);
+
+    // Camada A: Meta Tags Microdata e OpenGraph (Mais estáveis que classes CSS mutáveis)
+    const metaPrice =
+      document.querySelector('meta[itemprop="price"]')?.getAttribute("content") ||
+      document.querySelector('meta[property="og:price:amount"]')?.getAttribute("content") ||
+      document.querySelector('meta[property="product:price:amount"]')?.getAttribute("content");
+
+    if (metaPrice) {
+      const p = parseFloat(metaPrice.replace(",", "."));
+      if (!isNaN(p) && p > 0) {
+        currentPrice = p;
       }
     }
+
+    // Camada B: Seletores do DOM Mercado Livre (Páginas PDP Clássicas e Catálogo)
+    if (!currentPrice) {
+      // Prioridade: container da segunda linha ou container principal do preço
+      const priceContainer =
+        document.querySelector(".ui-pdp-price__second-line") ||
+        document.querySelector(".ui-pdp-price__main-container") ||
+        document.querySelector(".ui-pdp-price:not(.ui-pdp-price__original-value)") ||
+        document.querySelector('[data-testid="price-part"]') ||
+        document.querySelector(".andes-money-amount--cents-superscript:not(.ui-pdp-price__original-value)");
+
+      if (priceContainer) {
+        const fraction =
+          priceContainer.querySelector(".andes-money-amount__fraction")?.innerText?.trim() || "";
+        const cents =
+          priceContainer.querySelector(".andes-money-amount__cents")?.innerText?.trim() || "00";
+        if (fraction) {
+          currentPrice = parseBrlCurrency(`${fraction},${cents}`);
+        }
+      }
+    }
+
+    // Camada C: JSON-LD Structured Data
     if (!currentPrice && jsonLd?.current_price) {
       currentPrice = jsonLd.current_price;
     }
 
-    // 4. Preço Original (riscado)
+    // Camada D: Fallback inteligente em qualquer .andes-money-amount que não seja parcelamento
+    if (!currentPrice) {
+      const allAmounts = document.querySelectorAll(".ui-pdp-price .andes-money-amount");
+      for (const amountEl of allAmounts) {
+        if (amountEl.closest(".ui-pdp-price__subtitles") || amountEl.closest(".ui-pdp-installments")) {
+          continue;
+        }
+        const fraction = amountEl.querySelector(".andes-money-amount__fraction")?.innerText?.trim();
+        const cents = amountEl.querySelector(".andes-money-amount__cents")?.innerText?.trim() || "00";
+        if (fraction) {
+          const val = parseBrlCurrency(`${fraction},${cents}`);
+          if (val > 0) {
+            currentPrice = val;
+            break;
+          }
+        }
+      }
+    }
+
+    // 4. Preço Original (riscado / de promoção)
     let originalPrice = null;
-    const originalContainer = document.querySelector(".ui-pdp-price__original-value");
+    const originalContainer =
+      document.querySelector(".ui-pdp-price__original-value") ||
+      document.querySelector(".ui-pdp-price__subtitles s") ||
+      document.querySelector("s.andes-money-amount");
+
     if (originalContainer) {
-      const fraction = originalContainer.querySelector(".andes-money-amount__fraction")?.innerText || "";
-      const cents = originalContainer.querySelector(".andes-money-amount__cents")?.innerText || "00";
+      const fraction = originalContainer.querySelector(".andes-money-amount__fraction")?.innerText?.trim() || "";
+      const cents = originalContainer.querySelector(".andes-money-amount__cents")?.innerText?.trim() || "00";
       if (fraction) {
         const val = parseBrlCurrency(`${fraction},${cents}`);
         if (val > currentPrice) originalPrice = val;
@@ -115,10 +237,34 @@
     }
 
     // 5. Vendedor e Reputação
-    let sellerName = jsonLd?.seller_name || "Mercado Livre Oficial";
-    const sellerLink = document.querySelector(".ui-pdp-seller__link-trigger") || document.querySelector(".ui-seller-info a");
+    let sellerName = jsonLd?.seller_name || "";
+    const sellerLink =
+      document.querySelector(".ui-pdp-seller__link-trigger") ||
+      document.querySelector(".ui-seller-info a") ||
+      document.querySelector(".ui-seller-info__status-info .ui-seller-info__title") ||
+      document.querySelector(".ui-seller-data-header__title") ||
+      document.querySelector('a[href*="/perfil/"]');
+
     if (sellerLink && sellerLink.innerText.trim()) {
       sellerName = sellerLink.innerText.trim();
+    }
+
+    if (!sellerName) {
+      // Procura por "Vendido por"
+      const allSpans = document.querySelectorAll("span, p");
+      for (const el of allSpans) {
+        if (el.innerText && el.innerText.startsWith("Vendido por")) {
+          const nextName = el.innerText.replace("Vendido por", "").trim();
+          if (nextName) {
+            sellerName = nextName;
+            break;
+          }
+        }
+      }
+    }
+
+    if (!sellerName) {
+      sellerName = "Vendedor Mercado Livre";
     }
 
     let sellerReputation = "comum";
@@ -127,16 +273,25 @@
       sellerReputation = "platinum";
     } else if (repText.includes("mercadolíder gold") || repText.includes("mercado lider gold")) {
       sellerReputation = "gold";
-    } else if (repText.includes("loja oficial")) {
+    } else if (repText.includes("loja oficial") || document.querySelector(".ui-pdp-seller__official-store-badge")) {
       sellerReputation = "oficial";
     }
 
     // 6. Logística e Frete
     let shippingType = "padrao";
     const bodyHtml = document.documentElement.innerHTML;
-    if (document.querySelector(".ui-pdp-media--full") || bodyHtml.includes("ui-pdp-icon--full") || bodyHtml.includes("Enviado pelo FULL")) {
+    if (
+      document.querySelector(".ui-pdp-media--full") ||
+      bodyHtml.includes("ui-pdp-icon--full") ||
+      bodyHtml.includes("Enviado pelo FULL") ||
+      bodyHtml.includes("icon-shipping-full")
+    ) {
       shippingType = "ml_full";
-    } else if (bodyHtml.includes("Chegará hoje") || bodyHtml.includes("Chegará amanhã") || bodyHtml.includes("Flex")) {
+    } else if (
+      bodyHtml.includes("Chegará hoje") ||
+      bodyHtml.includes("Chegará amanhã") ||
+      bodyHtml.includes("Flex")
+    ) {
       shippingType = "ml_flex";
     } else if (bodyHtml.includes("Coleta") || bodyHtml.includes("coleta")) {
       shippingType = "ml_coleta";
@@ -144,7 +299,10 @@
 
     // 7. Selo de Promoção
     let promoBadge = null;
-    const promoEl = document.querySelector(".ui-pdp-promotions-pill") || document.querySelector(".ui-pdp-color--GREEN");
+    const promoEl =
+      document.querySelector(".ui-pdp-promotions-pill") ||
+      document.querySelector(".ui-pdp-color--GREEN");
+
     if (promoEl && promoEl.innerText.trim()) {
       promoBadge = promoEl.innerText.trim().slice(0, 50);
     } else if (bodyHtml.includes("OFERTA DO DIA")) {
@@ -153,9 +311,25 @@
       promoBadge = "Oferta Relâmpago";
     }
 
-    // 8. Thumbnail
-    const imageEl = document.querySelector(".ui-pdp-gallery__figure img") || document.querySelector(".ui-pdp-image");
-    const thumbnailUrl = imageEl?.src || jsonLd?.image || null;
+    // 8. Thumbnail (Garante protocolo e resolução)
+    let thumbnailUrl = null;
+    const ogImg = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
+    if (ogImg) {
+      thumbnailUrl = normalizeUrl(ogImg);
+    }
+
+    if (!thumbnailUrl) {
+      const imageEl =
+        document.querySelector(".ui-pdp-gallery__figure img") ||
+        document.querySelector(".ui-pdp-image") ||
+        document.querySelector(".ui-pdp-gallery img");
+      const src = imageEl?.getAttribute("src") || imageEl?.getAttribute("data-src");
+      thumbnailUrl = normalizeUrl(src) || jsonLd?.image || null;
+    }
+
+    // 9. Permalink canônico
+    let permalink = canonical.split("?")[0];
+    permalink = normalizeUrl(permalink) || window.location.href.split("?")[0];
 
     return {
       platform: "mercadolivre",
@@ -167,7 +341,7 @@
       seller_reputation: sellerReputation,
       shipping_type: shippingType,
       promo_badge: promoBadge,
-      permalink: window.location.href.split("?")[0],
+      permalink,
       thumbnail_url: thumbnailUrl,
       sales_count_approx: 100,
       rating: 4.8,
@@ -180,9 +354,11 @@
   function extractShopee() {
     const jsonLd = extractFromJsonLd();
 
-    // 1. External ID (ShopId.ItemId da URL)
+    // 1. External ID
     let externalId = "";
-    const urlParts = window.location.pathname.split("-i.")[1] || window.location.pathname.split("/product/")[1];
+    const urlParts =
+      window.location.pathname.split("-i.")[1] ||
+      window.location.pathname.split("/product/")[1];
     if (urlParts) {
       const ids = urlParts.replace(/\//g, "").split(".");
       if (ids.length >= 2) {
@@ -197,13 +373,20 @@
     // 2. Título
     let title = jsonLd?.title || "";
     if (!title) {
-      const titleEl = document.querySelector("h1") || document.querySelector(".vKitProductDetails_title") || document.querySelector(".attM6q");
+      const titleEl =
+        document.querySelector("h1") ||
+        document.querySelector(".vKitProductDetails_title") ||
+        document.querySelector(".attM6q");
       title = titleEl?.innerText?.trim() || document.title;
     }
 
     // 3. Preço
     let currentPrice = 0;
-    const priceEl = document.querySelector(".G27akf") || document.querySelector(".pmmxKx") || document.querySelector(".IZexXJ") || document.querySelector('div[class*="price"]');
+    const priceEl =
+      document.querySelector(".G27akf") ||
+      document.querySelector(".pmmxKx") ||
+      document.querySelector(".IZexXJ") ||
+      document.querySelector('div[class*="price"]');
     if (priceEl) {
       currentPrice = parseBrlCurrency(priceEl.innerText);
     }
@@ -221,7 +404,10 @@
 
     // 5. Vendedor e Reputação
     let sellerName = jsonLd?.seller_name || "Vendedor Shopee";
-    const shopEl = document.querySelector(".V5Wf0t") || document.querySelector("._1wPq_F") || document.querySelector('div[class*="shop-name"]');
+    const shopEl =
+      document.querySelector(".V5Wf0t") ||
+      document.querySelector("._1wPq_F") ||
+      document.querySelector('div[class*="shop-name"]');
     if (shopEl?.innerText?.trim()) {
       sellerName = shopEl.innerText.trim();
     }
@@ -251,8 +437,10 @@
     }
 
     // 8. Thumbnail
-    const imgEl = document.querySelector("picture img") || document.querySelector('div[class*="product-briefing"] img');
-    const thumbnailUrl = imgEl?.src || jsonLd?.image || null;
+    const imgEl =
+      document.querySelector("picture img") ||
+      document.querySelector('div[class*="product-briefing"] img');
+    const thumbnailUrl = normalizeUrl(imgEl?.src) || jsonLd?.image || null;
 
     return {
       platform: "shopee",
@@ -264,7 +452,7 @@
       seller_reputation: sellerReputation,
       shipping_type: shippingType,
       promo_badge: promoBadge,
-      permalink: window.location.href.split("?")[0],
+      permalink: normalizeUrl(window.location.href.split("?")[0]),
       thumbnail_url: thumbnailUrl,
       sales_count_approx: 50,
       rating: 4.7,
@@ -284,7 +472,7 @@
   }
 
   /**
-   * Toast Corporativo no estilo Tiny ERP (Compacto, Neutro com bordas sutis)
+   * Toast Corporativo no estilo Tiny ERP
    */
   function showToast(message, type = "info") {
     let toast = document.getElementById("crm-erp-toast");
@@ -301,12 +489,12 @@
         line-height: 1.4;
         padding: 10px 14px;
         border-radius: 6px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
         display: flex;
         align-items: center;
         gap: 8px;
         transition: all 0.25s ease-in-out;
-        max-width: 320px;
+        max-width: 360px;
       `;
       document.body.appendChild(toast);
     }
@@ -330,7 +518,7 @@
         toast.style.opacity = "0";
         toast.style.transform = "translateY(10px)";
       }
-    }, 4500);
+    }, 5000);
   }
 
   /**
@@ -339,15 +527,30 @@
   async function triggerCapture(myListingId = null) {
     const data = extractProductData();
     if (!data || !data.current_price) {
-      showToast("Não foi possível identificar o preço do anúncio nesta página.", "error");
+      showToast(
+        "Não foi possível identificar o preço nesta página. Certifique-se de estar em um anúncio de produto.",
+        "error"
+      );
       return;
+    }
+
+    // Se não foi passado diretamente, verifica no storage se há anúncio selecionado
+    if (!myListingId && chrome?.storage?.sync) {
+      try {
+        const stored = await chrome.storage.sync.get(["selectedMyListingId"]);
+        if (stored?.selectedMyListingId) {
+          myListingId = stored.selectedMyListingId;
+        }
+      } catch {
+        // Ignora
+      }
     }
 
     if (myListingId) {
       data.my_listing_id = myListingId;
     }
 
-    showToast("Enviando dados do concorrente ao ERP...", "info");
+    showToast(`Coletando anúncio ${data.external_id} (R$ ${data.current_price.toFixed(2)})... Enviando ao CRM...`, "info");
 
     chrome.runtime.sendMessage(
       {
@@ -361,9 +564,15 @@
         }
 
         if (response && response.success) {
-          showToast(`Anúncio ${data.external_id} capturado e sincronizado com sucesso! Preço: R$ ${data.current_price.toFixed(2)}`, "success");
+          showToast(
+            `Anúncio ${data.external_id} sincronizado com sucesso no ERP! Preço: R$ ${data.current_price.toFixed(2)}`,
+            "success"
+          );
         } else {
-          showToast(`Falha ao sincronizar: ${response?.error || "Verifique o Token de API no popup da extensão."}`, "error");
+          showToast(
+            `Falha ao sincronizar: ${response?.error || "Verifique a URL do ERP no popup da extensão."}`,
+            "error"
+          );
         }
       }
     );
@@ -400,26 +609,25 @@
       border: 1px solid #334155;
       border-radius: 6px;
       cursor: pointer;
-      box-shadow: 0 4px 12px rgba(15, 23, 42, 0.25);
+      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.3);
       transition: all 0.2s ease;
     `;
 
     btn.onmouseover = () => {
       btn.style.backgroundColor = "#1E293B";
       btn.style.transform = "translateY(-2px)";
-      btn.style.boxShadow = "0 6px 16px rgba(15, 23, 42, 0.35)";
+      btn.style.boxShadow = "0 6px 18px rgba(15, 23, 42, 0.4)";
     };
 
     btn.onmouseout = () => {
       btn.style.backgroundColor = "#0F172A";
       btn.style.transform = "translateY(0)";
-      btn.style.boxShadow = "0 4px 12px rgba(15, 23, 42, 0.25)";
+      btn.style.boxShadow = "0 4px 14px rgba(15, 23, 42, 0.3)";
     };
 
     btn.onclick = () => {
-      // Verifica se o usuário pré-selecionou um my_listing_id no popup storage
       chrome.storage.sync.get(["selectedMyListingId"], (res) => {
-        triggerCapture(res.selectedMyListingId || null);
+        triggerCapture(res?.selectedMyListingId || null);
       });
     };
 
@@ -442,5 +650,14 @@
   });
 
   // Aguarda DOM estabilizar e injeta botão
-  setTimeout(injectFloatingButton, 1200);
+  setTimeout(injectFloatingButton, 1000);
+
+  // Monitora alterações de URL em SPAs (quando o usuário navega sem recarregar)
+  let lastUrl = window.location.href;
+  setInterval(() => {
+    if (window.location.href !== lastUrl) {
+      lastUrl = window.location.href;
+      setTimeout(injectFloatingButton, 800);
+    }
+  }, 1500);
 })();

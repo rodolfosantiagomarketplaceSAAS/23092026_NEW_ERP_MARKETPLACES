@@ -125,6 +125,97 @@ export function BiDashboard() {
     });
   };
 
+  // Exclusão de Concorrente Pareado com Atualização Otimista
+  const handleDeleteCompetitor = async (myListingId: string, competitorId: string) => {
+    try {
+      const res = await fetch(
+        `/api/competitors/matches?my_listing_id=${myListingId}&competitor_id=${competitorId}`,
+        { method: "DELETE" }
+      );
+      if (!res.ok) {
+        throw new Error("Falha ao excluir no servidor");
+      }
+
+      setData((prev) => {
+        if (!prev) return prev;
+        const updatedItems = prev.items.map((group) => {
+          if (group.my_listing.id === myListingId) {
+            const updatedCompetitors = group.competitors.filter((c) => c.id !== competitorId);
+            const lowest =
+              updatedCompetitors.length > 0
+                ? Math.min(...updatedCompetitors.map((c) => c.current_price))
+                : null;
+            const diffBrl =
+              lowest !== null ? Number((group.my_listing.current_price - lowest).toFixed(2)) : null;
+            const diffPct =
+              lowest !== null && lowest > 0 && diffBrl !== null
+                ? Number(((diffBrl / lowest) * 100).toFixed(2))
+                : null;
+            const status =
+              lowest === null
+                ? "UNMATCHED"
+                : (diffBrl || 0) < 0
+                ? "WINNING"
+                : diffBrl === 0
+                ? "TIED"
+                : "LOSING";
+
+            return {
+              ...group,
+              competitors: updatedCompetitors,
+              lowest_competitor_price: lowest,
+              diff_brl: diffBrl,
+              diff_pct: diffPct,
+              status: status as any,
+            };
+          }
+          return group;
+        });
+
+        const summary = {
+          total_listings: updatedItems.length,
+          winning_count: updatedItems.filter((g) => g.status === "WINNING").length,
+          tied_count: updatedItems.filter((g) => g.status === "TIED").length,
+          losing_count: updatedItems.filter((g) => g.status === "LOSING").length,
+          unmatched_count: updatedItems.filter((g) => g.status === "UNMATCHED").length,
+        };
+
+        return { ...prev, items: updatedItems, summary };
+      });
+    } catch (e) {
+      console.error("Erro ao remover concorrente:", e);
+      alert("Não foi possível excluir o concorrente. Tente novamente.");
+    }
+  };
+
+  // Exclusão de Anúncio Próprio do Monitoramento com Atualização Otimista
+  const handleDeleteMyListing = async (myListingId: string, title: string) => {
+    try {
+      const res = await fetch(`/api/competitors/matches?my_listing_id=${myListingId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        throw new Error("Falha ao excluir anúncio no servidor");
+      }
+
+      setData((prev) => {
+        if (!prev) return prev;
+        const updatedItems = prev.items.filter((g) => g.my_listing.id !== myListingId);
+        const summary = {
+          total_listings: updatedItems.length,
+          winning_count: updatedItems.filter((g) => g.status === "WINNING").length,
+          tied_count: updatedItems.filter((g) => g.status === "TIED").length,
+          losing_count: updatedItems.filter((g) => g.status === "LOSING").length,
+          unmatched_count: updatedItems.filter((g) => g.status === "UNMATCHED").length,
+        };
+        return { ...prev, items: updatedItems, summary };
+      });
+    } catch (e) {
+      console.error("Erro ao remover anúncio do monitoramento:", e);
+      alert("Não foi possível remover o anúncio do monitoramento. Tente novamente.");
+    }
+  };
+
   // Simulação interativa para demonstração visual do Supabase Realtime
   const simulateRealtimePriceDrop = () => {
     if (!data || data.items.length === 0) return;
@@ -321,8 +412,10 @@ export function BiDashboard() {
         groups={data?.items || []}
         highlightedIds={highlightedIds}
         onPriceUpdated={handlePriceUpdated}
+        onDeleteCompetitor={handleDeleteCompetitor}
+        onDeleteMyListing={handleDeleteMyListing}
         onOpenPairModal={(id) => {
-          alert(`Para vincular novos concorrentes ao anúncio [${id}], utilize a extensão no Chrome ou o botão 'Capturar para meu ERP' diretamente no anúncio do concorrente.`);
+          alert(`Para vincular novos concorrentes ao anúncio [${id}], utilize a extensão no Chrome ou o botão 'Capturar Concorrente (ERP)' diretamente no anúncio do concorrente.`);
         }}
       />
     </div>
