@@ -48,10 +48,9 @@ export async function GET(req: NextRequest) {
 
     // Se falhar ou não houver dados no banco, usa os dados do comparativeStore
     let groups: ComparativeListingGroup[] = [];
+    const matchedCompetitorIds = new Set<string>();
 
-    if (myListingsError || !myListings || myListings.length === 0) {
-      groups = MOCK_COMPARATIVE_DATA[platform] || [];
-    } else {
+    if (!myListingsError && myListings && myListings.length > 0) {
       // Para cada anúncio próprio, busca os concorrentes pareados via listing_matches
       for (const item of myListings) {
         const { data: matches } = await supabase
@@ -72,6 +71,7 @@ export async function GET(req: NextRequest) {
             const comp = m.competitor_listings as any;
             if (!comp) continue;
 
+            matchedCompetitorIds.add(comp.id);
             const compPrice = Number(comp.current_price);
             if (lowestPrice === null || compPrice < lowestPrice) {
               lowestPrice = compPrice;
@@ -132,6 +132,67 @@ export async function GET(req: NextRequest) {
           status,
         });
       }
+
+      // Adiciona concorrentes do banco que estão sem vínculo direto (Modo Radar de Mercado)
+      const { data: unmatchedComps } = await supabase
+        .from("competitor_listings")
+        .select("*")
+        .eq("platform", platform)
+        .order("created_at", { ascending: false });
+
+      if (unmatchedComps && unmatchedComps.length > 0) {
+        for (const comp of unmatchedComps) {
+          if (!matchedCompetitorIds.has(comp.id)) {
+            const compPrice = Number(comp.current_price);
+            const cleanExt = (comp.external_id || "PROD").replace(/[^A-Z0-9]/gi, "").slice(-8);
+            groups.unshift({
+              my_listing: {
+                id: `radar-${comp.id}`,
+                user_id: comp.user_id,
+                product_id: null,
+                platform: comp.platform,
+                external_id: comp.external_id,
+                title: `[Radar] ${comp.title}`,
+                current_price: compPrice,
+                permalink: comp.permalink,
+                thumbnail_url: comp.thumbnail_url || null,
+                shipping_type: comp.shipping_type || "padrao",
+                listing_type: "radar",
+                status: "active",
+                created_at: comp.created_at,
+                updated_at: comp.updated_at,
+                product_sku: `RADAR-${cleanExt}`,
+                product_cost_price: null,
+              },
+              competitors: [
+                {
+                  id: comp.id,
+                  external_id: comp.external_id,
+                  seller_name: comp.seller_name,
+                  seller_reputation: comp.seller_reputation,
+                  title: comp.title,
+                  current_price: compPrice,
+                  original_price: comp.original_price ? Number(comp.original_price) : null,
+                  shipping_type: comp.shipping_type,
+                  promo_badge: comp.promo_badge,
+                  permalink: comp.permalink,
+                  thumbnail_url: comp.thumbnail_url,
+                  price_difference_brl: 0,
+                  price_difference_pct: 0,
+                  last_scraped_at: comp.last_scraped_at,
+                },
+              ],
+              lowest_competitor_price: compPrice,
+              diff_brl: 0,
+              diff_pct: 0,
+              status: "TIED",
+            });
+          }
+        }
+      }
+    } else {
+      // Fallback em memória (inclui anúncios cadastrados ou capturados no Radar)
+      groups = MOCK_COMPARATIVE_DATA[platform] || [];
     }
 
     // Aplicação de Filtros em memória

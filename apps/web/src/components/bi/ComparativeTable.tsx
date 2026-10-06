@@ -17,6 +17,7 @@ import {
   Minus,
   Sparkles,
   Trash2,
+  Radio,
 } from "lucide-react";
 import type { ComparativeListingGroup, CompetitorComparisonItem } from "@crm/types";
 import { RepriceModal } from "./RepriceModal";
@@ -97,6 +98,13 @@ export function ComparativeTable({
    * Renderiza Badge de Reputação e Tipo de Anúncio
    */
   const renderReputationBadge = (rep: string | null, listingType?: string) => {
+    if (listingType === "radar") {
+      return (
+        <span className="inline-flex items-center gap-1 text-[10px] font-bold text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded border border-sky-200">
+          <Radio className="w-2.5 h-2.5 text-sky-600 animate-pulse" /> Radar Mercado
+        </span>
+      );
+    }
     const isPremium = listingType === "premium";
     return (
       <div className="flex flex-col gap-0.5 text-[10px]">
@@ -158,11 +166,12 @@ export function ComparativeTable({
               groups.map((group) => {
                 const isExpanded = !!expandedRows[group.my_listing.id];
                 const hasCompetitors = group.competitors.length > 0;
+                const isRadar = group.my_listing.listing_type === "radar";
 
                 return (
                   <React.Fragment key={group.my_listing.id}>
-                    {/* Linha Principal: Anúncio Próprio */}
-                    <tr className="hover:bg-[#F8FAFC]/80 transition-colors group">
+                    {/* Linha Principal: Anúncio Próprio ou Radar */}
+                    <tr className={`hover:bg-[#F8FAFC]/80 transition-colors group ${isRadar ? "bg-sky-50/20" : ""}`}>
                       {/* Accordion Toggle */}
                       <td className="py-2 px-3 text-center">
                         {hasCompetitors ? (
@@ -197,9 +206,16 @@ export function ComparativeTable({
                             )}
                           </div>
                           <div className="flex flex-col">
-                            <span className="font-semibold text-slate-900 line-clamp-1 leading-snug">
-                              {group.my_listing.title}
-                            </span>
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              {isRadar && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300">
+                                  <Radio className="w-2.5 h-2.5 text-sky-600 animate-pulse" /> Radar Concorrente
+                                </span>
+                              )}
+                              <span className="font-semibold text-slate-900 line-clamp-1 leading-snug">
+                                {group.my_listing.title}
+                              </span>
+                            </div>
                             <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
                               <span>
                                 SKU:{" "}
@@ -216,12 +232,32 @@ export function ComparativeTable({
 
                       {/* Meu Preço */}
                       <td className="py-2.5 px-3 text-right">
-                        <div className="font-bold text-slate-900 text-sm">
-                          R$ {Number(group.my_listing.current_price).toFixed(2)}
-                        </div>
-                        {group.my_listing.product_cost_price && (
-                          <div className="text-[10px] text-slate-400">
-                            Custo: R$ {Number(group.my_listing.product_cost_price).toFixed(2)}
+                        {isRadar ? (
+                          <div>
+                            <div className="font-bold text-slate-700 text-sm">
+                              R$ {Number(group.my_listing.current_price).toFixed(2)}
+                            </div>
+                            <div className="text-[10px] text-slate-400">Preço de Referência</div>
+                            <button
+                              onClick={() => setSelectedGroupForReprice(group)}
+                              className="text-[10px] text-sky-600 hover:text-sky-800 underline font-medium block ml-auto mt-0.5"
+                              title="Definir custo ou preço pretendido para calcular margem"
+                            >
+                              {group.my_listing.product_cost_price
+                                ? `Custo: R$ ${Number(group.my_listing.product_cost_price).toFixed(2)}`
+                                : "Definir Meu Custo"}
+                            </button>
+                          </div>
+                        ) : (
+                          <div>
+                            <div className="font-bold text-slate-900 text-sm">
+                              R$ {Number(group.my_listing.current_price).toFixed(2)}
+                            </div>
+                            {group.my_listing.product_cost_price && (
+                              <div className="text-[10px] text-slate-400">
+                                Custo: R$ {Number(group.my_listing.product_cost_price).toFixed(2)}
+                              </div>
+                            )}
                           </div>
                         )}
                       </td>
@@ -242,27 +278,36 @@ export function ComparativeTable({
 
                       {/* Discrepância / Buybox Status */}
                       <td className="py-2.5 px-3 text-center">
-                        {group.status === "WINNING" && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#ECFDF5] text-[#065F46] border border-[#A7F3D0]">
-                            <TrendingDown className="w-3 h-3 text-[#10B981]" />
-                            -R$ {Math.abs(group.diff_brl || 0).toFixed(2)} ({Math.abs(group.diff_pct || 0)}%)
+                        {isRadar ? (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
+                            <Radio className="w-3 h-3 text-sky-600 animate-pulse" />
+                            Espionando Preço
                           </span>
-                        )}
-                        {group.status === "TIED" && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#FEFCE8] text-[#854D0E] border border-[#FEF08A]">
-                            Empatado (R$ 0,00)
-                          </span>
-                        )}
-                        {group.status === "LOSING" && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]">
-                            <TrendingUp className="w-3 h-3 text-[#EF4444]" />
-                            +R$ {Math.abs(group.diff_brl || 0).toFixed(2)} (+{group.diff_pct}%)
-                          </span>
-                        )}
-                        {group.status === "UNMATCHED" && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-500">
-                            Sem concorrentes
-                          </span>
+                        ) : (
+                          <>
+                            {group.status === "WINNING" && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#ECFDF5] text-[#065F46] border border-[#A7F3D0]">
+                                <TrendingDown className="w-3 h-3 text-[#10B981]" />
+                                -R$ {Math.abs(group.diff_brl || 0).toFixed(2)} ({Math.abs(group.diff_pct || 0)}%)
+                              </span>
+                            )}
+                            {group.status === "TIED" && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#FEFCE8] text-[#854D0E] border border-[#FEF08A]">
+                                Empatado (R$ 0,00)
+                              </span>
+                            )}
+                            {group.status === "LOSING" && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]">
+                                <TrendingUp className="w-3 h-3 text-[#EF4444]" />
+                                +R$ {Math.abs(group.diff_brl || 0).toFixed(2)} (+{group.diff_pct}%)
+                              </span>
+                            )}
+                            {group.status === "UNMATCHED" && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium bg-slate-100 text-slate-500">
+                                Sem concorrentes
+                              </span>
+                            )}
+                          </>
                         )}
                       </td>
 
@@ -297,7 +342,7 @@ export function ComparativeTable({
                             target="_blank"
                             rel="noopener noreferrer"
                             className="p-1.5 rounded hover:bg-slate-100 text-slate-600 border border-transparent hover:border-slate-200 transition-colors"
-                            title="Ver meu anúncio no Marketplace"
+                            title={isRadar ? "Abrir anúncio concorrente no Marketplace" : "Ver meu anúncio no Marketplace"}
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
                           </a>
@@ -305,19 +350,22 @@ export function ComparativeTable({
                           <button
                             onClick={() => onOpenPairModal && onOpenPairModal(group.my_listing.id)}
                             className="p-1.5 rounded hover:bg-slate-100 text-slate-600 border border-transparent hover:border-slate-200 transition-colors"
-                            title="Parear Novo Concorrente Manualmente"
+                            title={isRadar ? "Parear a outro anúncio" : "Parear Novo Concorrente Manualmente"}
                           >
                             <LinkIcon className="w-3.5 h-3.5" />
                           </button>
 
                           <button
                             onClick={() => {
-                              if (confirm(`Deseja remover o anúncio "${group.my_listing.title.slice(0, 35)}..." do catálogo de monitoramento?`)) {
+                              const msg = isRadar
+                                ? `Deseja remover o anúncio "${group.my_listing.title.slice(0, 35)}..." do radar de monitoramento?`
+                                : `Deseja remover o anúncio "${group.my_listing.title.slice(0, 35)}..." do catálogo de monitoramento?`;
+                              if (confirm(msg)) {
                                 onDeleteMyListing && onDeleteMyListing(group.my_listing.id, group.my_listing.title);
                               }
                             }}
                             className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-600 border border-transparent hover:border-red-200 transition-colors"
-                            title="Excluir este anúncio do monitoramento"
+                            title={isRadar ? "Remover do radar de monitoramento" : "Excluir este anúncio do monitoramento"}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>

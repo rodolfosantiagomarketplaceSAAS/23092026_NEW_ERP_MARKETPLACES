@@ -112,7 +112,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
-  // 6. Botão "Capturar e Vincular no ERP"
+  const listingHint = document.getElementById("listingHint");
+
+  function updateButtonLabel() {
+    if (myListingSelect.value) {
+      captureNowBtn.innerText = "🔗 Capturar e Vincular ao Meu Anúncio";
+    } else {
+      captureNowBtn.innerText = "📡 Enviar para Radar de Mercado (ERP)";
+    }
+  }
+
+  // 6. Botão "Capturar / Enviar Concorrente"
   captureNowBtn.addEventListener("click", () => {
     if (!activeTab || !activeTab.id) return;
     const selectedListingId = myListingSelect.value || null;
@@ -128,10 +138,15 @@ document.addEventListener("DOMContentLoaded", async () => {
       },
       (res) => {
         captureNowBtn.disabled = false;
-        captureNowBtn.innerText = "Capturar e Vincular no ERP";
+        updateButtonLabel();
 
         if (res && res.success) {
-          showFeedback("Captura disparada! Veja a notificação na página.", "success");
+          showFeedback(
+            selectedListingId
+              ? "Concorrente vinculado ao seu anúncio com sucesso!"
+              : "Concorrente enviado ao Radar de Mercado do ERP!",
+            "success"
+          );
         } else {
           showFeedback("Não foi possível acionar a captura na página.", "error");
         }
@@ -142,6 +157,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Salva no storage a seleção do anúncio para sincronia
   myListingSelect.addEventListener("change", () => {
     chrome.storage.sync.set({ selectedMyListingId: myListingSelect.value });
+    updateButtonLabel();
   });
 
   // Funções Utilitárias
@@ -171,6 +187,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   }
 
   async function loadMyListings(erpUrl, apiToken, platform) {
+    listingSelectContainer.style.display = "block";
     try {
       const headers = {};
       if (apiToken) {
@@ -181,29 +198,51 @@ document.addEventListener("DOMContentLoaded", async () => {
         headers,
       });
 
-      if (!res.ok) return;
+      if (!res.ok) {
+        myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
+        if (listingHint) {
+          listingHint.innerHTML = "💡 Concorrente será monitorado no <strong>Radar de Mercado</strong> do ERP.";
+        }
+        updateButtonLabel();
+        return;
+      }
 
       const data = await res.json();
       if (Array.isArray(data.items) && data.items.length > 0) {
-        myListingSelect.innerHTML = `<option value="">-- Não vincular agora (ou selecione abaixo) --</option>`;
+        let optionsHtml = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
+        optionsHtml += `<optgroup label="Vincular a um Anúncio Próprio:">`;
         data.items.forEach((item) => {
-          const opt = document.createElement("option");
-          opt.value = item.id;
-          opt.innerText = `[${item.product_sku || "Sem SKU"}] ${item.title.slice(0, 30)}... (R$ ${Number(item.current_price).toFixed(2)})`;
-          myListingSelect.appendChild(opt);
+          optionsHtml += `<option value="${item.id}">[${item.product_sku || "Sem SKU"}] ${item.title.slice(0, 32)}... (R$ ${Number(item.current_price).toFixed(2)})</option>`;
         });
+        optionsHtml += `</optgroup>`;
+        myListingSelect.innerHTML = optionsHtml;
+
+        if (listingHint) {
+          listingHint.innerHTML = "Dica: Escolha seu anúncio para comparar Buybox ou mantenha em 'Radar' para apenas espionar preços.";
+        }
 
         // Restaura seleção anterior se existir
         chrome.storage.sync.get(["selectedMyListingId"], (store) => {
           if (store.selectedMyListingId) {
             myListingSelect.value = store.selectedMyListingId;
           }
+          updateButtonLabel();
         });
-
-        listingSelectContainer.style.display = "block";
+      } else {
+        // Usuário sem anúncios próprios
+        myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
+        if (listingHint) {
+          listingHint.innerHTML = "💡 <em>Você ainda não tem anúncios cadastrados.</em> O concorrente será monitorado diretamente no <strong>Radar de Mercado</strong> do ERP.";
+        }
+        updateButtonLabel();
       }
     } catch (e) {
       console.warn("Falha ao carregar anúncios próprios:", e);
+      myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
+      if (listingHint) {
+        listingHint.innerHTML = "💡 Concorrente será monitorado no <strong>Radar de Mercado</strong> do ERP.";
+      }
+      updateButtonLabel();
     }
   }
 });

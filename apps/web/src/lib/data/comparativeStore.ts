@@ -339,46 +339,89 @@ export function addOrUpdateMockCompetitor(
   myListingId: string | null,
   compData: any
 ) {
-  const groups = MOCK_COMPARATIVE_DATA[platform] || [];
+  if (!MOCK_COMPARATIVE_DATA[platform]) {
+    MOCK_COMPARATIVE_DATA[platform] = [];
+  }
+  const groups = MOCK_COMPARATIVE_DATA[platform];
   let targetGroup = myListingId ? groups.find((g) => g.my_listing.id === myListingId) : null;
 
-  if (!targetGroup && groups.length > 0) {
-    targetGroup = groups[0];
+  // Se não foi vinculado a um anúncio próprio, procura se já existe grupo de radar com este external_id
+  if (!targetGroup) {
+    targetGroup = groups.find(
+      (g) =>
+        g.my_listing.external_id === compData.external_id ||
+        g.competitors.some((c) => c.external_id === compData.external_id)
+    ) || null;
   }
 
-  if (targetGroup) {
-    const myPrice = targetGroup.my_listing.current_price;
-    const diffBrl = Number((myPrice - compData.current_price).toFixed(2));
-    const diffPct = Number(((diffBrl / compData.current_price) * 100).toFixed(2));
-
-    const newComp: CompetitorComparisonItem = {
-      id: compData.id || `comp-${Date.now()}`,
-      external_id: compData.external_id,
-      seller_name: compData.seller_name,
-      seller_reputation: compData.seller_reputation || "comum",
-      title: compData.title,
-      current_price: compData.current_price,
-      original_price: compData.original_price || null,
-      shipping_type: compData.shipping_type || "padrao",
-      promo_badge: compData.promo_badge || null,
-      permalink: compData.permalink,
-      thumbnail_url: compData.thumbnail_url || null,
-      price_difference_brl: diffBrl,
-      price_difference_pct: diffPct,
-      last_scraped_at: new Date().toISOString(),
+  // Se ainda não existir grupo (ex: usuário sem anúncios próprios cadastrados), cria um grupo no Radar
+  if (!targetGroup) {
+    const radarId = `radar-${compData.external_id || Date.now()}`;
+    const cleanExt = (compData.external_id || "PROD").replace(/[^A-Z0-9]/gi, "").slice(-8);
+    const newRadarGroup: ComparativeListingGroup = {
+      my_listing: {
+        id: radarId,
+        user_id: "demo-user",
+        product_id: null,
+        platform,
+        external_id: compData.external_id,
+        title: `[Radar de Mercado] ${compData.title}`,
+        current_price: compData.current_price,
+        permalink: compData.permalink,
+        thumbnail_url: compData.thumbnail_url || null,
+        shipping_type: compData.shipping_type || "padrao",
+        listing_type: "radar",
+        status: "active",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        product_sku: `RADAR-${cleanExt}`,
+        product_cost_price: null,
+      },
+      lowest_competitor_price: compData.current_price,
+      diff_brl: 0.00,
+      diff_pct: 0.00,
+      status: "TIED",
+      competitors: [],
     };
 
-    // Substitui se já existe ou adiciona no início
-    const existingIndex = targetGroup.competitors.findIndex(
-      (c) => c.external_id === newComp.external_id
-    );
-    if (existingIndex >= 0) {
-      targetGroup.competitors[existingIndex] = newComp;
-    } else {
-      targetGroup.competitors.unshift(newComp);
-    }
-
-    const updated = recalculateGroupStatus(targetGroup);
-    Object.assign(targetGroup, updated);
+    groups.unshift(newRadarGroup);
+    targetGroup = newRadarGroup;
   }
+
+  const myPrice = targetGroup.my_listing.current_price;
+  const diffBrl = Number((myPrice - compData.current_price).toFixed(2));
+  const diffPct =
+    compData.current_price > 0
+      ? Number(((diffBrl / compData.current_price) * 100).toFixed(2))
+      : 0;
+
+  const newComp: CompetitorComparisonItem = {
+    id: compData.id || `comp-${Date.now()}`,
+    external_id: compData.external_id,
+    seller_name: compData.seller_name,
+    seller_reputation: compData.seller_reputation || "comum",
+    title: compData.title,
+    current_price: compData.current_price,
+    original_price: compData.original_price || null,
+    shipping_type: compData.shipping_type || "padrao",
+    promo_badge: compData.promo_badge || null,
+    permalink: compData.permalink,
+    thumbnail_url: compData.thumbnail_url || null,
+    price_difference_brl: diffBrl,
+    price_difference_pct: diffPct,
+    last_scraped_at: new Date().toISOString(),
+  };
+
+  // Substitui se já existe ou adiciona no início
+  const existingIndex = targetGroup.competitors.findIndex(
+    (c) => c.external_id === newComp.external_id
+  );
+  if (existingIndex >= 0) {
+    targetGroup.competitors[existingIndex] = newComp;
+  } else {
+    targetGroup.competitors.unshift(newComp);
+  }
+
+  const updated = recalculateGroupStatus(targetGroup);
+  Object.assign(targetGroup, updated);
 }
