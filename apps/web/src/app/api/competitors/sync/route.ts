@@ -27,9 +27,9 @@ export async function POST(req: NextRequest) {
     if (!userId) {
       try {
         const { data: users } = await supabase.auth.admin.listUsers();
-        userId = users?.users?.[0]?.id || "00000000-0000-0000-0000-000000000001";
+        userId = users?.users?.[0]?.id || "69ee4850-318b-4d9e-83ab-6743f264b6aa";
       } catch {
-        userId = "00000000-0000-0000-0000-000000000001";
+        userId = "69ee4850-318b-4d9e-83ab-6743f264b6aa";
       }
     }
 
