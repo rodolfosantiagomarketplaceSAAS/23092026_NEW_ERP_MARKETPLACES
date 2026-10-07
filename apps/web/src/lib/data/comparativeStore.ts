@@ -268,24 +268,36 @@ export async function removeCompetitorMatch(
   competitorId: string,
   userId?: string | null
 ) {
-  // 1. Tenta deletar no Supabase caso exista tabela e banco
+  // 1. Deleta vinculação em listing_matches e o concorrente em competitor_listings no Supabase
   try {
     const supabase = createSupabaseAdminClient();
-    let query = supabase
-      .from("listing_matches")
-      .delete()
-      .eq("competitor_listing_id", competitorId);
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(competitorId);
 
-    if (myListingId) {
-      query = query.eq("my_listing_id", myListingId);
+    // Remove primeiro de listing_matches se houver
+    let matchQuery = supabase
+      .from("listing_matches")
+      .delete();
+    if (isUuid) {
+      matchQuery = matchQuery.eq("competitor_listing_id", competitorId);
     }
     if (userId) {
-      query = query.eq("user_id", userId);
+      matchQuery = matchQuery.eq("user_id", userId);
     }
+    await matchQuery;
 
-    const { error } = await query;
-    if (error) {
-      console.warn("[removeCompetitorMatch] Aviso no Supabase:", error.message);
+    // Remove também da tabela competitor_listings para não retornar no Radar
+    let compQuery = supabase.from("competitor_listings").delete();
+    if (isUuid) {
+      compQuery = compQuery.eq("id", competitorId);
+    } else {
+      compQuery = compQuery.eq("external_id", competitorId);
+    }
+    if (userId) {
+      compQuery = compQuery.eq("user_id", userId);
+    }
+    const { error: compError } = await compQuery;
+    if (compError) {
+      console.warn("[removeCompetitorMatch] Erro ao deletar competitor_listings:", compError.message);
     }
   } catch (e) {
     console.warn("[removeCompetitorMatch] Erro de conexão Supabase:", e);
@@ -293,35 +305,65 @@ export async function removeCompetitorMatch(
 
   // 2. Atualiza estado em memória
   for (const plat of ["mercadolivre", "shopee"] as MarketplacePlatform[]) {
-    MOCK_COMPARATIVE_DATA[plat] = MOCK_COMPARATIVE_DATA[plat].map((group) => {
-      if (!myListingId || group.my_listing.id === myListingId) {
-        const filteredComps = group.competitors.filter((c) => c.id !== competitorId);
-        return recalculateGroupStatus({
-          ...group,
-          competitors: filteredComps,
-        });
-      }
-      return group;
-    });
+    MOCK_COMPARATIVE_DATA[plat] = MOCK_COMPARATIVE_DATA[plat]
+      .filter((group) => group.my_listing.id !== `radar-${competitorId}` && group.my_listing.external_id !== competitorId)
+      .map((group) => {
+        if (!myListingId || group.my_listing.id === myListingId) {
+          const filteredComps = group.competitors.filter(
+            (c) => c.id !== competitorId && c.external_id !== competitorId
+          );
+          return recalculateGroupStatus({
+            ...group,
+            competitors: filteredComps,
+          });
+        }
+        return group;
+      });
   }
 
   return true;
 }
 
 /**
- * Remove um anúncio próprio do monitoramento (e todos seus concorrentes pareados)
+ * Remove um anúncio do monitoramento (seja radar ou anúncio próprio com concorrentes pareados)
  */
 export async function removeMyListing(myListingId: string, userId?: string | null) {
-  // 1. Tenta deletar no Supabase
   try {
     const supabase = createSupabaseAdminClient();
-    let query = supabase.from("my_listings").delete().eq("id", myListingId);
-    if (userId) {
-      query = query.eq("user_id", userId);
-    }
-    const { error } = await query;
-    if (error) {
-      console.warn("[removeMyListing] Aviso no Supabase:", error.message);
+
+    // Se for um item de Radar (anúncio concorrente sem anúncio próprio pareado)
+    if (myListingId.startsWith("radar-")) {
+      const compId = myListingId.replace(/^radar-/, "");
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(compId);
+      let query = supabase.from("competitor_listings").delete();
+      if (isUuid) {
+        query = query.eq("id", compId);
+      } else {
+        query = query.eq("external_id", compId);
+      }
+      if (userId) {
+        query = query.eq("user_id", userId);
+      }
+      const { error } = await query;
+      if (error) {
+        console.warn("[removeMyListing - radar] Erro no Supabase:", error.message);
+      }
+    } else {
+      // Se for anúncio próprio cadastrado em my_listings
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(myListingId);
+      let query = supabase.from("my_listings").delete();
+      if (isUuid) {
+        query = query.eq("id", myListingId);
+      } else {
+        query = query.eq("external_id", myListingId);
+      }
+      if (userId) {
+        query = query.eq("user_id", userId);
+      }
+      const { error } = await query;
+      if (error) {
+        console.warn("[removeMyListing] Erro no Supabase:", error.message);
+      }
     }
   } catch (e) {
     console.warn("[removeMyListing] Erro de conexão Supabase:", e);
@@ -330,7 +372,7 @@ export async function removeMyListing(myListingId: string, userId?: string | nul
   // 2. Remove do estado em memória
   for (const plat of ["mercadolivre", "shopee"] as MarketplacePlatform[]) {
     MOCK_COMPARATIVE_DATA[plat] = MOCK_COMPARATIVE_DATA[plat].filter(
-      (g) => g.my_listing.id !== myListingId
+      (g) => g.my_listing.id !== myListingId && !myListingId.includes(g.my_listing.external_id)
     );
   }
 
