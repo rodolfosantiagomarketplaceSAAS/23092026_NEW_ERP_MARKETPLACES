@@ -103,8 +103,19 @@ export function MarketSearchSubTab() {
     }
   }, [query, platform, limit, sort, campaignOnly, topRatedOnly, fastShippingOnly, freeShippingOnly, minPrice, maxPrice]);
 
-  // Carrega busca padrão inicial
+  // Carrega busca padrão inicial ou lê query params caso venha da extensão
   useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const urlQ = sp.get("q");
+      const urlP = sp.get("platform");
+      if (urlQ) {
+        setQuery(urlQ);
+      }
+      if (urlP && (urlP === "mercadolivre" || urlP === "shopee" || urlP === "all")) {
+        setPlatform(urlP as any);
+      }
+    }
     handleSearch();
   }, []);
 
@@ -355,6 +366,47 @@ export function MarketSearchSubTab() {
                 {q}
               </button>
             ))}
+          </div>
+
+          {/* Ações de Extensão & Abertura Direta no Marketplace */}
+          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-slate-100">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="text-[11px] font-semibold text-slate-500">Coleta ao Vivo no Navegador:</span>
+              <a
+                href={`https://lista.mercadolivre.com.br/${encodeURIComponent(
+                  query
+                    .trim()
+                    .toLowerCase()
+                    .normalize("NFD")
+                    .replace(/[\u0300-\u036f]/g, "")
+                    .replace(/[^\w\s-]/g, "")
+                    .replace(/\s+/g, "-")
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-950 bg-[#FFE600] hover:bg-[#F0D800] border border-amber-300 rounded-lg shadow-2xs transition"
+                title="Abre a pesquisa no Mercado Livre. A Extensão Chrome injetará o botão flutuante para sincronizar 50+ anúncios ao vivo com 1 clique!"
+              >
+                <span>🟡 Abrir Busca no Mercado Livre</span>
+                <ExternalLink className="w-3.5 h-3.5 text-slate-800" />
+              </a>
+
+              <a
+                href={`https://shopee.com.br/search?keyword=${encodeURIComponent(query.trim())}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-[#EE4D2D] hover:bg-[#D73211] border border-[#EE4D2D] rounded-lg shadow-2xs transition"
+                title="Abre a pesquisa na Shopee. A Extensão Chrome injetará o botão flutuante para sincronizar 50+ anúncios ao vivo com 1 clique!"
+              >
+                <span>🟠 Abrir Busca na Shopee</span>
+                <ExternalLink className="w-3.5 h-3.5 text-white" />
+              </a>
+            </div>
+
+            <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span className="font-medium text-slate-600">Extensão Chrome Integrada (Sem bloqueios de IP)</span>
+            </div>
           </div>
         </form>
       </div>

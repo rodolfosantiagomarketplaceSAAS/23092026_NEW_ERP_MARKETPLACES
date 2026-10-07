@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { getSyncedSearch } from "@/lib/data/marketSearchStore";
 import type {
   MarketSearchItem,
   MarketSearchAnalytics,
@@ -516,11 +517,17 @@ export async function GET(req: NextRequest) {
       .select("id, title, current_price, platform")
       .eq("status", "active");
 
-    // 3. Execução da busca: tenta API Oficial -> tenta Scraper ao vivo -> fallback verificado
+    // 3. Execução da busca: tenta Extensão Chrome -> tenta API Oficial -> tenta Scraper ao vivo -> fallback verificado
     let rawItems: MarketSearchItem[] = [];
 
+    // Prioridade A: Dados sincronizados em tempo real pela Extensão Chrome
+    const syncedFromExtension = getSyncedSearch(query, platformFilter);
+    if (syncedFromExtension && syncedFromExtension.length > 0) {
+      rawItems = [...syncedFromExtension];
+    }
+
     const mlToken = process.env.ML_ACCESS_TOKEN || process.env.MERCADOLIVRE_ACCESS_TOKEN;
-    if (mlToken && (platformFilter === "mercadolivre" || platformFilter === "all")) {
+    if (rawItems.length === 0 && mlToken && (platformFilter === "mercadolivre" || platformFilter === "all")) {
       const officialItems = await fetchViaOfficialMlApi(query, limit, mlToken);
       if (officialItems.length > 0) {
         rawItems = [...officialItems];

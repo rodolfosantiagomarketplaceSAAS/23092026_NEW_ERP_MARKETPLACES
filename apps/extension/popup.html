@@ -206,10 +206,15 @@
 
   <!-- Cartão: Pareamento no Anúncio Atual -->
   <div class="card" id="pairingCard">
-    <div class="card-title">Anúncio Atual (Aba Ativa)</div>
+    <div class="card-title" id="cardSectionTitle">Anúncio Atual (Aba Ativa)</div>
     <div id="pageInfoBox" class="info-box">
       Detectando anúncio na página...
     </div>
+
+    <!-- Botão para Páginas de Pesquisa (Mercado Livre / Shopee) -->
+    <button id="syncSearchBtn" class="btn btn-action" style="display: none; background-color: #4F46E5; margin-bottom: 6px;">
+      🚀 Sincronizar Pesquisa com ERP
+    </button>
 
     <div class="form-group" id="listingSelectContainer" style="display: none;">
       <label for="myListingSelect">Modo de Monitoramento:</label>

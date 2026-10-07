@@ -54,11 +54,13 @@ document.addEventListener("DOMContentLoaded", async () => {
   const saveBtn = document.getElementById("saveBtn");
   const testBtn = document.getElementById("testBtn");
   const captureNowBtn = document.getElementById("captureNowBtn");
+  const syncSearchBtn = document.getElementById("syncSearchBtn");
   const openErpBtn = document.getElementById("openErpBtn");
   const feedbackMsg = document.getElementById("feedbackMsg");
   const statusBadge = document.getElementById("statusBadge");
   const statusText = document.getElementById("statusText");
   const pageInfoBox = document.getElementById("pageInfoBox");
+  const cardSectionTitle = document.getElementById("cardSectionTitle");
   const listingSelectContainer = document.getElementById("listingSelectContainer");
   const myListingSelect = document.getElementById("myListingSelect");
   const listingHint = document.getElementById("listingHint");
@@ -87,13 +89,38 @@ document.addEventListener("DOMContentLoaded", async () => {
     // 3. Se estiver em página suportada, extrai dados da página e busca anúncios próprios
     if (currentDetectedPlatform && activeTab?.id) {
       chrome.tabs.sendMessage(activeTab.id, { action: "GET_PAGE_DATA" }, async (response) => {
-        if (chrome.runtime.lastError || !response || !response.data) {
+        if (chrome.runtime.lastError || !response || (!response.data && !response.isSearch)) {
           pageInfoBox.innerHTML = `
             <strong>Marketplace Detectado:</strong> ${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}<br>
-            <span style="color:#64748B;">Abra a página de um anúncio específico para capturar concorrentes.</span>
+            <span style="color:#64748B;">Abra uma busca ou a página de um anúncio para capturar concorrentes.</span>
           `;
           return;
         }
+
+        // Se estiver em página de pesquisa de produtos (Mercado Livre ou Shopee)
+        if (response.isSearch) {
+          if (cardSectionTitle) cardSectionTitle.innerText = "Pesquisa de Mercado (Aba Ativa)";
+          if (listingSelectContainer) listingSelectContainer.style.display = "none";
+          if (captureNowBtn) captureNowBtn.style.display = "none";
+          if (syncSearchBtn) {
+            syncSearchBtn.style.display = "block";
+            syncSearchBtn.innerText = `🚀 Sincronizar Pesquisa com ERP (${response.itemsCount} anúncios)`;
+          }
+
+          pageInfoBox.innerHTML = `
+            <div class="detected-prod">
+              <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"} — Pesquisa</strong>
+              <span>Termo: <strong style="color:#1e293b;">&quot;${response.query || "Busca"}&quot;</strong></span>
+              <span>Anúncios Detectados: <strong style="color:#4F46E5;">${response.itemsCount} anúncios</strong></span>
+              <span style="color:#64748B; font-size:10px; margin-top:2px;">Clique abaixo para enviar ao ERP e ver gráficos de preços, Buybox e concorrentes.</span>
+            </div>
+          `;
+          return;
+        }
+
+        // Caso seja a página de um produto individual
+        if (cardSectionTitle) cardSectionTitle.innerText = "Anúncio Atual (Aba Ativa)";
+        if (syncSearchBtn) syncSearchBtn.style.display = "none";
 
         currentScrapedData = response.data;
         const formattedPrice = currentScrapedData.current_price
@@ -179,7 +206,64 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // 6. Botão "Capturar / Enviar Concorrente"
+  // 6. Botão "Sincronizar Pesquisa com ERP" (Quando em páginas de busca)
+  if (syncSearchBtn) {
+    syncSearchBtn.addEventListener("click", () => {
+      if (!activeTab || !activeTab.id) return;
+      syncSearchBtn.disabled = true;
+      syncSearchBtn.innerText = "Extraindo e enviando ao ERP...";
+
+      chrome.tabs.sendMessage(activeTab.id, { action: "SYNC_SEARCH_FROM_POPUP" }, async (res) => {
+        if (chrome.runtime.lastError || !res || !res.items) {
+          syncSearchBtn.disabled = false;
+          syncSearchBtn.innerText = "Tentar Novamente";
+          showFeedback("Não foi possível extrair os anúncios da página de busca.", "error");
+          return;
+        }
+
+        const erpUrl = normalizeErpUrl(erpUrlInput.value);
+        const apiToken = apiTokenInput.value.trim();
+
+        try {
+          const payload = {
+            query: res.query,
+            platform: res.platform,
+            items: res.items,
+          };
+
+          const headers = { "Content-Type": "application/json" };
+          if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
+
+          const syncRes = await fetch(`${erpUrl}/api/bi/market-search/bulk-sync`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify(payload),
+          });
+
+          if (syncRes.ok) {
+            showFeedback(`✅ ${res.items.length} anúncios sincronizados com o ERP!`, "success");
+            syncSearchBtn.style.backgroundColor = "#10B981";
+            syncSearchBtn.innerText = "✓ Sincronizado com Sucesso!";
+
+            setTimeout(() => {
+              chrome.tabs.create({
+                url: `${erpUrl}/inteligencia?q=${encodeURIComponent(res.query)}&platform=${res.platform}`,
+              });
+            }, 600);
+          } else {
+            throw new Error(`HTTP ${syncRes.status}`);
+          }
+        } catch (err) {
+          console.error(err);
+          syncSearchBtn.disabled = false;
+          syncSearchBtn.innerText = "Tentar Novamente";
+          showFeedback(`Erro ao enviar ao ERP (${erpUrl}). Verifique se o ERP está online.`, "error");
+        }
+      });
+    });
+  }
+
+  // 6.1 Botão "Capturar / Enviar Concorrente"
   captureNowBtn.addEventListener("click", () => {
     if (!activeTab || !activeTab.id) return;
     const selectedListingId = myListingSelect.value || null;
