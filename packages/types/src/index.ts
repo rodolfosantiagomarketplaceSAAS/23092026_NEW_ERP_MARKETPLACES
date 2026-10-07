@@ -181,3 +181,90 @@ export interface CompetitorSyncResponse {
   matched_to_my_listing: boolean;
   my_listing_id?: string | null;
 }
+
+// ==============================================================================
+// 5. PESQUISA DE MERCADO & BI ANALYTICS (MERCADO LIVRE & SHOPEE)
+// ==============================================================================
+export interface MarketSearchItem {
+  id: string;
+  platform: MarketplacePlatform;
+  external_id: string;
+  title: string;
+  current_price: number;
+  original_price: number | null;
+  discount_pct: number | null;
+  shipping_type: string;
+  is_free_shipping: boolean;
+  is_full_or_flex: boolean;
+  promo_badge: string | null;
+  campaign_type: string | null;
+  listing_type: string;
+  permalink: string;
+  thumbnail_url: string | null;
+  seller_name: string;
+  seller_reputation: string | null;
+  sales_count_approx: number;
+  rating: number;
+  reviews_count: number;
+  is_already_monitored: boolean;
+  matched_my_listing_id: string | null;
+}
+
+export interface MarketSearchPriceDistribution {
+  range: string;
+  count: number;
+  percentage: number;
+}
+
+export interface MarketSearchTopSeller {
+  seller_name: string;
+  listings_count: number;
+  avg_price: number;
+  seller_reputation: string | null;
+}
+
+export interface MarketSearchAnalytics {
+  total_found: number;
+  analyzed_count: number;
+  min_price: number;
+  max_price: number;
+  avg_price: number;
+  median_price: number;
+  fast_shipping_pct: number;
+  free_shipping_pct: number;
+  campaign_pct: number;
+  avg_rating: number;
+  opportunity_score: number;
+  opportunity_label: string;
+  opportunity_insight: string;
+  price_distribution: MarketSearchPriceDistribution[];
+  top_sellers: MarketSearchTopSeller[];
+}
+
+export interface MarketSearchResponse {
+  query: string;
+  platform: MarketplacePlatform | "all";
+  limit: number;
+  analytics: MarketSearchAnalytics;
+  items: MarketSearchItem[];
+}
+
+export const importFromSearchSchema = z.object({
+  platform: z.enum(["mercadolivre", "shopee"]),
+  external_id: z.string().min(1),
+  seller_name: z.string().default("Vendedor Desconhecido"),
+  seller_reputation: z.string().nullable().optional(),
+  title: z.string().min(1),
+  current_price: z.number().positive(),
+  original_price: z.number().positive().nullable().optional(),
+  shipping_type: z.string().default("padrao"),
+  promo_badge: z.string().nullable().optional(),
+  permalink: z.string().min(1),
+  thumbnail_url: z.string().nullable().optional(),
+  sales_count_approx: z.number().int().nonnegative().optional().default(0),
+  rating: z.number().min(0).max(5).optional().default(5.0),
+  my_listing_id: z.string().nullable().optional(),
+});
+
+export type ImportFromSearchInput = z.infer<typeof importFromSearchSchema>;
+
