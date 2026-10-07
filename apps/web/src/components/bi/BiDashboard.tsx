@@ -36,7 +36,9 @@ export function BiDashboard() {
       if (search) params.set("search", search);
       if (statusFilter !== "all") params.set("status", statusFilter);
 
-      const res = await fetch(`/api/bi/comparative?${params.toString()}`);
+      const res = await fetch(`/api/bi/comparative?${params.toString()}`, {
+        cache: "no-store",
+      });
       if (res.ok) {
         const json: BiComparativeResponse = await res.json();
         setData(json);

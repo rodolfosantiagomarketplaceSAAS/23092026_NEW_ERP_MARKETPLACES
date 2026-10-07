@@ -30,11 +30,19 @@ export function createSupabaseServerClient() {
         }
       },
     },
+    global: {
+      fetch: (url: RequestInfo | URL, options: RequestInit = {}) =>
+        fetch(url, {
+          ...options,
+          cache: "no-store",
+        }),
+    },
   });
 }
 
 /**
  * Cria cliente administrativo (Service Role) para validação direta de API Keys da extensão
+ * e consultas completas sem interferência de cache do Next.js
  */
 export function createSupabaseAdminClient() {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "https://sua-instancia.supabase.co";
@@ -44,6 +52,13 @@ export function createSupabaseAdminClient() {
     auth: {
       persistSession: false,
       autoRefreshToken: false,
+    },
+    global: {
+      fetch: (url: RequestInfo | URL, options: RequestInit = {}) =>
+        fetch(url, {
+          ...options,
+          cache: "no-store",
+        }),
     },
   });
 }

@@ -10,6 +10,7 @@ import type {
 } from "@crm/types";
 
 export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export async function GET(req: NextRequest) {
   try {
@@ -254,7 +255,12 @@ export async function GET(req: NextRequest) {
       items: filtered,
     };
 
-    return NextResponse.json(responseData, { status: 200 });
+    return NextResponse.json(responseData, {
+      status: 200,
+      headers: {
+        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
+      },
+    });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro desconhecido";
     console.error("[API BI Comparative] Erro:", message);
