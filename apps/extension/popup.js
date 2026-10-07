@@ -98,6 +98,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         currentScrapedData = response.data;
         const formattedPrice = currentScrapedData.current_price
           ? `R$ ${currentScrapedData.current_price.toFixed(2)}`
+          : "Preço não detectado";
         const formattedSales =
           currentScrapedData.sales_count_approx !== undefined && currentScrapedData.sales_count_approx > 0
             ? `${currentScrapedData.sales_count_approx.toLocaleString("pt-BR")} vendas`
