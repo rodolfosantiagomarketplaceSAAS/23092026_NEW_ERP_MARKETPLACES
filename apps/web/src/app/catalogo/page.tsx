@@ -13,6 +13,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { MarketplacePrice } from "@/components/bi/MarketplacePrice";
 
 export const dynamic = "force-dynamic";
 
@@ -47,6 +48,7 @@ export default async function CatalogoPage() {
             sku: prod?.sku || "SEM-SKU",
             title: m.title,
             price: Number(m.current_price),
+            original_price: (m as any).original_price ? Number((m as any).original_price) : null,
             cost: prod?.cost_price ? Number(prod.cost_price) : 0,
             external_id: m.external_id,
             platform: m.platform,
@@ -61,7 +63,8 @@ export default async function CatalogoPage() {
             id: "ml-001",
             sku: "TECL-MECA-RGB",
             title: "Teclado Mecânico Gamer Led RGB Switch Blue Anti-ghosting Pro",
-            price: 199.9,
+            price: 147.84,
+            original_price: 168.0,
             cost: 120.0,
             external_id: "MLB3492817263",
             platform: "mercadolivre",
@@ -75,6 +78,7 @@ export default async function CatalogoPage() {
             sku: "FONE-BT-ANC",
             title: "Fone de Ouvido Bluetooth 5.3 Microfone Bateria 30h Top",
             price: 139.9,
+            original_price: 159.9,
             cost: 85.0,
             external_id: "MLB2819201948",
             platform: "mercadolivre",
@@ -262,8 +266,14 @@ export default async function CatalogoPage() {
                           <td className="py-2.5 px-3 text-right text-slate-600 font-medium">
                             R$ {item.cost ? item.cost.toFixed(2) : "0.00"}
                           </td>
-                          <td className="py-2.5 px-3 text-right font-bold text-slate-900">
-                            R$ {item.price.toFixed(2)}
+                          <td className="py-2.5 px-3 text-right">
+                            <MarketplacePrice
+                              currentPrice={item.price}
+                              originalPrice={item.original_price}
+                              align="right"
+                              size="sm"
+                              showInstallments={false}
+                            />
                           </td>
                           <td className="py-2.5 px-3 text-right">
                             {marginPct ? (

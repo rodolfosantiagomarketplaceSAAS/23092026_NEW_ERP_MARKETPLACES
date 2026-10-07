@@ -127,6 +127,7 @@ export async function GET(req: NextRequest) {
             my_listing: {
               ...item,
               current_price: myPrice,
+              original_price: (item as any).original_price ? Number((item as any).original_price) : null,
               product_sku: productData?.sku || null,
               product_cost_price: productData?.cost_price ? Number(productData.cost_price) : null,
               sales_count_approx: (item as any).sales_count_approx ?? 0,
@@ -162,6 +163,7 @@ export async function GET(req: NextRequest) {
                 external_id: comp.external_id,
                 title: `[Radar de Mercado] ${comp.title}`,
                 current_price: compPrice,
+                original_price: comp.original_price ? Number(comp.original_price) : null,
                 permalink: comp.permalink,
                 thumbnail_url: comp.thumbnail_url || null,
                 shipping_type: comp.shipping_type || "padrao",

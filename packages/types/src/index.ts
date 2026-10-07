@@ -53,6 +53,7 @@ export interface MyListing {
   external_id: string;
   title: string;
   current_price: number;
+  original_price?: number | null;
   permalink: string;
   thumbnail_url: string | null;
   shipping_type: ShippingBadge | string;

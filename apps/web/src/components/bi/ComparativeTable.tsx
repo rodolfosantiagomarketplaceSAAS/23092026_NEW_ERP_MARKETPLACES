@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import type { ComparativeListingGroup, CompetitorComparisonItem } from "@crm/types";
 import { RepriceModal } from "./RepriceModal";
+import { MarketplacePrice } from "./MarketplacePrice";
 
 function formatDate(dateString?: string | null) {
   if (!dateString) return null;
@@ -281,10 +282,12 @@ export function ComparativeTable({
                       <td className="py-2.5 px-3 text-right">
                         {isRadar ? (
                           <div>
-                            <div className="font-bold text-slate-700 text-sm">
-                              R$ {Number(group.my_listing.current_price).toFixed(2)}
-                            </div>
-                            <div className="text-[10px] text-slate-400">Preço de Referência</div>
+                            <MarketplacePrice
+                              currentPrice={group.my_listing.current_price}
+                              originalPrice={group.my_listing.original_price}
+                              align="right"
+                            />
+                            <div className="text-[10px] text-slate-400 mt-0.5">Preço de Referência</div>
                             <button
                               onClick={() => setSelectedGroupForReprice(group)}
                               className="text-[10px] text-sky-600 hover:text-sky-800 underline font-medium block ml-auto mt-0.5"
@@ -297,11 +300,13 @@ export function ComparativeTable({
                           </div>
                         ) : (
                           <div>
-                            <div className="font-bold text-slate-900 text-sm">
-                              R$ {Number(group.my_listing.current_price).toFixed(2)}
-                            </div>
+                            <MarketplacePrice
+                              currentPrice={group.my_listing.current_price}
+                              originalPrice={group.my_listing.original_price}
+                              align="right"
+                            />
                             {group.my_listing.product_cost_price && (
-                              <div className="text-[10px] text-slate-400">
+                              <div className="text-[10px] text-slate-400 mt-0.5">
                                 Custo: R$ {Number(group.my_listing.product_cost_price).toFixed(2)}
                               </div>
                             )}
@@ -312,15 +317,23 @@ export function ComparativeTable({
                       {/* Menor Concorrente */}
                       <td className="py-2.5 px-3 text-right">
                         {group.lowest_competitor_price !== null ? (
-                          <div className="font-bold text-slate-800 text-sm">
-                            R$ {group.lowest_competitor_price.toFixed(2)}
+                          <div>
+                            <MarketplacePrice
+                              currentPrice={group.lowest_competitor_price}
+                              originalPrice={
+                                group.competitors.find(
+                                  (c) => c.current_price === group.lowest_competitor_price
+                                )?.original_price
+                              }
+                              align="right"
+                            />
+                            <div className="text-[10px] text-slate-500 mt-0.5">
+                              {group.competitors.length} monitorado(s)
+                            </div>
                           </div>
                         ) : (
                           <span className="text-slate-400 italic text-[11px]">Nenhum pareado</span>
                         )}
-                        <div className="text-[10px] text-slate-500">
-                          {group.competitors.length} monitorado(s)
-                        </div>
                       </td>
 
                       {/* Discrepância / Buybox Status */}
@@ -494,13 +507,13 @@ export function ComparativeTable({
                                     </div>
 
                                     {/* Preço do Concorrente */}
-                                    <div className="w-[12%] text-right font-bold text-slate-900">
-                                      R$ {comp.current_price.toFixed(2)}
-                                      {comp.original_price && (
-                                        <div className="text-[10px] text-slate-400 line-through">
-                                          R$ {comp.original_price.toFixed(2)}
-                                        </div>
-                                      )}
+                                    <div className="w-[14%] text-right">
+                                      <MarketplacePrice
+                                        currentPrice={comp.current_price}
+                                        originalPrice={comp.original_price}
+                                        align="right"
+                                        size="sm"
+                                      />
                                     </div>
 
                                     {/* Diferença vs Meu Preço */}
