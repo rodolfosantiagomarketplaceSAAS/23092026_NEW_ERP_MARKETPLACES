@@ -29,7 +29,7 @@ export function Sidebar() {
       label: "Anúncios & Catálogo",
       href: "/catalogo",
       icon: Boxes,
-      badge: "2",
+      badge: null,
     },
     {
       label: "Vendas & Pedidos",
