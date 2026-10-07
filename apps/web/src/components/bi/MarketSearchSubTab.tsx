@@ -23,6 +23,7 @@ import {
   Store,
   Layers,
   Sparkles,
+  Settings,
 } from "lucide-react";
 import type {
   MarketSearchItem,
@@ -206,6 +207,35 @@ export function MarketSearchSubTab() {
           <span>{toastMessage}</span>
         </div>
       )}
+
+      {/* Banner de Status & Conexão de APIs */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-indigo-950 text-white rounded-xl p-3.5 sm:p-4 border border-slate-700/60 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-2.5">
+          <div className="p-2 rounded-lg bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 shrink-0">
+            <Zap className="w-4 h-4 text-amber-400" />
+          </div>
+          <div>
+            <h4 className="text-xs font-bold text-white flex items-center gap-2">
+              Pesquisa de Mercado Multi-Canal (Mercado Livre & Shopee)
+              <span className="text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-semibold">
+                Online
+              </span>
+            </h4>
+            <p className="text-[11px] text-slate-300 mt-0.5">
+              Pesquise produtos para extrair preços reais, campanhas e melhores ofertas com pareamento 1:N no ERP.
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+          <a
+            href="/configuracoes"
+            className="text-[11px] font-semibold text-indigo-200 hover:text-white bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg border border-white/10 transition flex items-center gap-1.5"
+          >
+            <Settings className="w-3.5 h-3.5" />
+            <span>Conectar APIs</span>
+          </a>
+        </div>
+      </div>
 
       {/* Barra de Busca de Alta Performance */}
       <div className="bg-white rounded-xl border border-slate-200/80 shadow-sm p-4 sm:p-5">
