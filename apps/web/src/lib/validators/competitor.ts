@@ -28,6 +28,7 @@ export const competitorSyncSchema = z.object({
     }),
   sales_count_approx: z.number().int().nonnegative().optional().default(0),
   rating: z.number().min(0).max(5).optional().default(5.0),
+  listing_created_at: z.string().nullable().optional(),
   my_listing_id: z
     .string()
     .nullable()

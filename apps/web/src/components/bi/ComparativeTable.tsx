@@ -18,9 +18,30 @@ import {
   Sparkles,
   Trash2,
   Radio,
+  Calendar,
+  ShoppingBag,
 } from "lucide-react";
 import type { ComparativeListingGroup, CompetitorComparisonItem } from "@crm/types";
 import { RepriceModal } from "./RepriceModal";
+
+function formatDate(dateString?: string | null) {
+  if (!dateString) return null;
+  try {
+    const d = new Date(dateString);
+    if (isNaN(d.getTime())) return null;
+    return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+  } catch {
+    return null;
+  }
+}
+
+function formatSales(sales?: number | null) {
+  if (sales === undefined || sales === null || sales < 0) return null;
+  if (sales >= 1000) {
+    return `+${(sales / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil vendas`;
+  }
+  return `${sales.toLocaleString("pt-BR")} venda${sales === 1 ? "" : "s"}`;
+}
 
 interface ComparativeTableProps {
   groups: ComparativeListingGroup[];
@@ -193,16 +214,16 @@ export function ComparativeTable({
 
                       {/* Produto & SKU */}
                       <td className="py-2.5 px-3">
-                        <div className="flex items-start space-x-2.5">
-                          <div className="w-9 h-9 rounded border border-slate-200 bg-slate-50 shrink-0 flex items-center justify-center overflow-hidden">
+                        <div className="flex items-start space-x-3">
+                          <div className="w-14 h-14 rounded-lg border border-slate-200 bg-white shrink-0 flex items-center justify-center overflow-hidden p-0.5 shadow-xs">
                             {group.my_listing.thumbnail_url ? (
                               <img
                                 src={group.my_listing.thumbnail_url}
                                 alt={group.my_listing.title}
-                                className="w-full h-full object-cover"
+                                className="w-full h-full object-contain"
                               />
                             ) : (
-                              <Tag className="w-4 h-4 text-slate-400" />
+                              <Tag className="w-5 h-5 text-slate-400" />
                             )}
                           </div>
                           <div className="flex flex-col">
@@ -212,9 +233,16 @@ export function ComparativeTable({
                                   <Radio className="w-2.5 h-2.5 text-sky-600 animate-pulse" /> Radar Concorrente
                                 </span>
                               )}
-                              <span className="font-semibold text-slate-900 line-clamp-1 leading-snug">
-                                {group.my_listing.title}
-                              </span>
+                              <a
+                                href={group.my_listing.permalink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-semibold text-slate-900 hover:text-sky-600 line-clamp-1 leading-snug transition-colors hover:underline inline-flex items-center gap-1 group/title"
+                                title="Abrir anúncio no marketplace"
+                              >
+                                <span>{group.my_listing.title}</span>
+                                <ExternalLink className="w-3 h-3 text-slate-400 group-hover/title:text-sky-600 shrink-0 opacity-70 group-hover/title:opacity-100 transition-opacity" />
+                              </a>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
                               <span>
@@ -226,6 +254,25 @@ export function ComparativeTable({
                               <span>•</span>
                               <span>ID: <code>{group.my_listing.external_id}</code></span>
                             </div>
+
+                            {(formatDate(group.my_listing.listing_created_at || group.my_listing.created_at) ||
+                              (group.my_listing.sales_count_approx !== undefined && group.my_listing.sales_count_approx > 0)) && (
+                              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                {formatDate(group.my_listing.listing_created_at || group.my_listing.created_at) && (
+                                  <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded text-[10.5px] font-medium" title="Data de criação do anúncio">
+                                    <Calendar className="w-3 h-3 text-slate-400" />
+                                    Criado: <strong>{formatDate(group.my_listing.listing_created_at || group.my_listing.created_at)}</strong>
+                                  </span>
+                                )}
+
+                                {group.my_listing.sales_count_approx !== undefined && group.my_listing.sales_count_approx > 0 && (
+                                  <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-[10.5px] font-semibold" title="Quantidade de vendas estimadas">
+                                    <ShoppingBag className="w-3 h-3 text-emerald-600" />
+                                    {formatSales(group.my_listing.sales_count_approx)}
+                                  </span>
+                                )}
+                              </div>
+                            )}
                           </div>
                         </div>
                       </td>
@@ -396,17 +443,53 @@ export function ComparativeTable({
                                     }`}
                                   >
                                     {/* Info Concorrente */}
-                                    <div className="flex items-center space-x-2 w-[34%]">
-                                      <div className="w-2 h-2 rounded-full bg-slate-300 shrink-0"></div>
+                                    <div className="flex items-center space-x-2.5 w-[38%]">
+                                      <div className="w-10 h-10 rounded border border-slate-200 bg-white shrink-0 flex items-center justify-center overflow-hidden p-0.5 shadow-xs">
+                                        {comp.thumbnail_url ? (
+                                          <img
+                                            src={comp.thumbnail_url}
+                                            alt={comp.title}
+                                            className="w-full h-full object-contain"
+                                          />
+                                        ) : (
+                                          <Tag className="w-3.5 h-3.5 text-slate-400" />
+                                        )}
+                                      </div>
                                       <div className="flex flex-col">
-                                        <span className="font-medium text-slate-800 line-clamp-1">
-                                          {comp.title}
-                                        </span>
-                                        <div className="text-[10px] text-slate-500 flex items-center gap-2">
+                                        <a
+                                          href={comp.permalink}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="font-medium text-slate-800 hover:text-sky-600 line-clamp-1 hover:underline transition-colors inline-flex items-center gap-1 group/comptitle"
+                                          title="Abrir anúncio concorrente no marketplace"
+                                        >
+                                          <span>{comp.title}</span>
+                                          <ExternalLink className="w-2.5 h-2.5 text-slate-400 group-hover/comptitle:text-sky-600 shrink-0 opacity-70 group-hover/comptitle:opacity-100 transition-opacity" />
+                                        </a>
+                                        <div className="text-[10px] text-slate-500 flex items-center gap-2 mt-0.5">
                                           <span>Loja: <strong className="text-slate-700">{comp.seller_name}</strong></span>
                                           <span>•</span>
                                           <span>ID: <code>{comp.external_id}</code></span>
                                         </div>
+
+                                        {(formatDate(comp.listing_created_at || comp.created_at) ||
+                                          (comp.sales_count_approx !== undefined && comp.sales_count_approx > 0)) && (
+                                          <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                            {formatDate(comp.listing_created_at || comp.created_at) && (
+                                              <span className="inline-flex items-center gap-1 text-slate-600 bg-slate-100 px-1.5 py-0.2 rounded text-[10px]" title="Data de criação do anúncio concorrente">
+                                                <Calendar className="w-2.5 h-2.5 text-slate-400" />
+                                                Criado: <strong>{formatDate(comp.listing_created_at || comp.created_at)}</strong>
+                                              </span>
+                                            )}
+
+                                            {comp.sales_count_approx !== undefined && comp.sales_count_approx > 0 && (
+                                              <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 text-[10px] font-semibold" title="Quantidade de vendas do anúncio concorrente">
+                                                <ShoppingBag className="w-2.5 h-2.5 text-emerald-600" />
+                                                {formatSales(comp.sales_count_approx)}
+                                              </span>
+                                            )}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
 

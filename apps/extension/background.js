@@ -3,15 +3,54 @@
  * Gerencia a comunicação segura com o endpoint /api/competitors/sync do Next.js
  */
 
-chrome.runtime.onInstalled.addListener(() => {
-  console.log("[ERP Background Worker] Extensão instalada com sucesso.");
+/**
+ * Normaliza a URL do ERP:
+ * - Garante protocolo (http:// ou https://)
+ * - Remove barras finais
+ * - Converte domínios Vercel para HTTPS obrigatoriamente
+ */
+function normalizeErpUrl(rawUrl) {
+  let url = (rawUrl || "").trim().replace(/\/+$/, "");
+  if (!url) return "http://localhost:3000";
 
-  // Inicializa configurações padrão caso vazias
-  chrome.storage.sync.get(["erpUrl", "apiToken"], (res) => {
-    if (!res.erpUrl) {
-      chrome.storage.sync.set({ erpUrl: "http://localhost:3000" });
-    }
+  // Se o usuário digitou sem protocolo (ex: meu-erp.vercel.app)
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    url = `https://${url}`;
+  }
+
+  // Se for endereço Vercel, força https
+  if (url.includes(".vercel.app") && url.startsWith("http://")) {
+    url = url.replace("http://", "https://");
+  }
+
+  return url;
+}
+
+/**
+ * Recupera configurações mesclando local storage e sync storage
+ */
+async function getStoredConfig() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get(["erpUrl", "apiToken"], (localRes) => {
+      chrome.storage.sync.get(["erpUrl", "apiToken"], (syncRes) => {
+        const erpUrl = localRes?.erpUrl || syncRes?.erpUrl || "";
+        const apiToken = localRes?.apiToken || syncRes?.apiToken || "";
+        resolve({ erpUrl, apiToken });
+      });
+    });
   });
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  console.log("[ERP Background Worker] Extensão inicializada.");
+  // Não sobrescreve configurações se já existirem
+  const current = await getStoredConfig();
+  if (!current.erpUrl) {
+    chrome.storage.local.set({ erpUrl: "http://localhost:3000" });
+    try {
+      chrome.storage.sync.set({ erpUrl: "http://localhost:3000" });
+    } catch {}
+  }
 });
 
 /**
@@ -37,8 +76,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
  * Despacha o POST para a API do ERP
  */
 async function handleSyncCompetitor(payload) {
-  const config = await chrome.storage.sync.get(["erpUrl", "apiToken"]);
-  const erpUrl = (config.erpUrl || "http://localhost:3000").replace(/\/$/, "");
+  const config = await getStoredConfig();
+  const erpUrl = normalizeErpUrl(config.erpUrl);
   const apiToken = config.apiToken?.trim() || "";
 
   const endpoint = `${erpUrl}/api/competitors/sync`;
@@ -47,7 +86,6 @@ async function handleSyncCompetitor(payload) {
     "Content-Type": "application/json",
   };
 
-  // Se o usuário configurou Bearer Token, anexa. Se não, o endpoint usa o usuário dev/padrão
   if (apiToken) {
     headers["Authorization"] = `Bearer ${apiToken}`;
   }
@@ -74,7 +112,7 @@ async function handleSyncCompetitor(payload) {
   } catch (error) {
     console.error("[ERP Background Worker] Erro no fetch de sync:", error);
     if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
-      throw new Error(`Não foi possível conectar ao ERP em ${erpUrl}. Certifique-se de que o sistema está em execução (npm run dev).`);
+      throw new Error(`Não foi possível conectar ao ERP em ${erpUrl}. Verifique se a URL está correta e com HTTPS (caso online na Vercel).`);
     }
     throw error;
   }
@@ -84,7 +122,7 @@ async function handleSyncCompetitor(payload) {
  * Valida a conexão com o ERP
  */
 async function handleTestConnection(erpUrl, apiToken) {
-  const url = (erpUrl || "http://localhost:3000").replace(/\/$/, "");
+  const url = normalizeErpUrl(erpUrl);
   const token = apiToken?.trim() || "";
 
   const headers = {};
@@ -102,16 +140,17 @@ async function handleTestConnection(erpUrl, apiToken) {
       return {
         success: true,
         message: token
-          ? "Conexão com o ERP autenticada com sucesso!"
-          : "Conexão com o ERP estabelecida com sucesso (Modo Local/Dev)!",
+          ? `Conexão com o ERP (${url}) autenticada com sucesso!`
+          : `Conexão com o ERP (${url}) estabelecida com sucesso!`,
       };
     } else {
       const errData = await response.json().catch(() => ({}));
       throw new Error(errData.error || `Erro HTTP ${response.status}: ${response.statusText}`);
     }
   } catch (err) {
+    console.error("[ERP Background Worker] Erro no teste de conexão:", err);
     if (err.message.includes("Failed to fetch") || err.message.includes("NetworkError")) {
-      throw new Error(`Falha de conexão em ${url}. Verifique se o servidor está ativo.`);
+      throw new Error(`Falha de conexão em ${url}. Verifique se a URL está acessível e possui HTTPS válido.`);
     }
     throw new Error(`Falha ao conectar no ERP: ${err.message}`);
   }

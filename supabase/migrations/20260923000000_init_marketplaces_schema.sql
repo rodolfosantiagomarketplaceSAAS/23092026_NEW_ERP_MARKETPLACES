@@ -148,14 +148,17 @@ CREATE INDEX IF NOT EXISTS idx_price_history_competitor_date ON public.price_his
 -- ==============================================================================
 
 -- Trigger para updated_at
+DROP TRIGGER IF EXISTS trg_products_updated_at ON public.products;
 CREATE OR REPLACE TRIGGER trg_products_updated_at
 BEFORE UPDATE ON public.products
 FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 
+DROP TRIGGER IF EXISTS trg_my_listings_updated_at ON public.my_listings;
 CREATE OR REPLACE TRIGGER trg_my_listings_updated_at
 BEFORE UPDATE ON public.my_listings
 FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
 
+DROP TRIGGER IF EXISTS trg_competitor_listings_updated_at ON public.competitor_listings;
 CREATE OR REPLACE TRIGGER trg_competitor_listings_updated_at
 BEFORE UPDATE ON public.competitor_listings
 FOR EACH ROW EXECUTE FUNCTION trigger_set_timestamp();
@@ -172,6 +175,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+DROP TRIGGER IF EXISTS trg_competitor_price_history_log ON public.competitor_listings;
 CREATE OR REPLACE TRIGGER trg_competitor_price_history_log
 AFTER INSERT OR UPDATE ON public.competitor_listings
 FOR EACH ROW EXECUTE FUNCTION trg_record_competitor_price_history();
@@ -218,6 +222,7 @@ ALTER TABLE public.listing_matches ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.price_history ENABLE ROW LEVEL SECURITY;
 
 -- Products RLS
+DROP POLICY IF EXISTS "products_user_all" ON public.products;
 CREATE POLICY "products_user_all" ON public.products
     FOR ALL
     TO authenticated
@@ -225,6 +230,7 @@ CREATE POLICY "products_user_all" ON public.products
     WITH CHECK (auth.uid() = user_id);
 
 -- My Listings RLS
+DROP POLICY IF EXISTS "my_listings_user_all" ON public.my_listings;
 CREATE POLICY "my_listings_user_all" ON public.my_listings
     FOR ALL
     TO authenticated
@@ -232,6 +238,7 @@ CREATE POLICY "my_listings_user_all" ON public.my_listings
     WITH CHECK (auth.uid() = user_id);
 
 -- Competitor Listings RLS
+DROP POLICY IF EXISTS "competitor_listings_user_all" ON public.competitor_listings;
 CREATE POLICY "competitor_listings_user_all" ON public.competitor_listings
     FOR ALL
     TO authenticated
@@ -239,6 +246,7 @@ CREATE POLICY "competitor_listings_user_all" ON public.competitor_listings
     WITH CHECK (auth.uid() = user_id);
 
 -- Listing Matches RLS
+DROP POLICY IF EXISTS "listing_matches_user_all" ON public.listing_matches;
 CREATE POLICY "listing_matches_user_all" ON public.listing_matches
     FOR ALL
     TO authenticated
@@ -246,6 +254,7 @@ CREATE POLICY "listing_matches_user_all" ON public.listing_matches
     WITH CHECK (auth.uid() = user_id);
 
 -- Price History RLS (Baseado no dono do competitor_listing)
+DROP POLICY IF EXISTS "price_history_user_select" ON public.price_history;
 CREATE POLICY "price_history_user_select" ON public.price_history
     FOR SELECT
     TO authenticated
@@ -257,6 +266,7 @@ CREATE POLICY "price_history_user_select" ON public.price_history
         )
     );
 
+DROP POLICY IF EXISTS "price_history_user_insert" ON public.price_history;
 CREATE POLICY "price_history_user_insert" ON public.price_history
     FOR INSERT
     TO authenticated
@@ -358,3 +368,83 @@ BEGIN
 
 END;
 $$ LANGUAGE plpgsql;
+
+-- ==============================================================================
+-- 14. INICIALIZAÇÃO AUTOMÁTICA DE USUÁRIO DEMO E DADOS (AUTO-SEED)
+-- ==============================================================================
+-- Este bloco garante que, ao rodar em uma instância Supabase vazia, o banco crie
+-- um usuário inicial e popule os dados de demonstração automaticamente.
+DO $$
+DECLARE
+    demo_uid UUID := '69ee4850-318b-4d9e-83ab-6743f264b6aa';
+    existing_uid UUID;
+BEGIN
+    -- 1. Verifica se já existe algum usuário no auth.users
+    SELECT id INTO existing_uid FROM auth.users LIMIT 1;
+
+    -- Se não existir nenhum usuário registrado, tenta criar o usuário padrão
+    IF existing_uid IS NULL THEN
+        BEGIN
+            INSERT INTO auth.users (
+                instance_id,
+                id,
+                aud,
+                role,
+                email,
+                encrypted_password,
+                email_confirmed_at,
+                raw_app_meta_data,
+                raw_user_meta_data,
+                created_at,
+                updated_at
+            ) VALUES (
+                '00000000-0000-0000-0000-000000000000',
+                demo_uid,
+                'authenticated',
+                'authenticated',
+                'admin@crmmarketplaces.com',
+                crypt('admin123456', gen_salt('bf')),
+                NOW(),
+                '{"provider":"email","providers":["email"]}'::jsonb,
+                '{"name":"Administrador CRM"}'::jsonb,
+                NOW(),
+                NOW()
+            ) ON CONFLICT (id) DO NOTHING;
+
+            -- Vincula identidade para compatibilidade com o Supabase Auth
+            INSERT INTO auth.identities (
+                id,
+                user_id,
+                identity_data,
+                provider,
+                provider_id,
+                last_sign_in_at,
+                created_at,
+                updated_at
+            ) VALUES (
+                demo_uid,
+                demo_uid,
+                json_build_object('sub', demo_uid, 'email', 'admin@crmmarketplaces.com'),
+                'email',
+                'admin@crmmarketplaces.com',
+                NOW(),
+                NOW(),
+                NOW()
+            ) ON CONFLICT (provider, provider_id) DO NOTHING;
+
+            existing_uid := demo_uid;
+        EXCEPTION WHEN OTHERS THEN
+            existing_uid := NULL;
+        END;
+    END IF;
+
+    -- 2. Executa a carga de dados para o usuário identificado
+    IF existing_uid IS NOT NULL THEN
+        BEGIN
+            PERFORM public.seed_demo_marketplaces_data(existing_uid);
+        EXCEPTION WHEN OTHERS THEN
+            NULL;
+        END;
+    END IF;
+END $$;
+

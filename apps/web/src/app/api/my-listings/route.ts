@@ -3,6 +3,19 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: CORS_HEADERS,
+  });
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -61,7 +74,7 @@ export async function GET(req: NextRequest) {
         },
       ].filter((i) => !platform || i.platform === platform);
 
-      return NextResponse.json({ success: true, items: fallback });
+      return NextResponse.json({ success: true, items: fallback }, { headers: CORS_HEADERS });
     }
 
     const formatted = data.map((item) => {
@@ -76,9 +89,9 @@ export async function GET(req: NextRequest) {
       };
     });
 
-    return NextResponse.json({ success: true, items: formatted });
+    return NextResponse.json({ success: true, items: formatted }, { headers: CORS_HEADERS });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro desconhecido";
-    return NextResponse.json({ error: message }, { status: 500 });
+    return NextResponse.json({ error: message }, { status: 500, headers: CORS_HEADERS });
   }
 }

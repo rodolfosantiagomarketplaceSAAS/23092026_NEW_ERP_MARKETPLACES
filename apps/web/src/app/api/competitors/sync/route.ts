@@ -3,6 +3,19 @@ import { competitorSyncSchema } from "@/lib/validators/competitor";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { addOrUpdateMockCompetitor } from "@/lib/data/comparativeStore";
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+};
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: CORS_HEADERS,
+  });
+}
+
 export async function POST(req: NextRequest) {
   try {
     // 1. Extração do Bearer Token
@@ -16,14 +29,18 @@ export async function POST(req: NextRequest) {
       
       // Validação do JWT com Supabase Auth se não for token dev
       if (token !== "dev-local-token") {
-        const { data: authData, error: authError } = await supabase.auth.getUser(token);
-        if (!authError && authData?.user) {
-          userId = authData.user.id;
+        try {
+          const { data: authData, error: authError } = await supabase.auth.getUser(token);
+          if (!authError && authData?.user) {
+            userId = authData.user.id;
+          }
+        } catch (e) {
+          console.warn("[API Sync] Aviso ao validar token com auth.getUser:", e);
         }
       }
     }
 
-    // Se não autenticado via token real ou em desenvolvimento, fallback para usuário padrão
+    // Se não autenticado via token real ou em desenvolvimento, fallback para usuário padrão do banco
     if (!userId) {
       try {
         const { data: users } = await supabase.auth.admin.listUsers();
@@ -44,7 +61,7 @@ export async function POST(req: NextRequest) {
           error: "Payload de sincronização inválido",
           details: parseResult.error.flatten().fieldErrors,
         },
-        { status: 400 }
+        { status: 400, headers: CORS_HEADERS }
       );
     }
 
@@ -56,34 +73,60 @@ export async function POST(req: NextRequest) {
     let compData: any = null;
     let matched = false;
 
-    // 3. Upsert na tabela competitor_listings do Supabase (se acessível)
+    // 3. Upsert na tabela competitor_listings do Supabase
     try {
-      const { data, error: compError } = await supabase
+      const basePayload: any = {
+        user_id: userId,
+        platform: item.platform,
+        external_id: item.external_id,
+        seller_name: item.seller_name,
+        seller_reputation: item.seller_reputation || "comum",
+        title: item.title,
+        current_price: item.current_price,
+        original_price: item.original_price || null,
+        shipping_type: item.shipping_type,
+        promo_badge: item.promo_badge || null,
+        permalink: item.permalink,
+        thumbnail_url: item.thumbnail_url || null,
+        sales_count_approx: item.sales_count_approx,
+        rating: item.rating,
+        last_scraped_at: new Date().toISOString(),
+      };
+
+      if (item.listing_created_at) {
+        basePayload.listing_created_at = item.listing_created_at;
+      }
+
+      let { data, error: compError } = await supabase
         .from("competitor_listings")
-        .upsert(
-          {
-            user_id: userId,
-            platform: item.platform,
-            external_id: item.external_id,
-            seller_name: item.seller_name,
-            seller_reputation: item.seller_reputation || "comum",
-            title: item.title,
-            current_price: item.current_price,
-            original_price: item.original_price || null,
-            shipping_type: item.shipping_type,
-            promo_badge: item.promo_badge || null,
-            permalink: item.permalink,
-            thumbnail_url: item.thumbnail_url || null,
-            sales_count_approx: item.sales_count_approx,
-            rating: item.rating,
-            last_scraped_at: new Date().toISOString(),
-          },
-          { onConflict: "user_id,platform,external_id" }
-        )
+        .upsert(basePayload, { onConflict: "user_id,platform,external_id" })
         .select()
         .single();
 
-      if (!compError && data) {
+      // Se a coluna listing_created_at ainda não existir no Postgres do Supabase, tenta novamente sem ela
+      if (compError && (compError.message?.includes("listing_created_at") || compError.code === "42703")) {
+        delete basePayload.listing_created_at;
+        const retryResult = await supabase
+          .from("competitor_listings")
+          .upsert(basePayload, { onConflict: "user_id,platform,external_id" })
+          .select()
+          .single();
+        data = retryResult.data;
+        compError = retryResult.error;
+      }
+
+      if (compError) {
+        console.error("[API Sync] Erro ao gravar no Supabase:", compError);
+        return NextResponse.json(
+          {
+            error: `Falha no Supabase: ${compError.message}`,
+            details: compError.hint || compError.details || compError.code,
+          },
+          { status: 500, headers: CORS_HEADERS }
+        );
+      }
+
+      if (data) {
         compData = data;
 
         // Histórico de preços
@@ -117,8 +160,15 @@ export async function POST(req: NextRequest) {
           }
         }
       }
-    } catch (dbErr) {
-      console.warn("[API Sync] Aviso ao persistir no Supabase (utilizando cache em memória):", dbErr);
+    } catch (dbErr: any) {
+      console.error("[API Sync] Exceção ao gravar no Supabase:", dbErr);
+      return NextResponse.json(
+        {
+          error: "Erro ao comunicar com o banco Supabase",
+          details: dbErr?.message || "Verifique se as variáveis de ambiente do Supabase estão configuradas na Vercel.",
+        },
+        { status: 500, headers: CORS_HEADERS }
+      );
     }
 
     // 4. Resposta de sucesso consistente
@@ -136,14 +186,14 @@ export async function POST(req: NextRequest) {
         matched_to_my_listing: matched || !!item.my_listing_id,
         my_listing_id: item.my_listing_id || null,
       },
-      { status: 200 }
+      { status: 200, headers: CORS_HEADERS }
     );
   } catch (err: unknown) {
     const errorMsg = err instanceof Error ? err.message : "Erro desconhecido";
     console.error("[API Sync] Erro inesperado:", errorMsg);
     return NextResponse.json(
       { error: "Erro interno no servidor ao sincronizar concorrente", details: errorMsg },
-      { status: 500 }
+      { status: 500, headers: CORS_HEADERS }
     );
   }
 }

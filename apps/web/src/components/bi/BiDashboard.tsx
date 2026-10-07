@@ -10,6 +10,7 @@ import {
   AlertCircle,
   Sliders,
   Sparkles,
+  Radio,
 } from "lucide-react";
 import type {
   BiComparativeResponse,
@@ -25,6 +26,27 @@ export function BiDashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+
+  // Carrega dados da API comparativa
+  const fetchData = useCallback(async () => {
+    setLoading(true);
+    try {
+      const params = new URLSearchParams();
+      params.set("platform", activePlatform);
+      if (search) params.set("search", search);
+      if (statusFilter !== "all") params.set("status", statusFilter);
+
+      const res = await fetch(`/api/bi/comparative?${params.toString()}`);
+      if (res.ok) {
+        const json: BiComparativeResponse = await res.json();
+        setData(json);
+      }
+    } catch (e) {
+      console.error("Falha ao carregar dados de BI:", e);
+    } finally {
+      setLoading(false);
+    }
+  }, [activePlatform, search, statusFilter]);
 
   // Inscrição Realtime no canal Postgres via Hook
   const { highlightedIds, triggerHighlight, lastEventTime } = useRealtimeCompetitors({
@@ -70,28 +92,11 @@ export function BiDashboard() {
         return { ...prev, items: updatedItems };
       });
     },
+    onCompetitorChange: () => {
+      // Recarrega automaticamente quando a extensão ou webhook adiciona novo concorrente/radar
+      fetchData();
+    },
   });
-
-  // Carrega dados da API comparativa
-  const fetchData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const params = new URLSearchParams();
-      params.set("platform", activePlatform);
-      if (search) params.set("search", search);
-      if (statusFilter !== "all") params.set("status", statusFilter);
-
-      const res = await fetch(`/api/bi/comparative?${params.toString()}`);
-      if (res.ok) {
-        const json: BiComparativeResponse = await res.json();
-        setData(json);
-      }
-    } catch (e) {
-      console.error("Falha ao carregar dados de BI:", e);
-    } finally {
-      setLoading(false);
-    }
-  }, [activePlatform, search, statusFilter]);
 
   useEffect(() => {
     fetchData();
@@ -327,7 +332,7 @@ export function BiDashboard() {
       </div>
 
       {/* Cards de Métricas e KPIs de Competitividade Estilo Tiny ERP */}
-      <div className="grid grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <div className="bg-white border border-[#E2E8F0] p-3 rounded shadow-xs">
           <div className="text-[11px] font-medium text-slate-500">Catálogo Monitorado</div>
           <div className="text-xl font-bold text-slate-900 mt-1">{summary.total_listings}</div>
@@ -365,6 +370,14 @@ export function BiDashboard() {
           <div className="text-xl font-bold text-slate-700 mt-1">{summary.unmatched_count}</div>
           <div className="text-[10px] text-slate-400 mt-0.5">Parear via extensão ou ID</div>
         </div>
+
+        <div className="bg-white border border-sky-200 bg-sky-50/30 p-3 rounded shadow-xs">
+          <div className="text-[11px] font-semibold text-sky-700 flex items-center gap-1">
+            <Radio className="w-3.5 h-3.5 text-sky-600" /> Radar de Mercado
+          </div>
+          <div className="text-xl font-bold text-sky-800 mt-1">{summary.radar_count || 0}</div>
+          <div className="text-[10px] text-sky-600 mt-0.5">Espionando via Extensão</div>
+        </div>
       </div>
 
       {/* Barra de Filtros e Busca Rápida */}
@@ -389,11 +402,12 @@ export function BiDashboard() {
             onChange={(e) => setStatusFilter(e.target.value)}
             className="border border-[#CBD5E1] rounded py-1 px-2 text-xs bg-white text-slate-800 outline-none focus:border-sky-600"
           >
-            <option value="all">Todos os Status</option>
-            <option value="LOSING">Perdendo Buybox (Concorrente mais barato)</option>
-            <option value="WINNING">Ganhando Buybox (Mais barato)</option>
-            <option value="TIED">Empatado no menor preço</option>
-            <option value="UNMATCHED">Sem Concorrentes Vinculados</option>
+            <option value="all">Todos os Anúncios ({summary.total_listings})</option>
+            <option value="RADAR">📡 Radar de Mercado ({summary.radar_count || 0})</option>
+            <option value="LOSING">Perdendo Buybox ({summary.losing_count})</option>
+            <option value="WINNING">Ganhando Buybox ({summary.winning_count})</option>
+            <option value="TIED">Empatado no menor preço ({summary.tied_count})</option>
+            <option value="UNMATCHED">Sem Concorrentes ({summary.unmatched_count})</option>
           </select>
 
           <button

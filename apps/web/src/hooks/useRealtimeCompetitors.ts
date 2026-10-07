@@ -11,9 +11,13 @@ interface UseRealtimeCompetitorsProps {
     externalId: string;
     oldPrice?: number;
   }) => void;
+  onCompetitorChange?: () => void;
 }
 
-export function useRealtimeCompetitors({ onPriceUpdate }: UseRealtimeCompetitorsProps = {}) {
+export function useRealtimeCompetitors({
+  onPriceUpdate,
+  onCompetitorChange,
+}: UseRealtimeCompetitorsProps = {}) {
   const [lastEventTime, setLastEventTime] = useState<string | null>(null);
   const [highlightedIds, setHighlightedIds] = useState<Record<string, boolean>>({});
   const timeoutRefs = useRef<Record<string, NodeJS.Timeout>>({});
@@ -55,6 +59,14 @@ export function useRealtimeCompetitors({ onPriceUpdate }: UseRealtimeCompetitors
           const newRecord = payload.new as CompetitorListing;
           const oldRecord = payload.old as Partial<CompetitorListing>;
 
+          const eventType = payload.eventType; // 'INSERT', 'UPDATE', 'DELETE'
+
+          if (eventType === "INSERT" || eventType === "DELETE") {
+            if (onCompetitorChange) {
+              onCompetitorChange();
+            }
+          }
+
           if (newRecord && newRecord.id) {
             triggerHighlight(newRecord.id);
             setLastEventTime(new Date().toLocaleTimeString("pt-BR"));
@@ -81,7 +93,7 @@ export function useRealtimeCompetitors({ onPriceUpdate }: UseRealtimeCompetitors
       supabase.removeChannel(channel);
       Object.values(timeoutRefs.current).forEach((t) => clearTimeout(t));
     };
-  }, [triggerHighlight, onPriceUpdate]);
+  }, [triggerHighlight, onPriceUpdate, onCompetitorChange]);
 
   return {
     highlightedIds,

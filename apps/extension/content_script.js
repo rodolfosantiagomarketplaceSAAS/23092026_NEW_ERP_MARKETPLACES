@@ -116,6 +116,165 @@
   }
 
   /**
+   * Helper: Extrai quantidade estimada de vendas do Mercado Livre
+   */
+  function extractMlSalesCount() {
+    try {
+      // 1. Subtítulo tradicional (.ui-pdp-subtitle) ou cabeçalho (.ui-pdp-header__subtitle)
+      const subtitleEl =
+        document.querySelector(".ui-pdp-subtitle") ||
+        document.querySelector(".ui-pdp-header__subtitle") ||
+        document.querySelector('[class*="ui-pdp-subtitle"]');
+
+      if (subtitleEl && subtitleEl.innerText) {
+        const text = subtitleEl.innerText.trim();
+        const match = text.match(/(\+?\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
+        if (match) {
+          let num = parseFloat(match[1].replace("+", "").replace(/\./g, "").replace(",", "."));
+          if (match[2] && (match[2].toLowerCase().startsWith("mil") || match[2].toLowerCase() === "k")) {
+            num = num * 1000;
+          }
+          if (!isNaN(num) && num >= 0) return Math.round(num);
+        }
+      }
+
+      // 2. Procura em elementos no cabeçalho ou corpo com 'vendido(s)'
+      const spans = document.querySelectorAll("span, p, div");
+      for (const el of spans) {
+        if (el.children.length === 0 && /vendid/i.test(el.innerText || "")) {
+          const text = el.innerText.trim();
+          const match = text.match(/(\+?\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
+          if (match) {
+            let num = parseFloat(match[1].replace("+", "").replace(/\./g, "").replace(",", "."));
+            if (match[2] && (match[2].toLowerCase().startsWith("mil") || match[2].toLowerCase() === "k")) {
+              num = num * 1000;
+            }
+            if (!isNaN(num) && num >= 0) return Math.round(num);
+          }
+        }
+      }
+
+      // 3. Busca em tags de script (ex: sold_quantity)
+      const scripts = document.querySelectorAll("script");
+      for (const script of scripts) {
+        const content = script.textContent;
+        if (content && content.includes('"sold_quantity"')) {
+          const match = content.match(/"sold_quantity"\s*:\s*(\d+)/);
+          if (match) {
+            const count = parseInt(match[1], 10);
+            if (!isNaN(count)) return count;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[ERP Extractor] Erro ao extrair vendas ML:", e);
+    }
+    return 0;
+  }
+
+  /**
+   * Helper: Extrai data de criação do anúncio do Mercado Livre (startTime / date_created)
+   */
+  function extractMlCreationDate() {
+    try {
+      const scripts = document.querySelectorAll("script");
+      for (const script of scripts) {
+        const content = script.textContent;
+        if (!content) continue;
+
+        const match =
+          content.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
+          content.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
+          content.match(/"date_created"\s*:\s*"([^"]+)"/i);
+
+        if (match && match[1]) {
+          const d = new Date(match[1]);
+          if (!isNaN(d.getTime())) {
+            return d.toISOString();
+          }
+        }
+      }
+
+      // Fallback em todo o HTML
+      const html = document.documentElement.innerHTML;
+      const htmlMatch =
+        html.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
+        html.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
+        html.match(/"date_created"\s*:\s*"([^"]+)"/i);
+
+      if (htmlMatch && htmlMatch[1]) {
+        const d = new Date(htmlMatch[1]);
+        if (!isNaN(d.getTime())) {
+          return d.toISOString();
+        }
+      }
+    } catch (e) {
+      console.warn("[ERP Extractor] Erro ao extrair data de criação ML:", e);
+    }
+    return null;
+  }
+
+  /**
+   * Helper: Extrai quantidade estimada de vendas da Shopee
+   */
+  function extractShopeeSalesCount() {
+    try {
+      const elements = document.querySelectorAll("div, span");
+      for (const el of elements) {
+        if (el.children.length === 0 && /vendid/i.test(el.innerText || "")) {
+          const match = el.innerText.match(/(\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
+          if (match) {
+            let num = parseFloat(match[1].replace(/\./g, "").replace(",", "."));
+            if (match[2] && (match[2].toLowerCase().startsWith("mil") || match[2].toLowerCase() === "k")) {
+              num = num * 1000;
+            }
+            if (!isNaN(num) && num >= 0) return Math.round(num);
+          }
+        }
+      }
+
+      const scripts = document.querySelectorAll("script");
+      for (const script of scripts) {
+        const content = script.textContent;
+        if (content && content.includes("historical_sold")) {
+          const match = content.match(/"historical_sold"\s*:\s*(\d+)/);
+          if (match) {
+            const count = parseInt(match[1], 10);
+            if (!isNaN(count)) return count;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[ERP Extractor] Erro ao extrair vendas Shopee:", e);
+    }
+    return 0;
+  }
+
+  /**
+   * Helper: Extrai data de criação da Shopee (ctime / create_time)
+   */
+  function extractShopeeCreationDate() {
+    try {
+      const scripts = document.querySelectorAll("script");
+      for (const script of scripts) {
+        const content = script.textContent;
+        if (content && (content.includes('"ctime"') || content.includes('"create_time"'))) {
+          const match = content.match(/"ctime"\s*:\s*(\d+)/) || content.match(/"create_time"\s*:\s*(\d+)/);
+          if (match) {
+            let ts = parseInt(match[1], 10);
+            if (ts < 1e11) ts = ts * 1000;
+            const d = new Date(ts);
+            if (!isNaN(d.getTime())) return d.toISOString();
+          }
+        }
+      }
+    } catch (e) {
+      console.warn("[ERP Extractor] Erro ao extrair data criação Shopee:", e);
+    }
+    return null;
+  }
+
+  /**
    * Extração Específica: MERCADO LIVRE (Multicamada)
    */
   function extractMercadoLivre() {
@@ -331,6 +490,10 @@
     let permalink = canonical.split("?")[0];
     permalink = normalizeUrl(permalink) || window.location.href.split("?")[0];
 
+    // 10. Vendas e Data de Criação
+    const salesCount = extractMlSalesCount();
+    const creationDate = extractMlCreationDate();
+
     return {
       platform: "mercadolivre",
       external_id: externalId,
@@ -343,7 +506,8 @@
       promo_badge: promoBadge,
       permalink,
       thumbnail_url: thumbnailUrl,
-      sales_count_approx: 100,
+      sales_count_approx: salesCount,
+      listing_created_at: creationDate,
       rating: 4.8,
     };
   }
@@ -442,6 +606,10 @@
       document.querySelector('div[class*="product-briefing"] img');
     const thumbnailUrl = normalizeUrl(imgEl?.src) || jsonLd?.image || null;
 
+    // 9. Vendas e Data de Criação
+    const salesCount = extractShopeeSalesCount();
+    const creationDate = extractShopeeCreationDate();
+
     return {
       platform: "shopee",
       external_id: externalId,
@@ -454,7 +622,8 @@
       promo_badge: promoBadge,
       permalink: normalizeUrl(window.location.href.split("?")[0]),
       thumbnail_url: thumbnailUrl,
-      sales_count_approx: 50,
+      sales_count_approx: salesCount,
+      listing_created_at: creationDate,
       rating: 4.7,
     };
   }
@@ -531,15 +700,20 @@
         "Não foi possível identificar o preço nesta página. Certifique-se de estar em um anúncio de produto.",
         "error"
       );
-      return;
+      return { success: false, error: "Preço não detectado na página" };
     }
 
     // Se não foi passado diretamente, verifica no storage se há anúncio selecionado
-    if (!myListingId && chrome?.storage?.sync) {
+    if (!myListingId && (chrome?.storage?.local || chrome?.storage?.sync)) {
       try {
-        const stored = await chrome.storage.sync.get(["selectedMyListingId"]);
-        if (stored?.selectedMyListingId) {
-          myListingId = stored.selectedMyListingId;
+        const localStored = await chrome.storage.local?.get(["selectedMyListingId"]);
+        if (localStored?.selectedMyListingId) {
+          myListingId = localStored.selectedMyListingId;
+        } else {
+          const syncStored = await chrome.storage.sync?.get(["selectedMyListingId"]);
+          if (syncStored?.selectedMyListingId) {
+            myListingId = syncStored.selectedMyListingId;
+          }
         }
       } catch {
         // Ignora
@@ -552,30 +726,36 @@
 
     showToast(`Coletando anúncio ${data.external_id} (R$ ${data.current_price.toFixed(2)})... Enviando ao CRM...`, "info");
 
-    chrome.runtime.sendMessage(
-      {
-        action: "SYNC_COMPETITOR",
-        payload: data,
-      },
-      (response) => {
-        if (chrome.runtime.lastError) {
-          showToast(`Erro de comunicação: ${chrome.runtime.lastError.message}`, "error");
-          return;
-        }
+    return new Promise((resolve) => {
+      chrome.runtime.sendMessage(
+        {
+          action: "SYNC_COMPETITOR",
+          payload: data,
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            const errMsg = chrome.runtime.lastError.message;
+            showToast(`Erro de comunicação: ${errMsg}`, "error");
+            return resolve({ success: false, error: errMsg });
+          }
 
-        if (response && response.success) {
-          showToast(
-            `Anúncio ${data.external_id} sincronizado com sucesso no ERP! Preço: R$ ${data.current_price.toFixed(2)}`,
-            "success"
-          );
-        } else {
-          showToast(
-            `Falha ao sincronizar: ${response?.error || "Verifique a URL do ERP no popup da extensão."}`,
-            "error"
-          );
+          if (response && response.success) {
+            showToast(
+              `Anúncio ${data.external_id} sincronizado com sucesso no ERP! Preço: R$ ${data.current_price.toFixed(2)}`,
+              "success"
+            );
+            resolve({ success: true, data: response.data, item: data });
+          } else {
+            const errMsg = response?.error || "Verifique a URL do ERP no popup da extensão.";
+            showToast(
+              `Falha ao sincronizar: ${errMsg}`,
+              "error"
+            );
+            resolve({ success: false, error: errMsg });
+          }
         }
-      }
-    );
+      );
+    });
   }
 
   /**
@@ -626,8 +806,14 @@
     };
 
     btn.onclick = () => {
-      chrome.storage.sync.get(["selectedMyListingId"], (res) => {
-        triggerCapture(res?.selectedMyListingId || null);
+      chrome.storage.local?.get(["selectedMyListingId"], (localRes) => {
+        if (localRes?.selectedMyListingId) {
+          triggerCapture(localRes.selectedMyListingId);
+        } else {
+          chrome.storage.sync?.get(["selectedMyListingId"], (syncRes) => {
+            triggerCapture(syncRes?.selectedMyListingId || null);
+          });
+        }
       });
     };
 
@@ -643,8 +829,13 @@
     }
 
     if (request.action === "TRIGGER_CAPTURE_FROM_POPUP") {
-      triggerCapture(request.my_listing_id);
-      sendResponse({ success: true });
+      triggerCapture(request.my_listing_id)
+        .then((result) => {
+          sendResponse(result || { success: true });
+        })
+        .catch((err) => {
+          sendResponse({ success: false, error: err.message });
+        });
       return true;
     }
   });

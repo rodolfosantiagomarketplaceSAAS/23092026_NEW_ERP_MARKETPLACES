@@ -60,6 +60,8 @@ export interface MyListing {
   status: ListingStatus;
   created_at: string;
   updated_at: string;
+  sales_count_approx?: number;
+  listing_created_at?: string | null;
 }
 
 export interface CompetitorListing {
@@ -81,6 +83,7 @@ export interface CompetitorListing {
   last_scraped_at: string;
   created_at: string;
   updated_at: string;
+  listing_created_at?: string | null;
 }
 
 export interface ListingMatch {
@@ -117,6 +120,9 @@ export interface CompetitorComparisonItem {
   price_difference_brl: number; // my_price - competitor_price
   price_difference_pct: number; // ((my_price - competitor_price) / competitor_price) * 100
   last_scraped_at: string;
+  sales_count_approx?: number;
+  listing_created_at?: string | null;
+  created_at?: string;
 }
 
 export interface ComparativeListingGroup {
@@ -139,6 +145,7 @@ export interface BiComparativeResponse {
     tied_count: number;
     losing_count: number;
     unmatched_count: number;
+    radar_count?: number;
   };
   items: ComparativeListingGroup[];
 }
@@ -160,6 +167,7 @@ export const competitorSyncSchema = z.object({
   thumbnail_url: z.string().nullable().optional(),
   sales_count_approx: z.number().int().nonnegative().optional().default(0),
   rating: z.number().min(0).max(5).optional().default(5.0),
+  listing_created_at: z.string().nullable().optional(),
   my_listing_id: z.string().nullable().optional(),
 });
 

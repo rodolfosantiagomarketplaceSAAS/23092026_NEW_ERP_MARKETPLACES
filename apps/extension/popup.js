@@ -3,31 +3,70 @@
  * Gerencia credenciais, teste de conectividade e pareamento assistido com anúncio próprio
  */
 
+/**
+ * Normaliza e sanitiza a URL do ERP
+ */
+function normalizeErpUrl(rawUrl) {
+  let url = (rawUrl || "").trim().replace(/\/+$/, "");
+  if (!url) return "http://localhost:3000";
+
+  // Se o usuário digitou sem protocolo (ex: crm-marketplaces.vercel.app)
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    url = `https://${url}`;
+  }
+
+  // Se for endereço da Vercel, força HTTPS
+  if (url.includes(".vercel.app") && url.startsWith("http://")) {
+    url = url.replace("http://", "https://");
+  }
+
+  return url;
+}
+
+/**
+ * Helper de armazenamento confiável (combina local com sync)
+ */
+const extensionStorage = {
+  get: (keys, callback) => {
+    chrome.storage.local.get(keys, (localData) => {
+      chrome.storage.sync.get(keys, (syncData) => {
+        const merged = { ...(syncData || {}), ...(localData || {}) };
+        callback(merged);
+      });
+    });
+  },
+  set: (data, callback) => {
+    chrome.storage.local.set(data, () => {
+      try {
+        chrome.storage.sync.set(data, () => {
+          if (callback) callback();
+        });
+      } catch {
+        if (callback) callback();
+      }
+    });
+  },
+};
+
 document.addEventListener("DOMContentLoaded", async () => {
   const erpUrlInput = document.getElementById("erpUrl");
   const apiTokenInput = document.getElementById("apiToken");
   const saveBtn = document.getElementById("saveBtn");
   const testBtn = document.getElementById("testBtn");
   const captureNowBtn = document.getElementById("captureNowBtn");
+  const openErpBtn = document.getElementById("openErpBtn");
   const feedbackMsg = document.getElementById("feedbackMsg");
   const statusBadge = document.getElementById("statusBadge");
   const statusText = document.getElementById("statusText");
   const pageInfoBox = document.getElementById("pageInfoBox");
   const listingSelectContainer = document.getElementById("listingSelectContainer");
   const myListingSelect = document.getElementById("myListingSelect");
+  const listingHint = document.getElementById("listingHint");
 
   let currentDetectedPlatform = null;
   let currentScrapedData = null;
 
-  // 1. Carrega configurações salvas
-  chrome.storage.sync.get(["erpUrl", "apiToken", "selectedMyListingId"], (res) => {
-    erpUrlInput.value = res.erpUrl || "http://localhost:3000";
-    apiTokenInput.value = res.apiToken || "";
-
-    checkConnectionStatus(erpUrlInput.value, res.apiToken || "");
-  });
-
-  // 2. Detecta aba ativa
+  // 1. Detecta aba ativa primeiro
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (activeTab && activeTab.url) {
     if (activeTab.url.includes("mercadolivre.com.br")) {
@@ -37,52 +76,70 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // 3. Se estiver em página suportada, solicita dados extraídos do content script
-  if (currentDetectedPlatform && activeTab?.id) {
-    chrome.tabs.sendMessage(activeTab.id, { action: "GET_PAGE_DATA" }, async (response) => {
-      if (chrome.runtime.lastError || !response || !response.data) {
+  // 2. Carrega configurações salvas (Local + Sync)
+  extensionStorage.get(["erpUrl", "apiToken", "selectedMyListingId"], (res) => {
+    const savedUrl = normalizeErpUrl(res.erpUrl);
+    erpUrlInput.value = savedUrl;
+    apiTokenInput.value = res.apiToken || "";
+
+    checkConnectionStatus(savedUrl, res.apiToken || "");
+
+    // 3. Se estiver em página suportada, extrai dados da página e busca anúncios próprios
+    if (currentDetectedPlatform && activeTab?.id) {
+      chrome.tabs.sendMessage(activeTab.id, { action: "GET_PAGE_DATA" }, async (response) => {
+        if (chrome.runtime.lastError || !response || !response.data) {
+          pageInfoBox.innerHTML = `
+            <strong>Marketplace Detectado:</strong> ${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}<br>
+            <span style="color:#64748B;">Abra a página de um anúncio específico para capturar concorrentes.</span>
+          `;
+          return;
+        }
+
+        currentScrapedData = response.data;
+        const formattedPrice = currentScrapedData.current_price
+          ? `R$ ${currentScrapedData.current_price.toFixed(2)}`
+        const formattedSales =
+          currentScrapedData.sales_count_approx !== undefined && currentScrapedData.sales_count_approx > 0
+            ? `${currentScrapedData.sales_count_approx.toLocaleString("pt-BR")} vendas`
+            : "0 vendas";
+        const formattedDate = currentScrapedData.listing_created_at
+          ? new Date(currentScrapedData.listing_created_at).toLocaleDateString("pt-BR")
+          : "Não detectada";
+
         pageInfoBox.innerHTML = `
-          <strong>Marketplace Detectado:</strong> ${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}<br>
-          <span style="color:#64748B;">Abra a página de um anúncio específico para capturar concorrentes.</span>
+          <div class="detected-prod">
+            <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}</strong>
+            <span>Título: <em style="color:#1e293b;">${(currentScrapedData.title || "").slice(0, 45)}...</em></span>
+            <span>ID: <code>${currentScrapedData.external_id}</code></span>
+            <span>Preço: <strong style="color:#0f766e;">${formattedPrice}</strong></span>
+            <span>Vendedor: <strong>${currentScrapedData.seller_name || "Desconhecido"}</strong></span>
+            <span>Vendas: <strong style="color:#059669;">${formattedSales}</strong></span>
+            <span>Criado em: <strong style="color:#475569;">${formattedDate}</strong></span>
+          </div>
         `;
-        return;
-      }
 
-      currentScrapedData = response.data;
-      const formattedPrice = currentScrapedData.current_price
-        ? `R$ ${currentScrapedData.current_price.toFixed(2)}`
-        : "Preço não detectado";
-
+        // Carrega anúncios próprios do ERP usando as credenciais já carregadas
+        await loadMyListings(savedUrl, res.apiToken || "", currentDetectedPlatform, res.selectedMyListingId);
+        captureNowBtn.style.display = "block";
+      });
+    } else {
       pageInfoBox.innerHTML = `
-        <div class="detected-prod">
-          <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}</strong>
-          <span>Título: <em style="color:#1e293b;">${(currentScrapedData.title || "").slice(0, 45)}...</em></span>
-          <span>ID: <code>${currentScrapedData.external_id}</code></span>
-          <span>Preço: <strong style="color:#0f766e;">${formattedPrice}</strong></span>
-          <span>Vendedor: <strong>${currentScrapedData.seller_name || "Desconhecido"}</strong></span>
-        </div>
+        <span style="color:#64748B;">Abra um anúncio no <strong>Mercado Livre</strong> ou <strong>Shopee</strong> para capturar concorrentes.</span>
       `;
-
-      // Carrega anúncios próprios para preencher o select
-      const token = apiTokenInput.value;
-      const url = erpUrlInput.value || "http://localhost:3000";
-      await loadMyListings(url, token, currentDetectedPlatform);
-
-      captureNowBtn.style.display = "block";
-    });
-  } else {
-    pageInfoBox.innerHTML = `
-      <span style="color:#64748B;">Abra um anúncio no <strong>Mercado Livre</strong> ou <strong>Shopee</strong> para capturar concorrentes.</span>
-    `;
-  }
+    }
+  });
 
   // 4. Salvar configurações
   saveBtn.addEventListener("click", () => {
-    const erpUrl = erpUrlInput.value.trim().replace(/\/$/, "") || "http://localhost:3000";
+    const rawUrl = erpUrlInput.value;
+    const erpUrl = normalizeErpUrl(rawUrl);
     const apiToken = apiTokenInput.value.trim();
 
-    chrome.storage.sync.set({ erpUrl, apiToken }, () => {
-      showFeedback("Configurações salvas com sucesso!", "success");
+    // Atualiza campo visualmente com a URL normalizada
+    erpUrlInput.value = erpUrl;
+
+    extensionStorage.set({ erpUrl, apiToken }, () => {
+      showFeedback(`Configurações salvas: ${erpUrl}`, "success");
       checkConnectionStatus(erpUrl, apiToken);
       if (currentDetectedPlatform) {
         loadMyListings(erpUrl, apiToken, currentDetectedPlatform);
@@ -92,9 +149,10 @@ document.addEventListener("DOMContentLoaded", async () => {
 
   // 5. Testar Conexão
   testBtn.addEventListener("click", () => {
-    const erpUrl = erpUrlInput.value.trim().replace(/\/$/, "") || "http://localhost:3000";
+    const erpUrl = normalizeErpUrl(erpUrlInput.value);
     const apiToken = apiTokenInput.value.trim();
 
+    erpUrlInput.value = erpUrl;
     testBtn.disabled = true;
     testBtn.innerText = "Testando...";
 
@@ -111,8 +169,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     });
   });
-
-  const listingHint = document.getElementById("listingHint");
 
   function updateButtonLabel() {
     if (myListingSelect.value) {
@@ -143,20 +199,28 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (res && res.success) {
           showFeedback(
             selectedListingId
-              ? "Concorrente vinculado ao seu anúncio com sucesso!"
-              : "Concorrente enviado ao Radar de Mercado do ERP!",
+              ? "✅ Vinculado ao seu anúncio com sucesso no ERP!"
+              : "✅ Concorrente enviado ao Radar de Mercado do ERP! Clique em 'Abrir Radar no ERP' para ver.",
             "success"
           );
         } else {
-          showFeedback("Não foi possível acionar a captura na página.", "error");
+          showFeedback(res?.error || "Não foi possível acionar a captura na página.", "error");
         }
       }
     );
   });
 
+  // 7. Botão "Abrir Radar no ERP"
+  if (openErpBtn) {
+    openErpBtn.addEventListener("click", () => {
+      const erpUrl = normalizeErpUrl(erpUrlInput.value);
+      chrome.tabs.create({ url: `${erpUrl}/inteligencia` });
+    });
+  }
+
   // Salva no storage a seleção do anúncio para sincronia
   myListingSelect.addEventListener("change", () => {
-    chrome.storage.sync.set({ selectedMyListingId: myListingSelect.value });
+    extensionStorage.set({ selectedMyListingId: myListingSelect.value });
     updateButtonLabel();
   });
 
@@ -167,7 +231,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     feedbackMsg.style.display = "block";
     setTimeout(() => {
       feedbackMsg.style.display = "none";
-    }, 4500);
+    }, 6000);
   }
 
   function setOnlineStatus(isOnline) {
@@ -186,15 +250,17 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   }
 
-  async function loadMyListings(erpUrl, apiToken, platform) {
+  async function loadMyListings(erpUrl, apiToken, platform, preselectedId = null) {
     listingSelectContainer.style.display = "block";
+    const normalized = normalizeErpUrl(erpUrl);
+
     try {
       const headers = {};
       if (apiToken) {
         headers["Authorization"] = `Bearer ${apiToken}`;
       }
 
-      const res = await fetch(`${erpUrl}/api/my-listings?platform=${platform}`, {
+      const res = await fetch(`${normalized}/api/my-listings?platform=${platform}`, {
         headers,
       });
 
@@ -222,12 +288,16 @@ document.addEventListener("DOMContentLoaded", async () => {
         }
 
         // Restaura seleção anterior se existir
-        chrome.storage.sync.get(["selectedMyListingId"], (store) => {
-          if (store.selectedMyListingId) {
-            myListingSelect.value = store.selectedMyListingId;
-          }
-          updateButtonLabel();
-        });
+        if (preselectedId) {
+          myListingSelect.value = preselectedId;
+        } else {
+          extensionStorage.get(["selectedMyListingId"], (store) => {
+            if (store.selectedMyListingId) {
+              myListingSelect.value = store.selectedMyListingId;
+            }
+          });
+        }
+        updateButtonLabel();
       } else {
         // Usuário sem anúncios próprios
         myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
