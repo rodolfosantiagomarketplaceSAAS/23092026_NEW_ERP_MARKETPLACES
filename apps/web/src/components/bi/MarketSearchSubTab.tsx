@@ -329,6 +329,19 @@ export function MarketSearchSubTab() {
         </form>
       </div>
 
+      {/* Dica para Shopee se selecionada */}
+      {platform === "shopee" && (
+        <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-800 shadow-xs">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-semibold">Busca na Shopee</p>
+            <p className="text-[11px] text-amber-700 leading-relaxed">
+              A Shopee possui proteção anti-raspagem (Cloudflare) que bloqueia servidores em nuvem sem sessão humana. O ERP exibe os concorrentes da Shopee cadastrados no seu Radar. Para capturar novos produtos da Shopee em massa, utilize a Extensão Chrome do ERP ou utilize o filtro &quot;Mercado Livre&quot; (que extrai dados 100% reais em tempo real).
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* KPI Cards & Painel Analítico de Nicho */}
       {analytics && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
@@ -752,11 +765,19 @@ export function MarketSearchSubTab() {
                       {/* Imagem + Título + ID */}
                       <td className="py-3.5 px-3 max-w-[340px] align-top">
                         <div className="flex items-start gap-3">
-                          <img
-                            src={item.thumbnail_url || "https://placehold.co/60x60/f1f5f9/64748b?text=Img"}
-                            alt=""
-                            className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0 shadow-2xs group-hover:scale-105 transition-transform"
-                          />
+                          <a
+                            href={item.permalink}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="shrink-0 block"
+                            title="Abrir anúncio oficial"
+                          >
+                            <img
+                              src={item.thumbnail_url || "https://placehold.co/60x60/f1f5f9/64748b?text=Img"}
+                              alt={item.title}
+                              className="w-12 h-12 rounded-lg object-cover border border-slate-200 shrink-0 shadow-2xs group-hover:scale-105 hover:ring-2 hover:ring-indigo-500 transition-all"
+                            />
+                          </a>
                           <div className="min-w-0">
                             <a
                               href={item.permalink}
