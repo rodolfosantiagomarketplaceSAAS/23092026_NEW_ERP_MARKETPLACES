@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { getSyncedSearch } from "@/lib/data/marketSearchStore";
+import { getActiveMarketplaceToken } from "@/lib/services/marketplaceIntegrations";
 import type {
   MarketSearchItem,
   MarketSearchAnalytics,
@@ -526,9 +527,9 @@ export async function GET(req: NextRequest) {
       rawItems = [...syncedFromExtension];
     }
 
-    const mlToken = process.env.ML_ACCESS_TOKEN || process.env.MERCADOLIVRE_ACCESS_TOKEN;
-    if (rawItems.length === 0 && mlToken && (platformFilter === "mercadolivre" || platformFilter === "all")) {
-      const officialItems = await fetchViaOfficialMlApi(query, limit, mlToken);
+    const activeMlToken = (await getActiveMarketplaceToken("mercadolivre")) || process.env.ML_ACCESS_TOKEN || process.env.MERCADOLIVRE_ACCESS_TOKEN;
+    if (rawItems.length === 0 && activeMlToken && (platformFilter === "mercadolivre" || platformFilter === "all")) {
+      const officialItems = await fetchViaOfficialMlApi(query, limit, activeMlToken);
       if (officialItems.length > 0) {
         rawItems = [...officialItems];
       }

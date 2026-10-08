@@ -22,6 +22,8 @@ import {
   Zap,
   Unlink,
   Link as LinkIcon,
+  Store,
+  AlertCircle,
 } from "lucide-react";
 
 export function ConfiguracoesDashboard() {
@@ -39,41 +41,75 @@ export function ConfiguracoesDashboard() {
     status: "idle",
   });
 
-  // Estados de Conexão das Contas de Marketplaces (Iniciam desconectadas)
+  // Estados de Conexão das Contas de Marketplaces (Padrão Tiny / Bling)
   const [mlConnected, setMlConnected] = useState(false);
   const [mlAccountName, setMlAccountName] = useState("");
+  const [mlSellerId, setMlSellerId] = useState("");
+  const [mlReputation, setMlReputation] = useState("platinum");
+  const [mlEmail, setMlEmail] = useState("");
+  const [mlAccessToken, setMlAccessToken] = useState("");
   const [mlAppId, setMlAppId] = useState("");
   const [mlSecretKey, setMlSecretKey] = useState("");
   const [mlShippingType, setMlShippingType] = useState("FULL + FLEX (Híbrido)");
+  const [mlConnectionMode, setMlConnectionMode] = useState<"oauth" | "token">("oauth");
+  const [mlConnecting, setMlConnecting] = useState(false);
+  const [mlTesting, setMlTesting] = useState(false);
+  const [mlTestFeedback, setMlTestFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
   const [shopeeConnected, setShopeeConnected] = useState(false);
+  const [shopeeAccountName, setShopeeAccountName] = useState("");
   const [shopeeShopId, setShopeeShopId] = useState("");
   const [shopeePartnerId, setShopeePartnerId] = useState("");
   const [shopeePartnerKey, setShopeePartnerKey] = useState("");
+  const [shopeeAccessToken, setShopeeAccessToken] = useState("");
   const [shopeeCouponSync, setShopeeCouponSync] = useState("Ativa (Com Desconto)");
+  const [shopeeConnecting, setShopeeConnecting] = useState(false);
+  const [shopeeTesting, setShopeeTesting] = useState(false);
+  const [shopeeTestFeedback, setShopeeTestFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
 
-  // Carrega configurações do localStorage
-  useEffect(() => {
+  // Carrega status das integrações reais do backend
+  const loadIntegrations = async () => {
     try {
-      const storedML = localStorage.getItem("erp_ml_integration");
-      if (storedML) {
-        const parsed = JSON.parse(storedML);
-        setMlConnected(parsed.connected || false);
-        setMlAccountName(parsed.accountName || "");
-        setMlAppId(parsed.appId || "");
-        setMlSecretKey(parsed.secretKey || "");
-      }
+      const res = await fetch("/api/integrations");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.mercadolivre && data.mercadolivre.connected) {
+          setMlConnected(true);
+          setMlAccountName(data.mercadolivre.account_name || "Loja Mercado Livre");
+          setMlSellerId(data.mercadolivre.seller_id || "");
+          setMlReputation(data.mercadolivre.metadata?.reputation || "platinum");
+          setMlEmail(data.mercadolivre.metadata?.email || "");
+        } else {
+          setMlConnected(false);
+        }
 
-      const storedShopee = localStorage.getItem("erp_shopee_integration");
-      if (storedShopee) {
-        const parsed = JSON.parse(storedShopee);
-        setShopeeConnected(parsed.connected || false);
-        setShopeeShopId(parsed.shopId || "");
-        setShopeePartnerId(parsed.partnerId || "");
-        setShopeePartnerKey(parsed.partnerKey || "");
+        if (data.shopee && data.shopee.connected) {
+          setShopeeConnected(true);
+          setShopeeAccountName(data.shopee.account_name || "Loja Shopee");
+          setShopeeShopId(data.shopee.seller_id || "");
+        } else {
+          setShopeeConnected(false);
+        }
       }
-    } catch {
-      // Ignora erro de parse em SSR
+    } catch (e) {
+      console.warn("Falha ao carregar integrações da API:", e);
+    }
+  };
+
+  useEffect(() => {
+    loadIntegrations();
+
+    // Feedback de retorno OAuth se houver parâmetros na URL
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      if (sp.get("success") === "ml_connected") {
+        alert("✅ Conta do Mercado Livre conectada com sucesso via OAuth!");
+        window.history.replaceState({}, document.title, window.location.pathname + "?tab=marketplaces");
+      }
+      if (sp.get("error")) {
+        alert(`❌ Erro na autorização: ${sp.get("error")}`);
+        window.history.replaceState({}, document.title, window.location.pathname + "?tab=marketplaces");
+      }
     }
   }, []);
 
@@ -106,63 +142,191 @@ export function ConfiguracoesDashboard() {
     alert("Novo Token de Acesso gerado! Lembre-se de atualizá-lo no popup da extensão Chrome.");
   };
 
-  // Conectar / Desconectar Mercado Livre
-  const handleConnectML = () => {
-    if (!mlAppId.trim()) {
-      alert("Por favor, informe seu App ID (Client ID) do Mercado Livre ou autorize via OAuth.");
+  // OAuth 1-Clique Mercado Livre (Padrão Tiny/Bling)
+  const handleOAuthConnectML = async () => {
+    setMlConnecting(true);
+    try {
+      const res = await fetch("/api/integrations/mercadolivre/auth-url");
+      const json = await res.json();
+      if (json.hasOauthConfig && json.authUrl) {
+        window.location.href = json.authUrl;
+      } else {
+        setMlConnectionMode("token");
+        alert(
+          "💡 Para autorização 1-clique via OAuth Oficial, você pode colar seu Access Token no modo 'Conexão Direta (Token)' abaixo ou configurar seu App ID no arquivo .env."
+        );
+      }
+    } catch {
+      setMlConnectionMode("token");
+    } finally {
+      setMlConnecting(false);
+    }
+  };
+
+  // Conectar ML com Access Token ou App ID/Secret
+  const handleTokenConnectML = async () => {
+    if (!mlAccessToken.trim() && !mlAppId.trim()) {
+      alert("Por favor, cole seu Token de Acesso (Access Token) ou informe seu App ID.");
       return;
     }
-    const accountName = mlAccountName.trim() || "Minha Loja Mercado Livre";
-    setMlConnected(true);
-    setMlAccountName(accountName);
-    localStorage.setItem(
-      "erp_ml_integration",
-      JSON.stringify({
-        connected: true,
-        accountName,
-        appId: mlAppId,
-        secretKey: mlSecretKey,
-      })
-    );
-    alert("Conta do Mercado Livre vinculada com sucesso ao ERP!");
-  };
+    setMlConnecting(true);
+    setMlTestFeedback(null);
+    try {
+      const res = await fetch("/api/integrations/mercadolivre/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          accessToken: mlAccessToken.trim(),
+          appId: mlAppId.trim(),
+          secretKey: mlSecretKey.trim(),
+          accountName: mlAccountName.trim(),
+        }),
+      });
 
-  const handleDisconnectML = () => {
-    if (confirm("Deseja realmente desconectar a conta do Mercado Livre? A sincronização direta será pausada.")) {
-      setMlConnected(false);
-      setMlAccountName("");
-      setMlAppId("");
-      setMlSecretKey("");
-      localStorage.removeItem("erp_ml_integration");
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setMlConnected(true);
+        setMlAccountName(json.account.account_name);
+        setMlSellerId(json.account.seller_id);
+        setMlReputation(json.account.metadata?.reputation || "platinum");
+        setMlAccessToken("");
+        alert(`✅ ${json.message}`);
+        loadIntegrations();
+      } else {
+        alert(`❌ Erro: ${json.error || "Falha na validação do token"}`);
+      }
+    } catch (err: any) {
+      alert(`❌ Erro de conexão: ${err.message}`);
+    } finally {
+      setMlConnecting(false);
     }
   };
 
-  // Conectar / Desconectar Shopee
-  const handleConnectShopee = () => {
-    if (!shopeePartnerId.trim() || !shopeeShopId.trim()) {
-      alert("Por favor, informe seu Partner ID e Shop ID da Shopee.");
+  // Testar Conexão ML em tempo real (Ping)
+  const handleTestML = async () => {
+    setMlTesting(true);
+    setMlTestFeedback(null);
+    try {
+      const res = await fetch("/api/integrations/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: "mercadolivre" }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setMlTestFeedback({ type: "success", msg: json.message });
+      } else {
+        setMlTestFeedback({ type: "error", msg: json.error || "Erro ao testar canal." });
+      }
+    } catch {
+      setMlTestFeedback({ type: "error", msg: "Falha de comunicação com o servidor do ERP." });
+    } finally {
+      setMlTesting(false);
+    }
+  };
+
+  // Desconectar ML (1-Clique)
+  const handleDisconnectML = async () => {
+    if (confirm("Deseja realmente desconectar a conta do Mercado Livre? A sincronização em tempo real será pausada.")) {
+      try {
+        const res = await fetch("/api/integrations/disconnect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform: "mercadolivre" }),
+        });
+        if (res.ok) {
+          setMlConnected(false);
+          setMlAccountName("");
+          setMlSellerId("");
+          setMlTestFeedback(null);
+          alert("Conta do Mercado Livre desconectada com sucesso!");
+        }
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  // Conectar Shopee
+  const handleConnectShopee = async () => {
+    if (!shopeeShopId.trim() && !shopeePartnerId.trim()) {
+      alert("Por favor, informe o Shop ID ou credenciais de parceiro da Shopee.");
       return;
     }
-    setShopeeConnected(true);
-    localStorage.setItem(
-      "erp_shopee_integration",
-      JSON.stringify({
-        connected: true,
-        shopId: shopeeShopId,
-        partnerId: shopeePartnerId,
-        partnerKey: shopeePartnerKey,
-      })
-    );
-    alert("Loja Shopee vinculada com sucesso ao ERP!");
+    setShopeeConnecting(true);
+    setShopeeTestFeedback(null);
+    try {
+      const res = await fetch("/api/integrations/shopee/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          shopId: shopeeShopId.trim(),
+          partnerId: shopeePartnerId.trim(),
+          partnerKey: shopeePartnerKey.trim(),
+          accessToken: shopeeAccessToken.trim(),
+          accountName: shopeeAccountName.trim(),
+        }),
+      });
+
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setShopeeConnected(true);
+        setShopeeAccountName(json.account.account_name);
+        setShopeeShopId(json.account.seller_id);
+        alert(`✅ ${json.message}`);
+        loadIntegrations();
+      } else {
+        alert(`❌ Erro: ${json.error}`);
+      }
+    } catch (err: any) {
+      alert(`❌ Erro: ${err.message}`);
+    } finally {
+      setShopeeConnecting(false);
+    }
   };
 
-  const handleDisconnectShopee = () => {
+  // Testar Conexão Shopee
+  const handleTestShopee = async () => {
+    setShopeeTesting(true);
+    setShopeeTestFeedback(null);
+    try {
+      const res = await fetch("/api/integrations/test", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: "shopee" }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setShopeeTestFeedback({ type: "success", msg: json.message });
+      } else {
+        setShopeeTestFeedback({ type: "error", msg: json.error || "Erro ao testar Shopee." });
+      }
+    } catch {
+      setShopeeTestFeedback({ type: "error", msg: "Falha de comunicação." });
+    } finally {
+      setShopeeTesting(false);
+    }
+  };
+
+  // Desconectar Shopee (1-Clique)
+  const handleDisconnectShopee = async () => {
     if (confirm("Deseja realmente desconectar a loja da Shopee?")) {
-      setShopeeConnected(false);
-      setShopeeShopId("");
-      setShopeePartnerId("");
-      setShopeePartnerKey("");
-      localStorage.removeItem("erp_shopee_integration");
+      try {
+        const res = await fetch("/api/integrations/disconnect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform: "shopee" }),
+        });
+        if (res.ok) {
+          setShopeeConnected(false);
+          setShopeeShopId("");
+          setShopeeAccountName("");
+          setShopeeTestFeedback(null);
+          alert("Loja Shopee desconectada com sucesso!");
+        }
+      } catch (err) {
+        console.error(err);
+      }
     }
   };
 
@@ -251,154 +415,261 @@ export function ConfiguracoesDashboard() {
         </button>
       </div>
 
-      {/* CONTEÚDO 1: CONTAS DE MARKETPLACES (Mercado Livre & Shopee) */}
+      {/* CONTEÚDO 1: CONTAS DE MARKETPLACES (Mercado Livre & Shopee - Padrão Tiny / Bling) */}
       {activeTab === "marketplaces" && (
         <div className="space-y-4">
           {/* Alerta de Status Geral */}
           {!mlConnected && !shopeeConnected && (
-            <div className="bg-amber-50 border border-amber-200 rounded p-3 text-xs text-amber-800 flex items-start gap-2.5">
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3.5 text-xs text-amber-800 flex items-start gap-3 shadow-2xs">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <div>
-                <strong>Nenhum canal de marketplace conectado no momento.</strong>
-                <p className="text-[11px] text-amber-700 mt-0.5">
-                  Conecte sua conta do <strong>Mercado Livre</strong> e da <strong>Shopee</strong> abaixo para sincronizar seus anúncios próprios, estoque e reputação.
-                  Enquanto não conectar, você pode utilizar a <strong>Extensão Chrome</strong> para capturar e parear concorrentes em modo assistido.
+                <strong className="text-amber-900">Nenhum canal de marketplace conectado no momento.</strong>
+                <p className="text-[11px] text-amber-700 mt-0.5 leading-relaxed">
+                  Conecte sua conta do <strong>Mercado Livre</strong> e da <strong>Shopee</strong> abaixo com a mesma facilidade do <strong>Tiny ERP</strong> ou <strong>Bling</strong>. Seus tokens são criptografados no servidor com Row Level Security (RLS).
                 </p>
               </div>
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* CARD MERCADO LIVRE */}
-            <div className={`bg-white border rounded p-4 shadow-2xs space-y-3 transition-colors ${
-              mlConnected ? "border-emerald-200" : "border-[#E2E8F0]"
-            }`}>
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-                <div className="flex items-center space-x-2">
-                  <span className="w-3 h-3 rounded-full bg-[#FFE600] border border-amber-400"></span>
-                  <span className="text-xs font-bold text-slate-900">Mercado Livre Oficial</span>
+            <div
+              className={`bg-white border rounded-xl p-5 shadow-2xs space-y-4 transition-all ${
+                mlConnected ? "border-emerald-300 ring-1 ring-emerald-100" : "border-slate-200"
+              }`}
+            >
+              {/* Cabeçalho do Card */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center space-x-2.5">
+                  <span className="w-3.5 h-3.5 rounded-full bg-[#FFE600] border border-amber-400 flex items-center justify-center text-[8px] font-black text-slate-950">
+                    ML
+                  </span>
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-900">Mercado Livre Oficial</h3>
+                    <p className="text-[10px] text-slate-500">API de Catálogo, Preços e Vendas</p>
+                  </div>
                 </div>
                 {mlConnected ? (
-                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded border border-emerald-200 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Conectado
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-200 font-bold flex items-center gap-1.5 shadow-2xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Conectado
                   </span>
                 ) : (
-                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded border border-slate-300 font-semibold flex items-center gap-1">
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full border border-slate-300 font-semibold flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span> Desconectado
                   </span>
                 )}
               </div>
 
               {mlConnected ? (
-                /* Estado Conectado ML */
-                <div className="space-y-3 text-xs">
-                  <div className="bg-emerald-50/50 border border-emerald-100 p-2.5 rounded">
-                    <div className="text-[11px] text-slate-500">Conta Vinculada:</div>
-                    <div className="font-bold text-slate-900 text-xs mt-0.5">
-                      {mlAccountName}
+                /* Estado Conectado ML (Padrão Tiny / Bling) */
+                <div className="space-y-3.5 text-xs">
+                  <div className="bg-gradient-to-br from-emerald-50/60 to-slate-50 border border-emerald-100 p-3.5 rounded-lg space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-slate-500">Loja Conectada:</span>
+                      <span className="text-[10px] bg-emerald-600 text-white font-bold px-2 py-0.5 rounded-full uppercase">
+                        {mlReputation || "Platinum"}
+                      </span>
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
-                      App ID: <code>{mlAppId}</code>
+                    <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <Store className="w-4 h-4 text-emerald-600" />
+                      <span>{mlAccountName}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 pt-1 border-t border-emerald-100/60">
+                      <div>
+                        ID Vendedor: <code className="font-bold text-slate-800">{mlSellerId}</code>
+                      </div>
+                      <div>
+                        Segurança: <span className="text-emerald-700 font-semibold">Criptografia RLS Ativa</span>
+                      </div>
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-slate-500 font-medium">Logística Padrão Ativa</label>
+                    <label className="text-[11px] text-slate-600 font-semibold block mb-1">
+                      Logística Padrão para Cálculo de Reprecificação
+                    </label>
                     <select
                       value={mlShippingType}
                       onChange={(e) => setMlShippingType(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 mt-1"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
                     >
-                      <option>FULL + FLEX (Híbrido)</option>
-                      <option>Apenas FULL</option>
-                      <option>Coleta Padrão</option>
+                      <option>FULL + FLEX (Híbrido Automático)</option>
+                      <option>Apenas FULL (Mercado Envios Full)</option>
+                      <option>Coleta Padrão / Correios</option>
                     </select>
                   </div>
 
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Sincronização Ativa
-                    </span>
+                  {mlTestFeedback && (
+                    <div
+                      className={`p-2.5 rounded-lg text-xs flex items-center gap-2 ${
+                        mlTestFeedback.type === "success"
+                          ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                          : "bg-red-50 border border-red-200 text-red-800"
+                      }`}
+                    >
+                      {mlTestFeedback.type === "success" ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                      )}
+                      <span>{mlTestFeedback.msg}</span>
+                    </div>
+                  )}
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <button
+                      onClick={handleTestML}
+                      disabled={mlTesting}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-60"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${mlTesting ? "animate-spin" : ""}`} />
+                      <span>{mlTesting ? "Testando Latência..." : "Testar Conexão"}</span>
+                    </button>
+
                     <button
                       onClick={handleDisconnectML}
-                      className="px-2.5 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-200 rounded flex items-center gap-1 transition-colors"
+                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition"
                     >
-                      <Unlink className="w-3 h-3" /> Desconectar
+                      <Unlink className="w-3.5 h-3.5" />
+                      <span>Desconectar Conta</span>
                     </button>
                   </div>
                 </div>
               ) : (
                 /* Estado Desconectado ML */
-                <div className="space-y-3 text-xs">
-                  <p className="text-[11px] text-slate-500">
-                    Insira as credenciais do seu aplicativo de desenvolvedor no Mercado Livre (Mercado Pago / Developers) ou autorize sua conta.
-                  </p>
-
-                  <div>
-                    <label className="text-[11px] text-slate-600 font-medium block mb-1">
-                      Apelido da Loja / Razão Social
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="Ex: Minha Loja Oficial SP"
-                      value={mlAccountName}
-                      onChange={(e) => setMlAccountName(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 focus:outline-hidden focus:border-sky-500"
-                    />
+                <div className="space-y-3.5 text-xs">
+                  {/* Seletor de Modo de Conexão */}
+                  <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-semibold">
+                    <button
+                      type="button"
+                      onClick={() => setMlConnectionMode("oauth")}
+                      className={`flex-1 py-1.5 rounded-md transition text-center ${
+                        mlConnectionMode === "oauth"
+                          ? "bg-white text-slate-900 shadow-2xs font-bold"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      ⚡ 1-Clique (OAuth Oficial)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setMlConnectionMode("token")}
+                      className={`flex-1 py-1.5 rounded-md transition text-center ${
+                        mlConnectionMode === "token"
+                          ? "bg-white text-slate-900 shadow-2xs font-bold"
+                          : "text-slate-600 hover:text-slate-900"
+                      }`}
+                    >
+                      🔑 Conexão Direta (Token)
+                    </button>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
-                        App ID (Client ID)
-                      </label>
-                      <input
-                        type="text"
-                        placeholder="Ex: 8901234908..."
-                        value={mlAppId}
-                        onChange={(e) => setMlAppId(e.target.value)}
-                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
-                      />
-                    </div>
-                    <div>
-                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
-                        Client Secret
-                      </label>
-                      <input
-                        type="password"
-                        placeholder="Chave secreta..."
-                        value={mlSecretKey}
-                        onChange={(e) => setMlSecretKey(e.target.value)}
-                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
-                      />
-                    </div>
-                  </div>
+                  {mlConnectionMode === "oauth" ? (
+                    /* MODO OAUTH 1-CLIQUE */
+                    <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3.5 space-y-3">
+                      <p className="text-[11px] text-slate-600 leading-relaxed">
+                        Conecte diretamente pela tela oficial do <strong>Mercado Livre</strong> com 1 clique. O sistema gerencia a renovação de tokens automaticamente.
+                      </p>
 
-                  <button
-                    onClick={handleConnectML}
-                    className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
-                  >
-                    <LinkIcon className="w-3.5 h-3.5" /> Vincular Conta Mercado Livre
-                  </button>
+                      <button
+                        type="button"
+                        onClick={handleOAuthConnectML}
+                        disabled={mlConnecting}
+                        className="w-full py-2.5 bg-[#FFE600] hover:bg-[#F0D800] text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center gap-2 transition shadow-xs active:scale-98"
+                      >
+                        <Zap className="w-4 h-4 fill-slate-950" />
+                        <span>{mlConnecting ? "Abrindo Mercado Livre..." : "Conectar com Mercado Livre (1-Clique)"}</span>
+                      </button>
+
+                      <div className="text-[10px] text-slate-500 text-center flex items-center justify-center gap-1">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>Autorização oficial segura com permissões de Leitura e Escrita.</span>
+                      </div>
+                    </div>
+                  ) : (
+                    /* MODO TOKEN / CHAVES MANUAIS */
+                    <div className="space-y-3">
+                      <div>
+                        <label className="text-[11px] text-slate-700 font-semibold block mb-1">
+                          Access Token do Mercado Livre (Recomendado)
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="APP_USR-8901234908... ou Bearer Token"
+                          value={mlAccessToken}
+                          onChange={(e) => setMlAccessToken(e.target.value)}
+                          className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                        />
+                        <span className="text-[10px] text-slate-500 mt-0.5 block">
+                          Cole o Access Token gerado no portal de desenvolvedores do Mercado Livre.
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="text-[11px] text-slate-700 font-semibold block mb-1">
+                            App ID (Opcional)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex: 8901234908..."
+                            value={mlAppId}
+                            onChange={(e) => setMlAppId(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] text-slate-700 font-semibold block mb-1">
+                            Client Secret (Opcional)
+                          </label>
+                          <input
+                            type="password"
+                            placeholder="Chave secreta..."
+                            value={mlSecretKey}
+                            onChange={(e) => setMlSecretKey(e.target.value)}
+                            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none"
+                          />
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={handleTokenConnectML}
+                        disabled={mlConnecting}
+                        className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-2xs"
+                      >
+                        <LinkIcon className="w-3.5 h-3.5" />
+                        <span>{mlConnecting ? "Validando na API do ML..." : "Validar e Conectar Conta"}</span>
+                      </button>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
             {/* CARD SHOPEE */}
-            <div className={`bg-white border rounded p-4 shadow-2xs space-y-3 transition-colors ${
-              shopeeConnected ? "border-emerald-200" : "border-[#E2E8F0]"
-            }`}>
-              <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
-                <div className="flex items-center space-x-2">
-                  <span className="w-3 h-3 rounded-full bg-[#EE4D2D]"></span>
-                  <span className="text-xs font-bold text-slate-900">Shopee Brasil</span>
+            <div
+              className={`bg-white border rounded-xl p-5 shadow-2xs space-y-4 transition-all ${
+                shopeeConnected ? "border-emerald-300 ring-1 ring-emerald-100" : "border-slate-200"
+              }`}
+            >
+              {/* Cabeçalho do Card */}
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center space-x-2.5">
+                  <span className="w-3.5 h-3.5 rounded-full bg-[#EE4D2D] flex items-center justify-center text-[8px] font-black text-white">
+                    S
+                  </span>
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-900">Shopee Brasil</h3>
+                    <p className="text-[10px] text-slate-500">Shopee Open Platform V2</p>
+                  </div>
                 </div>
                 {shopeeConnected ? (
-                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-0.5 rounded border border-emerald-200 font-semibold flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span> Conectado
+                  <span className="text-[10px] bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full border border-emerald-200 font-bold flex items-center gap-1.5 shadow-2xs">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span> Conectado
                   </span>
                 ) : (
-                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-0.5 rounded border border-slate-300 font-semibold flex items-center gap-1">
+                  <span className="text-[10px] bg-slate-100 text-slate-600 px-2.5 py-1 rounded-full border border-slate-300 font-semibold flex items-center gap-1.5">
                     <span className="w-1.5 h-1.5 rounded-full bg-slate-400"></span> Desconectado
                   </span>
                 )}
@@ -406,51 +677,85 @@ export function ConfiguracoesDashboard() {
 
               {shopeeConnected ? (
                 /* Estado Conectado Shopee */
-                <div className="space-y-3 text-xs">
-                  <div className="bg-emerald-50/50 border border-emerald-100 p-2.5 rounded">
-                    <div className="text-[11px] text-slate-500">Loja Vinculada:</div>
-                    <div className="font-bold text-slate-900 text-xs mt-0.5">
-                      Shop ID: <code>{shopeeShopId}</code>
+                <div className="space-y-3.5 text-xs">
+                  <div className="bg-gradient-to-br from-emerald-50/60 to-slate-50 border border-emerald-100 p-3.5 rounded-lg space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] font-semibold text-slate-500">Loja Vinculada:</span>
+                      <span className="text-[10px] bg-orange-600 text-white font-bold px-2 py-0.5 rounded-full uppercase">
+                        Oficial Shopee
+                      </span>
                     </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
-                      Partner ID: <code>{shopeePartnerId}</code>
+                    <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
+                      <ShoppingBag className="w-4 h-4 text-orange-600" />
+                      <span>{shopeeAccountName}</span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 pt-1 border-t border-emerald-100/60">
+                      <div>
+                        Shop ID: <code className="font-bold text-slate-800">{shopeeShopId}</code>
+                      </div>
+                      <div>
+                        Sincronia: <span className="text-emerald-700 font-semibold">Ativa e Monitorada</span>
+                      </div>
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-slate-500 font-medium">Sincronia de Cupons e Ofertas</label>
+                    <label className="text-[11px] text-slate-600 font-semibold block mb-1">
+                      Sincronia Automática de Cupons e Ofertas
+                    </label>
                     <select
                       value={shopeeCouponSync}
                       onChange={(e) => setShopeeCouponSync(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded px-2 py-1.5 text-xs text-slate-800 mt-1"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs text-slate-800 font-medium focus:outline-none"
                     >
-                      <option>Ativa (Com Desconto)</option>
+                      <option>Ativa (Com Desconto & Cupons)</option>
+                      <option>Apenas Preço Cheio de Tabela</option>
                       <option>Desativada</option>
                     </select>
                   </div>
 
-                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between">
-                    <span className="text-[11px] text-emerald-700 font-medium flex items-center gap-1">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Sincronização Ativa
-                    </span>
+                  {shopeeTestFeedback && (
+                    <div
+                      className={`p-2.5 rounded-lg text-xs flex items-center gap-2 ${
+                        shopeeTestFeedback.type === "success"
+                          ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                          : "bg-red-50 border border-red-200 text-red-800"
+                      }`}
+                    >
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{shopeeTestFeedback.msg}</span>
+                    </div>
+                  )}
+
+                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
+                    <button
+                      onClick={handleTestShopee}
+                      disabled={shopeeTesting}
+                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-60"
+                    >
+                      <RefreshCw className={`w-3.5 h-3.5 ${shopeeTesting ? "animate-spin" : ""}`} />
+                      <span>{shopeeTesting ? "Testando..." : "Testar Conexão"}</span>
+                    </button>
+
                     <button
                       onClick={handleDisconnectShopee}
-                      className="px-2.5 py-1 text-xs text-red-600 hover:text-red-800 hover:bg-red-50 border border-red-200 rounded flex items-center gap-1 transition-colors"
+                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition"
                     >
-                      <Unlink className="w-3 h-3" /> Desconectar
+                      <Unlink className="w-3.5 h-3.5" />
+                      <span>Desconectar Loja</span>
                     </button>
                   </div>
                 </div>
               ) : (
                 /* Estado Desconectado Shopee */
-                <div className="space-y-3 text-xs">
-                  <p className="text-[11px] text-slate-500">
-                    Insira as credenciais do Shopee Open Platform para integrar sua loja e sincronizar catálogo e pedidos.
+                <div className="space-y-3.5 text-xs">
+                  <p className="text-[11px] text-slate-600 leading-relaxed">
+                    Insira as credenciais do <strong>Shopee Open Platform</strong> ou o Shop ID da sua loja para conectar e sincronizar estoque e preços.
                   </p>
 
                   <div className="grid grid-cols-2 gap-2">
                     <div>
-                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
+                      <label className="text-[11px] text-slate-700 font-semibold block mb-1">
                         Shop ID
                       </label>
                       <input
@@ -458,42 +763,53 @@ export function ConfiguracoesDashboard() {
                         placeholder="Ex: 98127391"
                         value={shopeeShopId}
                         onChange={(e) => setShopeeShopId(e.target.value)}
-                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] text-slate-600 font-medium block mb-1">
-                        Partner ID
+                      <label className="text-[11px] text-slate-700 font-semibold block mb-1">
+                        Partner ID (Opcional)
                       </label>
                       <input
                         type="text"
                         placeholder="Ex: 2009812"
                         value={shopeePartnerId}
                         onChange={(e) => setShopeePartnerId(e.target.value)}
-                        className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                        className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none"
                       />
                     </div>
                   </div>
 
                   <div>
-                    <label className="text-[11px] text-slate-600 font-medium block mb-1">
-                      Partner Key (Secret)
+                    <label className="text-[11px] text-slate-700 font-semibold block mb-1">
+                      Partner Key ou Token de Acesso da Loja
                     </label>
                     <input
                       type="password"
-                      placeholder="Chave secreta do parceiro Shopee..."
-                      value={shopeePartnerKey}
-                      onChange={(e) => setShopeePartnerKey(e.target.value)}
-                      className="w-full bg-white border border-slate-300 rounded px-2.5 py-1.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-sky-500"
+                      placeholder="Chave secreta ou Token da Loja..."
+                      value={shopeeAccessToken || shopeePartnerKey}
+                      onChange={(e) => {
+                        setShopeeAccessToken(e.target.value);
+                        setShopeePartnerKey(e.target.value);
+                      }}
+                      className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none"
                     />
                   </div>
 
                   <button
+                    type="button"
                     onClick={handleConnectShopee}
-                    className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded text-xs font-semibold flex items-center justify-center gap-1.5 transition-colors shadow-2xs"
+                    disabled={shopeeConnecting}
+                    className="w-full py-2.5 bg-[#EE4D2D] hover:bg-[#D73211] text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition shadow-xs active:scale-98"
                   >
-                    <LinkIcon className="w-3.5 h-3.5" /> Vincular Loja Shopee
+                    <LinkIcon className="w-3.5 h-3.5" />
+                    <span>{shopeeConnecting ? "Conectando..." : "Vincular Loja Shopee"}</span>
                   </button>
+
+                  <div className="text-[10px] text-slate-500 text-center flex items-center justify-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Conexão segura compatível com o padrão Tiny e Bling ERP.</span>
+                  </div>
                 </div>
               )}
             </div>
