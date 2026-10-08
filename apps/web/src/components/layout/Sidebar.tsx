@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -12,11 +12,45 @@ import {
   ChevronLeft,
   ChevronRight,
   Zap,
+  Building2,
+  LogOut,
+  User,
+  ShieldCheck,
 } from "lucide-react";
+import {
+  getCurrentUserProfileAndOrg,
+  signOutUser,
+  type UserProfileInfo,
+  type OrganizationInfo,
+} from "@/lib/services/auth";
 
 export function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
+  const [profile, setProfile] = useState<UserProfileInfo | null>(null);
+  const [org, setOrg] = useState<OrganizationInfo | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const pathname = usePathname();
+
+  // Verifica se está em rota de autenticação (não exibe sidebar)
+  const isAuthRoute =
+    pathname?.startsWith("/login") ||
+    pathname?.startsWith("/cadastro") ||
+    pathname?.startsWith("/esqueci-senha") ||
+    pathname?.startsWith("/redefinir-senha");
+
+  useEffect(() => {
+    if (!isAuthRoute) {
+      getCurrentUserProfileAndOrg().then((res) => {
+        setIsAuthenticated(res.isAuthenticated);
+        setProfile(res.user);
+        setOrg(res.organization);
+      });
+    }
+  }, [pathname, isAuthRoute]);
+
+  if (isAuthRoute) {
+    return null;
+  }
 
   const menuItems = [
     {
@@ -54,19 +88,19 @@ export function Sidebar() {
 
   return (
     <aside
-      className={`h-screen bg-[#0F172A] text-slate-300 flex flex-col justify-between transition-all duration-300 select-none z-40 sticky top-0 ${
-        collapsed ? "w-16" : "w-60"
+      className={`h-screen bg-[#0F172A] text-slate-300 flex flex-col justify-between transition-all duration-300 select-none z-40 sticky top-0 shrink-0 ${
+        collapsed ? "w-16" : "w-64"
       }`}
     >
       {/* Topo: Logo & Toggle */}
       <div>
-        <div className="h-12 border-b border-slate-800 flex items-center justify-between px-3">
-          <div className="flex items-center space-x-2 overflow-hidden">
-            <div className="w-7 h-7 rounded bg-sky-600 flex items-center justify-center text-white font-black text-xs shrink-0">
+        <div className="h-14 border-b border-slate-800 flex items-center justify-between px-3">
+          <div className="flex items-center space-x-2.5 overflow-hidden">
+            <div className="w-8 h-8 rounded-lg bg-sky-600 flex items-center justify-center text-white font-black text-xs shrink-0 shadow-sm shadow-sky-600/30">
               <Zap className="w-4 h-4 fill-white" />
             </div>
             {!collapsed && (
-              <div className="flex flex-col whitespace-nowrap">
+              <div className="flex flex-col whitespace-nowrap overflow-hidden">
                 <span className="font-bold text-white text-xs tracking-tight">MARKETPLACE ERP</span>
                 <span className="text-[10px] text-slate-400">Inteligência & Gestão</span>
               </div>
@@ -81,7 +115,31 @@ export function Sidebar() {
           </button>
         </div>
 
-        {/* Lista de Navegação */}
+        {/* Informações da Conta Mestra / Empresa Ativa (Padrão Tiny & Bling) */}
+        {!collapsed && org && (
+          <div className="mx-2 mt-2.5 mb-1 p-2.5 rounded-lg bg-slate-850/80 border border-slate-800/80 text-xs">
+            <div className="flex items-center justify-between mb-1">
+              <div className="flex items-center space-x-1.5 overflow-hidden">
+                <Building2 className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+                <span className="font-semibold text-slate-200 truncate text-[11px]">
+                  {org.trade_name}
+                </span>
+              </div>
+              <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/10 border border-sky-500/20 text-sky-300 font-mono font-bold">
+                {org.code}
+              </span>
+            </div>
+            <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-800/60">
+              <span className="flex items-center gap-1 text-emerald-400 font-medium">
+                <ShieldCheck className="w-3 h-3" />
+                {org.plan_tier === "trial" ? "Trial 30 dias" : "Plano Pro Ativo"}
+              </span>
+              <span className="text-slate-500">Titular Mestre</span>
+            </div>
+          </div>
+        )}
+
+        {/* Lista de Navegação Principal */}
         <nav className="p-2 space-y-1">
           {menuItems.map((item) => {
             const Icon = item.icon;
@@ -126,19 +184,61 @@ export function Sidebar() {
         </nav>
       </div>
 
-      {/* Rodapé da Sidebar */}
-      <div className="p-3 border-t border-slate-800 text-[10px] text-slate-400 flex flex-col gap-1">
-        {!collapsed ? (
-          <>
-            <div className="flex items-center justify-between">
-              <span>Supabase Realtime:</span>
-              <span className="text-emerald-400 font-semibold flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
-                Ativo
-              </span>
+      {/* Rodapé da Sidebar: Usuário Logado & Logout */}
+      <div className="p-2.5 border-t border-slate-800 text-xs text-slate-400 flex flex-col gap-2">
+        {isAuthenticated && profile ? (
+          <div className={`flex items-center ${collapsed ? "justify-center" : "justify-between"} p-1.5 rounded-lg bg-slate-900/60`}>
+            {!collapsed && (
+              <div className="flex items-center space-x-2 overflow-hidden">
+                <div className="w-7 h-7 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-slate-300 text-xs font-bold shrink-0">
+                  <User className="w-3.5 h-3.5 text-sky-400" />
+                </div>
+                <div className="flex flex-col overflow-hidden">
+                  <span className="text-[11px] font-semibold text-white truncate">
+                    {profile.full_name}
+                  </span>
+                  <span className="text-[9px] text-slate-400 truncate">
+                    {profile.email}
+                  </span>
+                </div>
+              </div>
+            )}
+            <button
+              onClick={() => signOutUser()}
+              className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-slate-800 rounded transition-colors"
+              title="Sair da Conta (Logout)"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          !collapsed && (
+            <div className="flex items-center space-x-2">
+              <Link
+                href="/login"
+                className="flex-1 text-center py-1.5 px-2 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 text-[11px] font-medium transition-colors"
+              >
+                Entrar
+              </Link>
+              <Link
+                href="/cadastro"
+                className="flex-1 text-center py-1.5 px-2 rounded bg-sky-600 hover:bg-sky-500 text-white text-[11px] font-semibold transition-colors"
+              >
+                Criar Conta
+              </Link>
             </div>
-            <div className="text-slate-500 text-[9px]">v2.4.0 (Padrão Tiny ERP)</div>
-          </>
+          )
+        )}
+
+        {/* Status Realtime & Versão */}
+        {!collapsed ? (
+          <div className="px-1 flex items-center justify-between text-[10px] text-slate-500">
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+              Realtime Conectado
+            </span>
+            <span className="text-[9px]">Padrão Tiny/Bling</span>
+          </div>
         ) : (
           <div className="flex justify-center" title="Supabase Realtime Ativo">
             <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
