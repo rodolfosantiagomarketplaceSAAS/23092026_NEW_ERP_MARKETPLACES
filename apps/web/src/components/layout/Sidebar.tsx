@@ -16,6 +16,7 @@ import {
   LogOut,
   User,
   ShieldCheck,
+  UserCheck,
 } from "lucide-react";
 import {
   getCurrentUserProfileAndOrg,
@@ -31,12 +32,13 @@ export function Sidebar() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const pathname = usePathname();
 
-  // Verifica se está em rota de autenticação (não exibe sidebar)
+  // Verifica se está em rota pública/autenticação/aguardando liberação (não exibe sidebar)
   const isAuthRoute =
     pathname?.startsWith("/login") ||
     pathname?.startsWith("/cadastro") ||
     pathname?.startsWith("/esqueci-senha") ||
-    pathname?.startsWith("/redefinir-senha");
+    pathname?.startsWith("/redefinir-senha") ||
+    pathname?.startsWith("/aguardando-liberacao");
 
   useEffect(() => {
     if (!isAuthRoute) {
@@ -51,6 +53,8 @@ export function Sidebar() {
   if (isAuthRoute) {
     return null;
   }
+
+  const isSuperAdmin = profile?.email?.toLowerCase() === "rodolfo.mecatronica@gmail.com";
 
   const menuItems = [
     {
@@ -86,6 +90,17 @@ export function Sidebar() {
     },
   ];
 
+  // Adiciona o item exclusivo do Super Administrador Geral
+  if (isSuperAdmin) {
+    menuItems.push({
+      label: "Gestão de Assinantes",
+      href: "/admin/usuarios",
+      icon: UserCheck,
+      badge: "ADM",
+      isPrimary: false,
+    });
+  }
+
   return (
     <aside
       className={`h-screen bg-[#0F172A] text-slate-300 flex flex-col justify-between transition-all duration-300 select-none z-40 sticky top-0 shrink-0 ${
@@ -115,7 +130,7 @@ export function Sidebar() {
           </button>
         </div>
 
-        {/* Informações da Conta Mestra / Empresa Ativa (Padrão Tiny & Bling) */}
+        {/* Informações da Conta Mestra / Empresa Ativa */}
         {!collapsed && org && (
           <div className="mx-2 mt-2.5 mb-1 p-2.5 rounded-lg bg-slate-850/80 border border-slate-800/80 text-xs">
             <div className="flex items-center justify-between mb-1">
@@ -132,9 +147,9 @@ export function Sidebar() {
             <div className="flex items-center justify-between text-[10px] text-slate-400 pt-1 border-t border-slate-800/60">
               <span className="flex items-center gap-1 text-emerald-400 font-medium">
                 <ShieldCheck className="w-3 h-3" />
-                {org.plan_tier === "trial" ? "Trial 30 dias" : "Plano Pro Ativo"}
+                {isSuperAdmin ? "Super Admin" : "Mensalidade Ativa"}
               </span>
-              <span className="text-slate-500">Titular Mestre</span>
+              <span className="text-slate-500">{isSuperAdmin ? "Acesso Total" : "Titular"}</span>
             </div>
           </div>
         )}
@@ -170,6 +185,8 @@ export function Sidebar() {
                     className={`text-[10px] px-1.5 py-0.5 rounded font-bold ${
                       isActive
                         ? "bg-sky-800 text-white"
+                        : item.badge === "ADM"
+                        ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
                         : item.isPrimary
                         ? "bg-amber-400/20 text-amber-300 border border-amber-400/30"
                         : "bg-slate-800 text-slate-400"

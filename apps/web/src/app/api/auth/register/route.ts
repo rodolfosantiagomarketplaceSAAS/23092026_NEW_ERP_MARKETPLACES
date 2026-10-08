@@ -26,7 +26,7 @@ export async function POST(req: Request) {
     const supabaseAdmin = createSupabaseAdminClient();
 
     // 2. Verifica se o documento já está em uso na base de organizações
-    const { data: existingOrg, error: orgCheckError } = await supabaseAdmin
+    const { data: existingOrg } = await supabaseAdmin
       .from("organizations")
       .select("id, code, trade_name")
       .eq("document_number", cleanDoc)
@@ -43,7 +43,7 @@ export async function POST(req: Request) {
     }
 
     // 3. Criação segura do Usuário no Supabase Auth
-    // Configura email_confirm: true para liberar acesso instantâneo ao ERP (padrão Bling e Tiny Trial)
+    // Por padrão o status é 'pending_confirmation' (aguardando liberação do ADM Rodolfo)
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: data.email,
       password: data.password,
@@ -53,6 +53,8 @@ export async function POST(req: Request) {
         phone: data.phone,
         trade_name: data.trade_name,
         is_master: true,
+        status: "pending_confirmation",
+        is_approved: false,
       },
     });
 
@@ -80,87 +82,73 @@ export async function POST(req: Request) {
       );
     }
 
-    // 4. Executa a criação da Organização (Tenant) e Perfil Mestre
-    // Tenta primeiro via RPC transacional 'register_master_account'
-    let orgData: any = null;
-    let profileData: any = null;
+    // 4. Criação da Organização (Tenant) e Perfil com status 'pending_confirmation'
+    const accountCode = `EMP-${Math.floor(100000 + Math.random() * 900000)}`;
 
-    const { data: rpcResult, error: rpcError } = await supabaseAdmin.rpc("register_master_account", {
-      p_user_id: userId,
-      p_full_name: data.full_name,
-      p_email: data.email,
-      p_phone: data.phone,
-      p_trade_name: data.trade_name,
-      p_corporate_name: data.corporate_name || data.trade_name,
-      p_document_type: data.document_type,
-      p_document_number: cleanDoc,
-      p_state_registration: data.state_registration || "ISENTO",
-      p_ip_address: ipAddress,
-      p_user_agent: userAgent,
-    });
+    const { data: insertedOrg, error: insertOrgErr } = await supabaseAdmin
+      .from("organizations")
+      .insert({
+        code: accountCode,
+        trade_name: data.trade_name,
+        corporate_name: data.corporate_name || data.trade_name,
+        document_type: data.document_type,
+        document_number: cleanDoc,
+        state_registration: data.state_registration || "ISENTO",
+        phone: data.phone,
+        plan_tier: "trial",
+        plan_status: "past_due", // past_due = aguardando pagamento da mensalidade
+      })
+      .select()
+      .single();
 
-    if (!rpcError && rpcResult?.success) {
-      orgData = rpcResult.organization;
-      profileData = rpcResult.user_profile;
-    } else {
-      // Fallback direto via tabelas caso a RPC ainda esteja pendente de sincronização
-      const accountCode = `EMP-${Math.floor(100000 + Math.random() * 900000)}`;
-
-      const { data: insertedOrg, error: insertOrgErr } = await supabaseAdmin
-        .from("organizations")
-        .insert({
-          code: accountCode,
-          trade_name: data.trade_name,
-          corporate_name: data.corporate_name || data.trade_name,
-          document_type: data.document_type,
-          document_number: cleanDoc,
-          state_registration: data.state_registration || "ISENTO",
-          phone: data.phone,
-          plan_tier: "trial",
-          plan_status: "active",
-        })
-        .select()
-        .single();
-
-      if (insertOrgErr) {
-        // Se as tabelas ainda não existirem no Supabase, loga o aviso com o código SQL
-        console.warn("Aviso: tabela 'organizations' ainda não criada no Supabase:", insertOrgErr.message);
-        return NextResponse.json({
-          success: true,
-          message: "Conta criada no Auth! Para ativar os dados multi-tenant, execute a migration no editor SQL do Supabase.",
-          user: {
-            id: userId,
-            email: data.email,
-            full_name: data.full_name,
-          },
-        });
-      }
-
-      const { data: insertedProfile } = await supabaseAdmin
-        .from("user_profiles")
-        .insert({
-          id: userId,
-          organization_id: insertedOrg.id,
-          full_name: data.full_name,
-          email: data.email,
-          phone: data.phone,
-          role: "master_admin",
-          is_master: true,
-          status: "active",
-        })
-        .select()
-        .single();
-
-      orgData = insertedOrg;
-      profileData = insertedProfile;
+    if (insertOrgErr) {
+      console.error("Erro ao criar organização:", insertOrgErr);
+      return NextResponse.json(
+        { success: false, error: `Erro ao criar empresa: ${insertOrgErr.message}` },
+        { status: 500 }
+      );
     }
+
+    const { data: insertedProfile, error: insertProfErr } = await supabaseAdmin
+      .from("user_profiles")
+      .insert({
+        id: userId,
+        organization_id: insertedOrg.id,
+        full_name: data.full_name,
+        email: data.email,
+        phone: data.phone,
+        role: "master_admin",
+        is_master: true,
+        status: "pending_confirmation", // Aguardando liberação após pagamento
+      })
+      .select()
+      .single();
+
+    if (insertProfErr) {
+      console.error("Erro ao criar perfil:", insertProfErr);
+    }
+
+    // Registra log de auditoria
+    await supabaseAdmin.from("auth_audit_logs").insert({
+      organization_id: insertedOrg.id,
+      user_id: userId,
+      event_type: "signup_master_pending",
+      ip_address: ipAddress,
+      user_agent: userAgent,
+      details: {
+        account_code: accountCode,
+        trade_name: data.trade_name,
+        status: "pending_confirmation",
+      },
+    });
 
     return NextResponse.json({
       success: true,
-      message: "Conta Mestra criada com sucesso!",
+      message: "Cadastro realizado com sucesso! Sua conta está aguardando liberação do administrador após a confirmação do pagamento da mensalidade.",
       data: {
-        organization: orgData,
-        user_profile: profileData,
+        organization: insertedOrg,
+        user_profile: insertedProfile,
+        isPendingApproval: true,
       },
     });
   } catch (error: any) {
