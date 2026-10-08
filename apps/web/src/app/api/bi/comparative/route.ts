@@ -206,12 +206,10 @@ export async function GET(req: NextRequest) {
         }
       }
 
-      // Se nenhum item foi encontrado no banco, usa fallback em memória
-      if (groups.length === 0) {
-        groups = MOCK_COMPARATIVE_DATA[platform] || [];
-      }
+      // Se o banco foi consultado com sucesso e não há registros, mantém vazio (não ressuscita mocks)
+      // O mock em memória só é usado caso ocorra erro real de conexão com o banco
     } else {
-      // Fallback em memória (inclui anúncios cadastrados ou capturados no Radar)
+      console.warn("[API BI Comparative] Erro ao consultar Supabase, utilizando fallback de demonstração:", myListingsError.message);
       groups = MOCK_COMPARATIVE_DATA[platform] || [];
     }
 

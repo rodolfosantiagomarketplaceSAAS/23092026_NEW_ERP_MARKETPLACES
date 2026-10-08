@@ -275,16 +275,16 @@ export async function removeCompetitorMatch(
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(competitorId);
 
     // Remove primeiro de listing_matches se houver
-    let matchQuery = supabase
-      .from("listing_matches")
-      .delete();
     if (isUuid) {
-      matchQuery = matchQuery.eq("competitor_listing_id", competitorId);
+      let matchQuery = supabase
+        .from("listing_matches")
+        .delete()
+        .eq("competitor_listing_id", competitorId);
+      if (userId) {
+        matchQuery = matchQuery.eq("user_id", userId);
+      }
+      await matchQuery;
     }
-    if (userId) {
-      matchQuery = matchQuery.eq("user_id", userId);
-    }
-    await matchQuery;
 
     // Remove também da tabela competitor_listings para não retornar no Radar
     let compQuery = supabase.from("competitor_listings").delete();
@@ -319,7 +319,8 @@ export async function removeCompetitorMatch(
           });
         }
         return group;
-      });
+      })
+      .filter((group) => group.my_listing.listing_type !== "radar" || group.competitors.length > 0);
   }
 
   return true;
@@ -336,6 +337,14 @@ export async function removeMyListing(myListingId: string, userId?: string | nul
     if (myListingId.startsWith("radar-")) {
       const compId = myListingId.replace(/^radar-/, "");
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(compId);
+      
+      // Remove vínculos em listing_matches primeiro
+      if (isUuid) {
+        let matchQ = supabase.from("listing_matches").delete().eq("competitor_listing_id", compId);
+        if (userId) matchQ = matchQ.eq("user_id", userId);
+        await matchQ;
+      }
+
       let query = supabase.from("competitor_listings").delete();
       if (isUuid) {
         query = query.eq("id", compId);
@@ -352,6 +361,14 @@ export async function removeMyListing(myListingId: string, userId?: string | nul
     } else {
       // Se for anúncio próprio cadastrado em my_listings
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(myListingId);
+
+      // Remove vínculos em listing_matches primeiro
+      if (isUuid) {
+        let matchQ = supabase.from("listing_matches").delete().eq("my_listing_id", myListingId);
+        if (userId) matchQ = matchQ.eq("user_id", userId);
+        await matchQ;
+      }
+
       let query = supabase.from("my_listings").delete();
       if (isUuid) {
         query = query.eq("id", myListingId);

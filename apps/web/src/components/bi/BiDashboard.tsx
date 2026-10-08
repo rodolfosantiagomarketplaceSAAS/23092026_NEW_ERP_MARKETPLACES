@@ -145,39 +145,47 @@ export function BiDashboard() {
 
       setData((prev) => {
         if (!prev) return prev;
-        const updatedItems = prev.items.map((group) => {
-          if (group.my_listing.id === myListingId) {
-            const updatedCompetitors = group.competitors.filter((c) => c.id !== competitorId);
-            const lowest =
-              updatedCompetitors.length > 0
-                ? Math.min(...updatedCompetitors.map((c) => c.current_price))
-                : null;
-            const diffBrl =
-              lowest !== null ? Number((group.my_listing.current_price - lowest).toFixed(2)) : null;
-            const diffPct =
-              lowest !== null && lowest > 0 && diffBrl !== null
-                ? Number(((diffBrl / lowest) * 100).toFixed(2))
-                : null;
-            const status =
-              lowest === null
-                ? "UNMATCHED"
-                : (diffBrl || 0) < 0
-                ? "WINNING"
-                : diffBrl === 0
-                ? "TIED"
-                : "LOSING";
+        const updatedItems = prev.items
+          .map((group) => {
+            if (group.my_listing.id === myListingId) {
+              const updatedCompetitors = group.competitors.filter((c) => c.id !== competitorId);
+              
+              // Se for um item de radar e todos os concorrentes foram removidos, remove o grupo
+              if (group.my_listing.listing_type === "radar" && updatedCompetitors.length === 0) {
+                return null;
+              }
 
-            return {
-              ...group,
-              competitors: updatedCompetitors,
-              lowest_competitor_price: lowest,
-              diff_brl: diffBrl,
-              diff_pct: diffPct,
-              status: status as any,
-            };
-          }
-          return group;
-        });
+              const lowest =
+                updatedCompetitors.length > 0
+                  ? Math.min(...updatedCompetitors.map((c) => c.current_price))
+                  : null;
+              const diffBrl =
+                lowest !== null ? Number((group.my_listing.current_price - lowest).toFixed(2)) : null;
+              const diffPct =
+                lowest !== null && lowest > 0 && diffBrl !== null
+                  ? Number(((diffBrl / lowest) * 100).toFixed(2))
+                  : null;
+              const status =
+                lowest === null
+                  ? "UNMATCHED"
+                  : (diffBrl || 0) < 0
+                  ? "WINNING"
+                  : diffBrl === 0
+                  ? "TIED"
+                  : "LOSING";
+
+              return {
+                ...group,
+                competitors: updatedCompetitors,
+                lowest_competitor_price: lowest,
+                diff_brl: diffBrl,
+                diff_pct: diffPct,
+                status: status as any,
+              };
+            }
+            return group;
+          })
+          .filter(Boolean) as ComparativeListingGroup[];
 
         const summary = {
           total_listings: updatedItems.length,

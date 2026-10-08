@@ -180,8 +180,18 @@ export function ComparativeTable({
           <tbody className="divide-y divide-[#E2E8F0]">
             {groups.length === 0 ? (
               <tr>
-                <td colSpan={9} className="py-8 text-center text-slate-400">
-                  Nenhum anúncio encontrado para os filtros selecionados.
+                <td colSpan={9} className="py-12 text-center">
+                  <div className="max-w-md mx-auto flex flex-col items-center justify-center space-y-2">
+                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-slate-400">
+                      <Radio className="w-5 h-5 text-slate-400" />
+                    </div>
+                    <p className="text-xs font-semibold text-slate-700">
+                      Nenhum anúncio monitorado no Radar de Mercado
+                    </p>
+                    <p className="text-[11px] text-slate-500 text-center leading-relaxed">
+                      Você pode utilizar a aba <strong>Pesquisa de Mercado</strong> para pesquisar produtos concorrentes e adicioná-los com 1-clique ao Radar, ou capturá-los via Extensão Web.
+                    </p>
+                  </div>
                 </td>
               </tr>
             ) : (
