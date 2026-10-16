@@ -54,7 +54,12 @@ export function ConfiguracoesDashboard() {
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
   const [showToken, setShowToken] = useState(false);
-  const [erpUrl, setErpUrl] = useState("http://localhost:3000");
+  const [erpUrl, setErpUrl] = useState(() => {
+    if (typeof window !== "undefined" && window.location.origin) {
+      return window.location.origin;
+    }
+    return "https://23092026-new-erp-marketplaces-web.vercel.app";
+  });
   const [apiToken, setApiToken] = useState(
     "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoiYXV0aGVudGljYXRlZCIsInVzZXJfaWQiOiJkZW1vLW1hc3Rlci11c2VyIiwiZXhwIjoyMTA1NzQ0OTI4fQ.crm-erp-token-demo"
   );
@@ -105,6 +110,9 @@ export function ConfiguracoesDashboard() {
   };
 
   useEffect(() => {
+    if (typeof window !== "undefined" && window.location.origin) {
+      setErpUrl(window.location.origin);
+    }
     loadIntegrations();
 
     // Feedback de retorno OAuth se houver parâmetros na URL
@@ -809,22 +817,39 @@ export function ConfiguracoesDashboard() {
                 </span>
               </div>
               <p className="text-[11px] text-slate-500">
-                Esta é a URL que deve ser inserida no campo <strong>URL da API / SaaS</strong> do popup da extensão.
+                Esta é a URL que deve ser inserida no campo <strong>URL da API / SaaS</strong> do popup da extensão:
               </p>
               <div className="flex items-center space-x-2">
                 <input
                   type="text"
                   value={erpUrl}
                   onChange={(e) => setErpUrl(e.target.value)}
-                  className="flex-1 bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 text-xs font-mono text-slate-800 focus:outline-hidden focus:border-sky-500"
+                  className="flex-1 bg-slate-50 border border-slate-300 rounded px-2.5 py-1.5 text-xs font-mono text-slate-800 focus:outline-hidden focus:border-sky-500 font-semibold"
                 />
                 <button
                   onClick={() => handleCopy(erpUrl, "url")}
-                  className="px-2.5 py-1.5 text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded flex items-center gap-1 transition-colors"
+                  className="px-2.5 py-1.5 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded flex items-center gap-1 transition-colors shadow-2xs"
                   title="Copiar URL"
                 >
-                  {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                  {copiedUrl ? <Check className="w-3.5 h-3.5 text-emerald-200" /> : <Copy className="w-3.5 h-3.5" />}
                   <span>{copiedUrl ? "Copiado!" : "Copiar"}</span>
+                </button>
+              </div>
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setErpUrl("https://23092026-new-erp-marketplaces-web.vercel.app")}
+                  className="text-[10px] text-indigo-600 hover:underline font-semibold"
+                >
+                  Usar URL Vercel (Produção)
+                </button>
+                <span className="text-slate-300">•</span>
+                <button
+                  type="button"
+                  onClick={() => setErpUrl("http://localhost:3000")}
+                  className="text-[10px] text-slate-500 hover:underline"
+                >
+                  Usar Localhost (Dev)
                 </button>
               </div>
             </div>

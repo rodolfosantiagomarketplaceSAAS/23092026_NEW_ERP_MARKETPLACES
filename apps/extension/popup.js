@@ -8,7 +8,7 @@
  */
 function normalizeErpUrl(rawUrl) {
   let url = (rawUrl || "").trim().replace(/\/+$/, "");
-  if (!url) return "http://localhost:3000";
+  if (!url) return "https://23092026-new-erp-marketplaces-web.vercel.app";
 
   // Se o usuário digitou sem protocolo (ex: crm-marketplaces.vercel.app)
   if (!url.startsWith("http://") && !url.startsWith("https://")) {

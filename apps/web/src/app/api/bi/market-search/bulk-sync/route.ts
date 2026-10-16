@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveSyncedSearch } from "@/lib/data/marketSearchStore";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import type { MarketSearchItem } from "@crm/types";
 
 export const dynamic = "force-dynamic";
@@ -34,8 +35,40 @@ export async function POST(req: NextRequest) {
 
     const cleanPlatform = (platform === "shopee" ? "shopee" : "mercadolivre") as "mercadolivre" | "shopee";
 
-    // Salva no store compartilhado do ERP
+    // Salva no store em memória
     saveSyncedSearch(query, cleanPlatform, items as MarketSearchItem[]);
+
+    // Persiste também no Supabase para suportar ambientes Serverless na nuvem (Vercel)
+    try {
+      const supabase = createSupabaseAdminClient();
+      const { data: users } = await supabase.from("products").select("user_id").limit(1);
+      const userId = users && users.length > 0 ? users[0].user_id : "00000000-0000-0000-0000-000000000000";
+
+      const records = (items as MarketSearchItem[]).slice(0, 60).map((item) => ({
+        user_id: userId,
+        platform: cleanPlatform,
+        external_id: item.external_id,
+        seller_name: item.seller_name || "Vendedor do Marketplace",
+        seller_reputation: item.seller_reputation || "platinum",
+        title: item.title,
+        current_price: Number(item.current_price) || 0,
+        original_price: item.original_price ? Number(item.original_price) : null,
+        shipping_type: item.shipping_type || "padrao",
+        promo_badge: item.promo_badge || null,
+        permalink: item.permalink || "",
+        thumbnail_url: item.thumbnail_url || null,
+        sales_count_approx: item.sales_count_approx || 0,
+        rating: item.rating || 4.8,
+        last_scraped_at: new Date().toISOString(),
+      }));
+
+      await supabase.from("competitor_listings").upsert(records, {
+        onConflict: "user_id, platform, external_id",
+        ignoreDuplicates: false,
+      });
+    } catch (dbErr) {
+      console.warn("Aviso: falha ao persistir busca no Supabase:", dbErr);
+    }
 
     return NextResponse.json(
       {

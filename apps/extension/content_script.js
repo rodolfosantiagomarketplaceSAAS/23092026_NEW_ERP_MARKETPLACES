@@ -1058,7 +1058,10 @@
 
         chrome.storage.local.get(["erpUrl"], (localData) => {
           chrome.storage.sync.get(["erpUrl"], async (syncData) => {
-            let rawUrl = (localData?.erpUrl || syncData?.erpUrl || "http://localhost:3000").trim().replace(/\/+$/, "");
+            let rawUrl = (localData?.erpUrl || syncData?.erpUrl || "").trim().replace(/\/+$/, "");
+            if (!rawUrl || rawUrl === "http://localhost:3000") {
+              rawUrl = "https://23092026-new-erp-marketplaces-web.vercel.app";
+            }
             let erpUrl = rawUrl;
             if (!erpUrl.startsWith("http://") && !erpUrl.startsWith("https://")) erpUrl = `https://${erpUrl}`;
 
