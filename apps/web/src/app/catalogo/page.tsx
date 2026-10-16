@@ -61,7 +61,7 @@ export default async function CatalogoPage() {
             shipping: m.shipping_type || "Padrão",
             listing_type: m.listing_type || "gold_special",
             thumbnail: m.thumbnail_url,
-            permalink: m.permalink,
+            permalink: m.permalink || (m.external_id ? `https://produto.mercadolivre.com.br/${m.external_id}` : ""),
             status: m.status || "active",
             sold_quantity: m.sold_quantity || 0,
             available_quantity: m.available_quantity || 0,
