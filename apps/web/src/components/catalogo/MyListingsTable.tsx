@@ -13,8 +13,8 @@ import {
   Sparkles,
   Search,
   Filter,
+  Package,
 } from "lucide-react";
-import { MarketplacePrice } from "@/components/bi/MarketplacePrice";
 
 export interface MyListingItem {
   id: string;
@@ -44,7 +44,28 @@ export interface MyListingItem {
   }>;
 }
 
-// Estrutura agrupada para exibir exatamente como no Mercado Livre
+export interface VariationChannelOption {
+  externalId: string;
+  permalink?: string;
+  price: number;
+  originalPrice?: number | null;
+  sku?: string | null;
+  stock: number;
+  sold: number;
+  shipping: string;
+  status: string;
+}
+
+export interface GroupedVariation {
+  id: string | number;
+  name: string;
+  sku?: string | null;
+  totalStock: number;
+  classicOption?: VariationChannelOption;
+  premiumOption?: VariationChannelOption;
+}
+
+// Estrutura agrupada hierárquica para exibir produtos, variações e canais Clássico e Premium
 export interface GroupedProduct {
   groupKey: string;
   title: string;
@@ -55,18 +76,12 @@ export interface GroupedProduct {
   minPrice: number;
   maxPrice: number;
   hasBothChannels: boolean;
-  classicListing?: MyListingItem;
-  premiumListing?: MyListingItem;
-  variationsList: Array<{
-    name: string;
-    sku?: string | null;
-    stock: number;
-    classicPrice?: number;
-    premiumPrice?: number;
-    classicSold?: number;
-    premiumSold?: number;
-  }>;
+  hasClassic: boolean;
+  hasPremium: boolean;
   allListings: MyListingItem[];
+  classicListings: MyListingItem[];
+  premiumListings: MyListingItem[];
+  variationsList: GroupedVariation[];
 }
 
 interface ListingsTableProps {
@@ -81,14 +96,14 @@ function getListingUrl(item?: MyListingItem | null): string | undefined {
   return undefined;
 }
 
-// Normaliza o título para agrupar Clássico e Premium do mesmo produto
+// Normaliza o agrupador para unir Clássico e Premium do mesmo produto
 function getProductGroupKey(item: MyListingItem): string {
   if (item.sku && item.sku !== "SEM-SKU" && item.sku !== "") {
-    // Se o SKU terminar com -C ou -P ou similar, agrupa pelo SKU base
+    // Se o SKU possuir sufixo de clássico/premium (-C, -P, etc), agrupa pela raiz
     const baseSku = item.sku.replace(/[-_](classico|premium|cl|pr|c|p)$/i, "").trim();
     if (baseSku.length >= 3) return `sku:${baseSku.toLowerCase()}`;
   }
-  // Agrupa pelo título limpo (removendo variações de clássico/premium)
+  // Agrupa pelo título limpo (removendo tags de clássico/premium)
   const cleanTitle = item.title
     .toLowerCase()
     .replace(/\b(clássico|classico|premium|sem juros)\b/gi, "")
@@ -101,13 +116,16 @@ export function MyListingsTable({ items }: ListingsTableProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
 
-  // Agrupa os anúncios pelo Produto Real (juntando Clássico e Premium em 1 único bloco pai)
+  // Agrupa os anúncios pelo Produto Mestre (juntando Clássico e Premium e suas respectivas variações)
   const groupedProducts = useMemo(() => {
     const map = new Map<string, GroupedProduct>();
 
     items.forEach((item) => {
       const key = getProductGroupKey(item);
-      const isPrem = item.listing_type?.includes("gold_pro") || item.listing_type?.includes("premium") || item.title.toLowerCase().includes("premium");
+      const isPrem =
+        item.listing_type?.includes("gold_pro") ||
+        item.listing_type?.includes("premium") ||
+        item.title.toLowerCase().includes("premium");
 
       let group = map.get(key);
       if (!group) {
@@ -121,55 +139,84 @@ export function MyListingsTable({ items }: ListingsTableProps) {
           minPrice: item.price,
           maxPrice: item.price,
           hasBothChannels: false,
-          variationsList: [],
+          hasClassic: false,
+          hasPremium: false,
           allListings: [],
+          classicListings: [],
+          premiumListings: [],
+          variationsList: [],
         };
         map.set(key, group);
       }
 
       group.allListings.push(item);
+      if (isPrem) {
+        group.premiumListings.push(item);
+      } else {
+        group.classicListings.push(item);
+      }
+
+      // Estatísticas consolidadas do produto pai
       group.totalStock += item.available_quantity || 0;
       group.totalSold += item.sold_quantity || 0;
       group.minPrice = Math.min(group.minPrice, item.price);
       group.maxPrice = Math.max(group.maxPrice, item.price);
 
-      if (isPrem) {
-        group.premiumListing = item;
-      } else {
-        group.classicListing = item;
+      if (!group.thumbnail && item.thumbnail) {
+        group.thumbnail = item.thumbnail;
       }
 
-      // Processar variações filhas
+      // Processar variações nativas filhas (caso existam no anúncio)
       if (Array.isArray(item.variations) && item.variations.length > 0) {
         item.variations.forEach((v) => {
-          let existingVar = group?.variationsList.find((ev) => ev.name.toLowerCase() === v.name.toLowerCase());
+          const varName = (v.name || `Variação ${v.id}`).trim();
+          let existingVar = group?.variationsList.find(
+            (ev) => ev.name.toLowerCase() === varName.toLowerCase()
+          );
+
           if (!existingVar) {
             existingVar = {
-              name: v.name,
+              id: v.id,
+              name: varName,
               sku: v.sku || item.sku,
-              stock: v.available_quantity || 0,
+              totalStock: 0,
             };
             group?.variationsList.push(existingVar);
           }
+
+          existingVar.totalStock += v.available_quantity || 0;
+
+          const channelOpt: VariationChannelOption = {
+            externalId: item.external_id,
+            permalink: getListingUrl(item),
+            price: Number(v.price || item.price || 0),
+            originalPrice: v.original_price ? Number(v.original_price) : null,
+            sku: v.sku || item.sku,
+            stock: Number(v.available_quantity || 0),
+            sold: Number(v.sold_quantity || 0),
+            shipping: item.shipping,
+            status: item.status,
+          };
+
           if (isPrem) {
-            existingVar.premiumPrice = v.price;
-            existingVar.premiumSold = v.sold_quantity;
+            existingVar.premiumOption = channelOpt;
           } else {
-            existingVar.classicPrice = v.price;
-            existingVar.classicSold = v.sold_quantity;
+            existingVar.classicOption = channelOpt;
           }
         });
       }
     });
 
     map.forEach((g) => {
-      g.hasBothChannels = !!(g.classicListing && g.premiumListing);
+      g.hasClassic = g.classicListings.length > 0;
+      g.hasPremium = g.premiumListings.length > 0;
+      g.hasBothChannels = g.hasClassic && g.hasPremium;
     });
 
     return Array.from(map.values());
   }, [items]);
 
-  // Estado de expansão (por padrão aberto para visualização rica como no ML)
+  // Estado de expansão (por padrão aberto para visualização rica como no painel do ML)
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() => {
     const init: Record<string, boolean> = {};
     groupedProducts.forEach((g) => {
@@ -268,11 +315,13 @@ export function MyListingsTable({ items }: ListingsTableProps) {
           <tbody className="divide-y divide-slate-100">
             {filteredGroups.map((group) => {
               const isExpanded = !!expandedGroups[group.groupKey];
-              const hasSubRows = group.variationsList.length > 0 || group.hasBothChannels;
+              const hasVariations = group.variationsList.length > 0;
+              const hasMultipleListings = group.allListings.length > 1;
+              const hasSubRows = hasVariations || hasMultipleListings || group.hasBothChannels;
 
               return (
                 <React.Fragment key={group.groupKey}>
-                  {/* LINHA PAI: PRODUTO PRINCIPAL (EXATAMENTE COMO NO PAINEL DO MERCADO LIVRE) */}
+                  {/* LINHA PAI: PRODUTO PRINCIPAL CONSOLIDADO */}
                   <tr className="bg-white hover:bg-slate-50/70 border-t border-slate-200 transition-colors">
                     {/* Botão de Expansão */}
                     <td className="py-3 px-2 text-center align-top">
@@ -281,7 +330,7 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                           type="button"
                           onClick={() => toggleGroup(group.groupKey)}
                           className="p-1 text-slate-400 hover:text-sky-700 hover:bg-sky-50 rounded transition-colors"
-                          title={isExpanded ? "Recolher opções" : "Expandir opções e variações"}
+                          title={isExpanded ? "Recolher variações e opções de venda" : "Expandir variações e opções de venda"}
                         >
                           {isExpanded ? (
                             <ChevronDown className="w-4 h-4 text-sky-600" />
@@ -292,7 +341,7 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                       ) : null}
                     </td>
 
-                    {/* Foto, Título Pai, Estoque Total */}
+                    {/* Foto, Título Pai, Lista de MLBs, SKU e Estoque Total */}
                     <td className="py-3 px-3 align-top">
                       {(() => {
                         const mainItem = group.allListings[0];
@@ -349,6 +398,7 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                               <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-1.5 mt-1">
                                 {group.allListings.map((l, lIdx) => {
                                   const itemUrl = getListingUrl(l);
+                                  const isLPro = l.listing_type?.includes("gold_pro") || l.listing_type?.includes("premium");
                                   return (
                                     <React.Fragment key={l.id}>
                                       {itemUrl ? (
@@ -356,11 +406,15 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                           href={itemUrl}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="text-slate-500 hover:text-sky-600 hover:underline font-mono text-[10px] inline-flex items-center gap-0.5 group/mlb"
-                                          title={`Abrir #${l.external_id} no Mercado Livre`}
+                                          className={`font-mono text-[10px] inline-flex items-center gap-0.5 hover:underline ${
+                                            isLPro
+                                              ? "text-amber-700 hover:text-amber-800"
+                                              : "text-sky-700 hover:text-sky-800"
+                                          }`}
+                                          title={`Abrir #${l.external_id} (${isLPro ? "Premium" : "Clássico"}) no Mercado Livre`}
                                         >
                                           <span>#{l.external_id}</span>
-                                          <ExternalLink className="w-2.5 h-2.5 text-slate-400 group-hover/mlb:text-sky-600 opacity-60 group-hover/mlb:opacity-100" />
+                                          <ExternalLink className="w-2.5 h-2.5 opacity-70" />
                                         </a>
                                       ) : (
                                         <span className="text-slate-400 font-mono text-[10px]">
@@ -387,7 +441,7 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                       })()}
                     </td>
 
-                    {/* Faixa de Preço do Produto */}
+                    {/* Faixa de Preço Consolidada */}
                     <td className="py-3 px-3 align-top font-bold text-slate-900 text-xs">
                       {group.minPrice === group.maxPrice ? (
                         <span>R$ {group.minPrice.toFixed(2).replace(".", ",")}</span>
@@ -399,15 +453,21 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                       )}
                     </td>
 
-                    {/* Modalidades presentes no anúncio pai */}
+                    {/* Modalidades de Venda Disponíveis */}
                     <td className="py-3 px-3 align-top">
-                      <span className="font-bold text-slate-800 text-[11px]">
-                        {group.hasBothChannels
-                          ? "Clássico e Premium"
-                          : group.premiumListing
-                          ? "Premium"
-                          : "Clássico"}
-                      </span>
+                      {group.hasBothChannels ? (
+                        <span className="inline-flex items-center gap-1 font-bold text-slate-800 text-[11px] bg-slate-100 border border-slate-200 px-2 py-0.5 rounded">
+                          Clássico e Premium
+                        </span>
+                      ) : group.hasPremium ? (
+                        <span className="inline-flex items-center gap-1 font-bold text-amber-900 text-[11px] bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                          Premium
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1 font-bold text-sky-900 text-[11px] bg-sky-50 border border-sky-200 px-2 py-0.5 rounded">
+                          Clássico
+                        </span>
+                      )}
                     </td>
 
                     {/* Vendas Totais */}
@@ -447,91 +507,69 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                     </td>
                   </tr>
 
-                  {/* SUB-LINHAS ESTRUTURADAS (VARIAÇÕES ESPECÍFICAS: BRILHO, FOSCO, ETC) */}
+                  {/* ========================================================================= */}
+                  {/* CASO 1: O PRODUTO POSSUI VARIAÇÕES NATIVAS (Ex: Modelos, Cores, Medidas) */}
+                  {/* Cada variação aparece com suas 2 opções de venda (Clássico e Premium)     */}
+                  {/* NÃO repete o título na variação!                                         */}
+                  {/* ========================================================================= */}
                   {isExpanded &&
+                    hasVariations &&
                     group.variationsList.map((v, vIdx) => {
-                      const premUrl = getListingUrl(group.premiumListing) || getListingUrl(group.allListings[0]);
-                      const classicUrl = getListingUrl(group.classicListing) || getListingUrl(group.allListings[0]);
-
                       return (
-                        <React.Fragment key={`${group.groupKey}-v-${vIdx}`}>
-                          {/* Opção Premium da Variação */}
-                          {v.premiumPrice !== undefined && (
-                            <tr className="bg-slate-50/70 border-l-4 border-l-amber-500 hover:bg-slate-100/60 transition-colors">
-                              <td className="py-2 px-2 text-center text-slate-400">↳</td>
-                              <td className="py-2.5 px-3 pl-8">
-                                {premUrl ? (
-                                  <a
-                                    href={premUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="font-bold text-slate-800 text-xs hover:text-amber-700 hover:underline inline-flex items-center gap-1 group/varlink"
-                                    title="Abrir anúncio oficial no Mercado Livre"
-                                  >
-                                    <span>{v.name}</span>
-                                    <ExternalLink className="w-3 h-3 text-slate-400 group-hover/varlink:text-amber-700 shrink-0 opacity-70 group-hover/varlink:opacity-100 transition-opacity" />
-                                  </a>
-                                ) : (
-                                  <div className="font-bold text-slate-800 text-xs">{v.name}</div>
-                                )}
-                                <div className="text-[10px] text-slate-500 flex items-center gap-2 mt-0.5">
-                                  <span>
-                                    SKU: <code className="font-bold text-slate-700">{v.sku || group.sku}</code>
-                                  </span>
-                                  <span>•</span>
-                                  <span>Estoque: {v.stock} un.</span>
-                                </div>
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                R$ {v.premiumPrice.toFixed(2).replace(".", ",")}
-                              </td>
-                              <td className="py-2.5 px-3">
-                                <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
-                                  Premium (Sem Juros)
+                        <React.Fragment key={`${group.groupKey}-var-${vIdx}`}>
+                          {/* LINHA DE IDENTIFICAÇÃO DA VARIAÇÃO */}
+                          <tr className="bg-slate-100/80 border-l-4 border-l-slate-400 border-t border-slate-200">
+                            <td className="py-1.5 px-2 text-center text-slate-400 font-bold">↳</td>
+                            <td colSpan={7} className="py-1.5 px-3">
+                              <div className="flex items-center gap-2">
+                                <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-white text-slate-900 font-bold text-xs border border-slate-300 shadow-2xs">
+                                  <Layers className="w-3.5 h-3.5 text-slate-600" />
+                                  <span>Variação: {v.name}</span>
                                 </span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[11px] text-slate-600">
-                                {v.premiumSold ? `${v.premiumSold} un.` : "-"}
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">FULL</td>
-                              <td className="py-2.5 px-3 text-center">
-                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-                                  Disponível
+                                <span className="text-[11px] text-slate-500">
+                                  SKU: <code className="font-semibold text-slate-700">{v.sku || group.sku}</code>
                                 </span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-400">Variação Ativa</td>
-                            </tr>
-                          )}
+                                <span className="text-slate-300">•</span>
+                                <span className="text-[11px] font-semibold text-slate-700">
+                                  Estoque da Variação: {v.totalStock} un.
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
 
-                          {/* Opção Clássica da Variação */}
-                          {v.classicPrice !== undefined && (
-                            <tr className="bg-slate-50/50 border-l-4 border-l-sky-500 hover:bg-slate-100/60 transition-colors">
-                              <td className="py-2 px-2 text-center text-slate-400">↳</td>
+                          {/* OPÇÃO DE VENDA CLÁSSICO DA VARIAÇÃO */}
+                          {v.classicOption && (
+                            <tr className="bg-slate-50/60 border-l-4 border-l-sky-500 hover:bg-slate-100/70 transition-colors">
+                              <td className="py-2 px-2 text-center text-sky-400 text-xs">↳</td>
                               <td className="py-2.5 px-3 pl-8">
-                                {classicUrl ? (
-                                  <a
-                                    href={classicUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="font-bold text-slate-800 text-xs hover:text-sky-700 hover:underline inline-flex items-center gap-1 group/varlink"
-                                    title="Abrir anúncio oficial no Mercado Livre"
-                                  >
-                                    <span>{v.name}</span>
-                                    <ExternalLink className="w-3 h-3 text-slate-400 group-hover/varlink:text-sky-700 shrink-0 opacity-70 group-hover/varlink:opacity-100 transition-opacity" />
-                                  </a>
-                                ) : (
-                                  <div className="font-bold text-slate-800 text-xs">{v.name}</div>
-                                )}
-                                <div className="text-[10px] text-slate-500 flex items-center gap-2 mt-0.5">
-                                  <span>
-                                    SKU: <code className="font-bold text-slate-700">{v.sku || group.sku}</code>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-bold text-sky-800 bg-sky-50 border border-sky-300 px-2 py-0.5 rounded">
+                                    Opção Clássico
                                   </span>
-                                  <span>•</span>
-                                  <span>Estoque: {v.stock} un.</span>
+                                  {v.classicOption.permalink ? (
+                                    <a
+                                      href={v.classicOption.permalink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="font-mono text-[11px] font-semibold text-slate-700 hover:text-sky-600 hover:underline inline-flex items-center gap-1"
+                                      title="Abrir anúncio oficial Clássico no Mercado Livre"
+                                    >
+                                      <span>#{v.classicOption.externalId}</span>
+                                      <ExternalLink className="w-2.5 h-2.5 text-slate-400" />
+                                    </a>
+                                  ) : (
+                                    <span className="font-mono text-[11px] text-slate-500">
+                                      #{v.classicOption.externalId}
+                                    </span>
+                                  )}
+                                  <span className="text-slate-300">•</span>
+                                  <span className="text-[10px] text-slate-500">
+                                    Estoque: {v.classicOption.stock} un.
+                                  </span>
                                 </div>
                               </td>
                               <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                R$ {v.classicPrice.toFixed(2).replace(".", ",")}
+                                R$ {v.classicOption.price.toFixed(2).replace(".", ",")}
                               </td>
                               <td className="py-2.5 px-3">
                                 <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded">
@@ -539,117 +577,257 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                 </span>
                               </td>
                               <td className="py-2.5 px-3 text-center text-[11px] text-slate-600">
-                                {v.classicSold ? `${v.classicSold} un.` : "-"}
+                                {v.classicOption.sold ? `${v.classicOption.sold} un.` : "-"}
                               </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">Padrão</td>
+                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">
+                                {v.classicOption.shipping === "ml_full" ? "⚡ FULL" : "Padrão"}
+                              </td>
                               <td className="py-2.5 px-3 text-center">
                                 <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-                                  Disponível
+                                  {v.classicOption.status === "active" ? "Ativo" : "Pausado"}
                                 </span>
                               </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-400">Variação Ativa</td>
+                              <td className="py-2.5 px-3 text-center">
+                                {v.classicOption.permalink && (
+                                  <a
+                                    href={v.classicOption.permalink}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[10px] font-semibold text-sky-700 hover:text-sky-900 hover:underline"
+                                  >
+                                    Abrir no ML ↗
+                                  </a>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+
+                          {/* OPÇÃO DE VENDA PREMIUM DA VARIAÇÃO */}
+                          {v.premiumOption && (
+                            <tr className="bg-slate-50/80 border-l-4 border-l-amber-500 hover:bg-slate-100/70 transition-colors">
+                              <td className="py-2 px-2 text-center text-amber-500 text-xs">↳</td>
+                              <td className="py-2.5 px-3 pl-8">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
+                                    Opção Premium
+                                  </span>
+                                  {v.premiumOption.permalink ? (
+                                    <a
+                                      href={v.premiumOption.permalink}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="font-mono text-[11px] font-semibold text-slate-700 hover:text-amber-700 hover:underline inline-flex items-center gap-1"
+                                      title="Abrir anúncio oficial Premium no Mercado Livre"
+                                    >
+                                      <span>#{v.premiumOption.externalId}</span>
+                                      <ExternalLink className="w-2.5 h-2.5 text-slate-400" />
+                                    </a>
+                                  ) : (
+                                    <span className="font-mono text-[11px] text-slate-500">
+                                      #{v.premiumOption.externalId}
+                                    </span>
+                                  )}
+                                  <span className="text-slate-300">•</span>
+                                  <span className="text-[10px] text-slate-500">
+                                    Estoque: {v.premiumOption.stock} un.
+                                  </span>
+                                </div>
+                              </td>
+                              <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
+                                R$ {v.premiumOption.price.toFixed(2).replace(".", ",")}
+                              </td>
+                              <td className="py-2.5 px-3">
+                                <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
+                                  Premium (Sem Juros)
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-[11px] text-slate-600">
+                                {v.premiumOption.sold ? `${v.premiumOption.sold} un.` : "-"}
+                              </td>
+                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">
+                                {v.premiumOption.shipping === "ml_full" ? "⚡ FULL" : "Padrão"}
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
+                                  {v.premiumOption.status === "active" ? "Ativo" : "Pausado"}
+                                </span>
+                              </td>
+                              <td className="py-2.5 px-3 text-center">
+                                {v.premiumOption.permalink && (
+                                  <a
+                                    href={v.premiumOption.permalink}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[10px] font-semibold text-amber-700 hover:text-amber-900 hover:underline"
+                                  >
+                                    Abrir no ML ↗
+                                  </a>
+                                )}
+                              </td>
                             </tr>
                           )}
                         </React.Fragment>
                       );
                     })}
 
-                  {/* CASO NÃO TENHA VARIAÇÕES MAS TENHA ANÚNCIO CLÁSSICO E PREMIUM DO MESMO PRODUTO */}
-                  {isExpanded &&
-                    group.variationsList.length === 0 &&
-                    group.hasBothChannels && (
-                      <>
-                        {group.premiumListing && (() => {
-                          const premUrl = getListingUrl(group.premiumListing);
-                          return (
-                            <tr className="bg-slate-50/70 border-l-4 border-l-amber-500 hover:bg-slate-100/60 transition-colors">
-                              <td className="py-2 px-2 text-center text-slate-400">↳</td>
-                              <td className="py-2.5 px-3 pl-8 text-xs font-semibold text-slate-800">
-                                {premUrl ? (
-                                  <a
-                                    href={premUrl}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="hover:text-amber-700 hover:underline inline-flex items-center gap-1 group/sublink"
-                                    title="Abrir anúncio Premium no Mercado Livre"
-                                  >
-                                    <span>{group.premiumListing.title}</span>
-                                    <ExternalLink className="w-3 h-3 text-slate-400 group-hover/sublink:text-amber-700 shrink-0 opacity-70 group-hover/sublink:opacity-100 transition-opacity" />
-                                  </a>
-                                ) : (
-                                  group.premiumListing.title
-                                )}
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                R$ {group.premiumListing.price.toFixed(2).replace(".", ",")}
-                              </td>
-                              <td className="py-2.5 px-3">
-                                <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
-                                  Premium (Sem Juros)
+                  {/* ========================================================================= */}
+                  {/* CASO 2: O PRODUTO NÃO TEM VARIAÇÕES NATIVAS, MAS TEM SUAS OPÇÕES DE VENDA */}
+                  {/* (CLÁSSICO E PREMIUM) CADASTRADAS NO MERCADO LIVRE (Ex: Byd Song Plus)      */}
+                  {/* NÃO repete o título na sub-linha! Mostra a opção de venda limpa e direta   */}
+                  {/* ========================================================================= */}
+                  {isExpanded && !hasVariations && hasSubRows && (
+                    <>
+                      {/* OPÇÃO(ÕES) CLÁSSICO */}
+                      {group.classicListings.map((cListing) => {
+                        const classicUrl = getListingUrl(cListing);
+                        return (
+                          <tr
+                            key={`classic-${cListing.id}`}
+                            className="bg-slate-50/60 border-l-4 border-l-sky-500 hover:bg-slate-100/70 transition-colors"
+                          >
+                            <td className="py-2 px-2 text-center text-sky-500 text-xs">↳</td>
+                            <td className="py-2.5 px-3 pl-8">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-sky-800 bg-sky-50 border border-sky-300 px-2 py-0.5 rounded">
+                                  Opção Clássico
                                 </span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[11px] text-slate-600">
-                                {group.premiumListing.sold_quantity || 0} un.
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">
-                                {group.premiumListing.shipping === "ml_full" ? "FULL" : "Padrão"}
-                              </td>
-                              <td className="py-2.5 px-3 text-center">
-                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-                                  Ativo
-                                </span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-400">Opção Premium</td>
-                            </tr>
-                          );
-                        })()}
-
-                        {group.classicListing && (() => {
-                          const classicUrl = getListingUrl(group.classicListing);
-                          return (
-                            <tr className="bg-slate-50/50 border-l-4 border-l-sky-500 hover:bg-slate-100/60 transition-colors">
-                              <td className="py-2 px-2 text-center text-slate-400">↳</td>
-                              <td className="py-2.5 px-3 pl-8 text-xs font-semibold text-slate-800">
                                 {classicUrl ? (
                                   <a
                                     href={classicUrl}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="hover:text-sky-700 hover:underline inline-flex items-center gap-1 group/sublink"
-                                    title="Abrir anúncio Clássico no Mercado Livre"
+                                    className="font-mono text-xs font-semibold text-slate-800 hover:text-sky-700 hover:underline inline-flex items-center gap-1 group/itemlink"
+                                    title="Abrir anúncio oficial Clássico no Mercado Livre"
                                   >
-                                    <span>{group.classicListing.title}</span>
-                                    <ExternalLink className="w-3 h-3 text-slate-400 group-hover/sublink:text-sky-700 shrink-0 opacity-70 group-hover/sublink:opacity-100 transition-opacity" />
+                                    <span>#{cListing.external_id}</span>
+                                    <ExternalLink className="w-3 h-3 text-slate-400 group-hover/itemlink:text-sky-600" />
                                   </a>
                                 ) : (
-                                  group.classicListing.title
+                                  <span className="font-mono text-xs text-slate-600">
+                                    #{cListing.external_id}
+                                  </span>
                                 )}
-                              </td>
-                              <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                R$ {group.classicListing.price.toFixed(2).replace(".", ",")}
-                              </td>
-                              <td className="py-2.5 px-3">
-                                <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded">
-                                  Clássico
+                                <span className="text-slate-300">•</span>
+                                <span className="text-[11px] text-slate-500">
+                                  SKU: <code className="font-bold text-slate-700">{cListing.sku || group.sku}</code>
                                 </span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[11px] text-slate-600">
-                                {group.classicListing.sold_quantity || 0} un.
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">
-                                {group.classicListing.shipping === "ml_full" ? "FULL" : "Padrão"}
-                              </td>
-                              <td className="py-2.5 px-3 text-center">
-                                <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
-                                  Ativo
+                                <span className="text-slate-300">•</span>
+                                <span className="text-[11px] font-medium text-slate-600">
+                                  Estoque: {cListing.available_quantity || 0} un.
                                 </span>
-                              </td>
-                              <td className="py-2.5 px-3 text-center text-[10px] text-slate-400">Opção Clássico</td>
-                            </tr>
-                          );
-                        })()}
-                      </>
-                    )}
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
+                              R$ {cListing.price.toFixed(2).replace(".", ",")}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded">
+                                Clássico
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center text-[11px] text-slate-600">
+                              {cListing.sold_quantity || 0} un.
+                            </td>
+                            <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">
+                              {cListing.shipping === "ml_full" ? "⚡ FULL" : "Padrão"}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
+                                {cListing.status === "active" ? "Ativo" : "Pausado"}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {classicUrl && (
+                                <a
+                                  href={classicUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] font-semibold text-sky-700 hover:text-sky-900 hover:underline"
+                                >
+                                  Abrir no ML ↗
+                                </a>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                      {/* OPÇÃO(ÕES) PREMIUM */}
+                      {group.premiumListings.map((pListing) => {
+                        const premUrl = getListingUrl(pListing);
+                        return (
+                          <tr
+                            key={`premium-${pListing.id}`}
+                            className="bg-slate-50/80 border-l-4 border-l-amber-500 hover:bg-slate-100/70 transition-colors"
+                          >
+                            <td className="py-2 px-2 text-center text-amber-500 text-xs">↳</td>
+                            <td className="py-2.5 px-3 pl-8">
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
+                                  Opção Premium
+                                </span>
+                                {premUrl ? (
+                                  <a
+                                    href={premUrl}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="font-mono text-xs font-semibold text-slate-800 hover:text-amber-700 hover:underline inline-flex items-center gap-1 group/itemlink"
+                                    title="Abrir anúncio oficial Premium no Mercado Livre"
+                                  >
+                                    <span>#{pListing.external_id}</span>
+                                    <ExternalLink className="w-3 h-3 text-slate-400 group-hover/itemlink:text-amber-600" />
+                                  </a>
+                                ) : (
+                                  <span className="font-mono text-xs text-slate-600">
+                                    #{pListing.external_id}
+                                  </span>
+                                )}
+                                <span className="text-slate-300">•</span>
+                                <span className="text-[11px] text-slate-500">
+                                  SKU: <code className="font-bold text-slate-700">{pListing.sku || group.sku}</code>
+                                </span>
+                                <span className="text-slate-300">•</span>
+                                <span className="text-[11px] font-medium text-slate-600">
+                                  Estoque: {pListing.available_quantity || 0} un.
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
+                              R$ {pListing.price.toFixed(2).replace(".", ",")}
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
+                                Premium (Sem Juros)
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center text-[11px] text-slate-600">
+                              {pListing.sold_quantity || 0} un.
+                            </td>
+                            <td className="py-2.5 px-3 text-center text-[10px] text-slate-600 font-medium">
+                              {pListing.shipping === "ml_full" ? "⚡ FULL" : "Padrão"}
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span className="text-[10px] text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-100">
+                                {pListing.status === "active" ? "Ativo" : "Pausado"}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              {premUrl && (
+                                <a
+                                  href={premUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-[10px] font-semibold text-amber-700 hover:text-amber-900 hover:underline"
+                                >
+                                  Abrir no ML ↗
+                                </a>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </>
+                  )}
                 </React.Fragment>
               );
             })}
