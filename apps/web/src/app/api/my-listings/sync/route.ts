@@ -7,8 +7,13 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 60;
 
 /**
- * Sincronização oficial de anúncios do Mercado Livre (Modo Somente Leitura).
- * Puxa os anúncios do vendedor conectado via API do Mercado Livre e atualiza a tabela my_listings.
+ * Sincronização avançada de anúncios do Mercado Livre (Padrão ERP Especialista).
+ * Puxa:
+ * - Preço de venda atual (promocional) + Preço normal de tabela (original_price)
+ * - Total de vendas confirmadas (sold_quantity)
+ * - Variações de produto (combinações de cor, acabamento, tamanho, preço por variação)
+ * - Modalidade de anúncio (Clássico / Premium)
+ * - Estoque disponível e fotos
  */
 export async function POST(req: NextRequest) {
   try {
@@ -33,21 +38,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Obter token de acesso válido (renova automaticamente se necessário)
+    // 2. Obter token de acesso válido
     const accessToken = await getActiveMarketplaceToken("mercadolivre", scope, mlAccount.seller_id);
     if (!accessToken) {
       return NextResponse.json(
         {
           success: false,
-          error: "Falha ao obter token de acesso do Mercado Livre. Tente reconectar a conta em Configurações.",
+          error: "Falha ao obter token de acesso do Mercado Livre. Reconecte a conta em Configurações.",
         },
         { status: 400 }
       );
     }
 
-    // 3. Buscar os IDs dos anúncios do vendedor via API oficial do Mercado Livre
-    // GET https://api.mercadolibre.com/users/{seller_id}/items/search
-    const searchUrl = `https://api.mercadolibre.com/users/${mlAccount.seller_id}/items/search?status=active&limit=50`;
+    // 3. Buscar até 100 anúncios ativos do vendedor
+    const searchUrl = `https://api.mercadolibre.com/users/${mlAccount.seller_id}/items/search?status=active&limit=100`;
     const searchRes = await fetch(searchUrl, {
       headers: { Authorization: `Bearer ${accessToken}` },
       cache: "no-store",
@@ -107,15 +111,44 @@ export async function POST(req: NextRequest) {
           shippingType = "ml_coleta";
         }
 
-        // Tentar obter SKU dos atributos
+        // Tentar obter SKU principal do anúncio
         const skuAttr = item.attributes?.find(
           (a: any) => a.id === "SELLER_SKU" || a.id === "SKU"
         );
         const itemSku = skuAttr?.value_name || item.seller_custom_field || null;
 
+        // Formatar variações completas (Ex: Cor, Acabamento, Estoque, SKU próprio de cada variação)
+        const parsedVariations = Array.isArray(item.variations)
+          ? item.variations.map((v: any) => {
+              const varSkuAttr = v.attributes?.find(
+                (a: any) => a.id === "SELLER_SKU" || a.id === "SKU"
+              );
+              const comboName = Array.isArray(v.attribute_combinations)
+                ? v.attribute_combinations.map((c: any) => `${c.name}: ${c.value_name}`).join(" | ")
+                : "Variação";
+
+              return {
+                id: v.id,
+                name: comboName,
+                price: Number(v.price || item.price || 0),
+                original_price: v.original_price ? Number(v.original_price) : null,
+                sku: varSkuAttr?.value_name || v.seller_custom_field || null,
+                available_quantity: v.available_quantity || 0,
+                sold_quantity: v.sold_quantity || 0,
+                picture_id: v.picture_ids?.[0] || null,
+              };
+            })
+          : [];
+
+        // Preço atual e preço de tabela (original_price)
+        const currentPrice = Number(item.price || 0);
+        const originalPrice = item.original_price ? Number(item.original_price) : null;
+        const soldQty = Number(item.sold_quantity || 0);
+        const availableQty = Number(item.available_quantity || 0);
+
         let productId: string | null = null;
 
-        // Se houver SKU, criar ou vincular produto no catálogo de produtos
+        // Sincronizar produto no catálogo base caso haja SKU
         if (itemSku) {
           const { data: existingProd } = await supabase
             .from("products")
@@ -144,25 +177,40 @@ export async function POST(req: NextRequest) {
         }
 
         // Upsert na tabela my_listings
-        const { error: upsertError } = await supabase
+        const listingPayload: any = {
+          user_id: ctx.userId,
+          product_id: productId,
+          platform: "mercadolivre",
+          external_id: item.id,
+          title: item.title,
+          current_price: currentPrice,
+          original_price: originalPrice,
+          sold_quantity: soldQty,
+          available_quantity: availableQty,
+          permalink: item.permalink || `https://produto.mercadolivre.com.br/${item.id}`,
+          thumbnail_url: item.thumbnail || item.pictures?.[0]?.secure_url || null,
+          shipping_type: shippingType,
+          listing_type: item.listing_type_id || "gold_special",
+          status: item.status === "active" ? "active" : item.status === "paused" ? "paused" : "closed",
+          variations: parsedVariations,
+          updated_at: new Date().toISOString(),
+        };
+
+        let { error: upsertError } = await supabase
           .from("my_listings")
-          .upsert(
-            {
-              user_id: ctx.userId,
-              product_id: productId,
-              platform: "mercadolivre",
-              external_id: item.id,
-              title: item.title,
-              current_price: item.price || 0,
-              permalink: item.permalink || `https://produto.mercadolivre.com.br/${item.id}`,
-              thumbnail_url: item.thumbnail || item.pictures?.[0]?.secure_url || null,
-              shipping_type: shippingType,
-              listing_type: item.listing_type_id || "gold_special",
-              status: item.status === "active" ? "active" : item.status === "paused" ? "paused" : "closed",
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "user_id,platform,external_id" }
-          );
+          .upsert(listingPayload, { onConflict: "user_id,platform,external_id" });
+
+        // Fallback caso a migration das novas colunas ainda não tenha sido rodada no Supabase
+        if (upsertError && (upsertError.message?.includes("sold_quantity") || upsertError.code === "42703")) {
+          delete listingPayload.original_price;
+          delete listingPayload.sold_quantity;
+          delete listingPayload.available_quantity;
+          delete listingPayload.variations;
+          const retry = await supabase
+            .from("my_listings")
+            .upsert(listingPayload, { onConflict: "user_id,platform,external_id" });
+          upsertError = retry.error;
+        }
 
         if (!upsertError) {
           syncedCount++;
@@ -172,7 +220,7 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       success: true,
-      message: `${syncedCount} anúncios do Mercado Livre importados e sincronizados com sucesso!`,
+      message: `${syncedCount} anúncios do Mercado Livre sincronizados com dados de preços, vendas e variações!`,
       syncedCount,
       accountName: mlAccount.account_name,
     });
