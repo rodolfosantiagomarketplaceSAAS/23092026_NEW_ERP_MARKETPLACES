@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Search,
   SlidersHorizontal,
@@ -24,6 +24,10 @@ import {
   Layers,
   Sparkles,
   Settings,
+  Filter,
+  ArrowUpDown,
+  RotateCcw,
+  X,
 } from "lucide-react";
 import type {
   MarketSearchItem,
@@ -57,6 +61,14 @@ export function MarketSearchSubTab() {
   const [minPrice, setMinPrice] = useState<string>("");
   const [maxPrice, setMaxPrice] = useState<string>("");
   const [showAdvancedFilters, setShowAdvancedFilters] = useState(false);
+
+  // Filtros Interativos por Coluna da Tabela (Profissional ERP)
+  const [colChannel, setColChannel] = useState<"all" | "mercadolivre" | "shopee">("all");
+  const [colSearch, setColSearch] = useState<string>("");
+  const [colShipping, setColShipping] = useState<"all" | "full_flex" | "free" | "padrao">("all");
+  const [colCampaign, setColCampaign] = useState<"all" | "only_campaign">("all");
+  const [colSellerRep, setColSellerRep] = useState<"all" | "platinum" | "gold">("all");
+  const [colPriceOrder, setColPriceOrder] = useState<"default" | "asc" | "desc">("default");
 
   // Estados de Dados
   const [loading, setLoading] = useState(false);
@@ -102,6 +114,64 @@ export function MarketSearchSubTab() {
       setLoading(false);
     }
   }, [query, platform, limit, sort, campaignOnly, topRatedOnly, fastShippingOnly, freeShippingOnly, minPrice, maxPrice]);
+
+  // Itens filtrados em tempo real pelas colunas
+  const filteredItems = useMemo(() => {
+    if (!data?.items) return [];
+    let list = [...data.items];
+
+    if (colChannel !== "all") {
+      list = list.filter((i) => i.platform === colChannel);
+    }
+    if (colSearch.trim()) {
+      const q = colSearch.toLowerCase();
+      list = list.filter(
+        (i) =>
+          i.title.toLowerCase().includes(q) ||
+          i.external_id.toLowerCase().includes(q) ||
+          i.seller_name.toLowerCase().includes(q)
+      );
+    }
+    if (colShipping === "full_flex") {
+      list = list.filter((i) => i.is_full_or_flex);
+    } else if (colShipping === "free") {
+      list = list.filter((i) => i.is_free_shipping);
+    } else if (colShipping === "padrao") {
+      list = list.filter((i) => !i.is_full_or_flex && !i.is_free_shipping);
+    }
+    if (colCampaign === "only_campaign") {
+      list = list.filter((i) => Boolean(i.promo_badge || i.discount_pct));
+    }
+    if (colSellerRep === "platinum") {
+      list = list.filter((i) => i.seller_reputation?.toLowerCase().includes("platinum"));
+    } else if (colSellerRep === "gold") {
+      list = list.filter((i) => i.seller_reputation?.toLowerCase().includes("gold"));
+    }
+    if (colPriceOrder === "asc") {
+      list.sort((a, b) => a.current_price - b.current_price);
+    } else if (colPriceOrder === "desc") {
+      list.sort((a, b) => b.current_price - a.current_price);
+    }
+
+    return list;
+  }, [data?.items, colChannel, colSearch, colShipping, colCampaign, colSellerRep, colPriceOrder]);
+
+  const hasActiveColFilters =
+    colChannel !== "all" ||
+    colSearch.trim() !== "" ||
+    colShipping !== "all" ||
+    colCampaign !== "all" ||
+    colSellerRep !== "all" ||
+    colPriceOrder !== "default";
+
+  const clearColFilters = () => {
+    setColChannel("all");
+    setColSearch("");
+    setColShipping("all");
+    setColCampaign("all");
+    setColSellerRep("all");
+    setColPriceOrder("default");
+  };
 
   // Carrega busca padrão inicial ou lê query params caso venha da extensão
   useEffect(() => {
@@ -780,15 +850,29 @@ export function MarketSearchSubTab() {
       <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
         <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
           <div>
-            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Anúncios Encontrados no Mercado ({data?.items.length || 0})
+            <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+              <span>Anúncios Encontrados no Mercado</span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                {hasActiveColFilters ? `${filteredItems.length} de ${data?.items.length || 0}` : `${data?.items.length || 0}`}
+              </span>
             </h3>
             <p className="text-[11px] text-slate-500">
-              Dados extraídos e normalizados para o termo pesquisado com análises de preço, frete e campanha
+              Dados de concorrência extraídos e normalizados com filtros interativos por coluna
             </p>
           </div>
-          <div className="text-xs text-slate-500">
-            Atualizado em tempo real
+          <div className="flex items-center gap-2">
+            {hasActiveColFilters && (
+              <button
+                type="button"
+                onClick={clearColFilters}
+                className="px-2.5 py-1 text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg transition"
+              >
+                Limpar Filtros das Colunas
+              </button>
+            )}
+            <div className="text-xs text-slate-500">
+              Atualizado em tempo real
+            </div>
           </div>
         </div>
 
@@ -810,13 +894,10 @@ export function MarketSearchSubTab() {
 
             <div className="space-y-1.5">
               <h3 className="text-sm font-bold text-slate-900">
-                Coleta ao Vivo Necessária para &quot;{query}&quot;
+                Nenhum anúncio localizado para &quot;{query}&quot;
               </h3>
               <p className="text-xs text-slate-600 leading-relaxed">
-                O Mercado Livre bloqueia varreduras automáticas de robôs/servidores em nuvem (erro 403 da API de busca pública de terceiros). Sua loja <strong>já está vinculada com sucesso</strong> e seus anúncios próprios estão sincronizados no menu Catálogo.
-              </p>
-              <p className="text-[11px] text-slate-500">
-                Para extrair dados reais de concorrentes deste nicho sem bloqueios de IP, realize a coleta direta pelo seu navegador com 1 clique:
+                A busca automática via API oficial consultou o catálogo de produtos e anúncios ativos do Mercado Livre. Se este termo for muito específico ou não possuir produtos ativos no catálogo, você também pode abrir a busca no navegador:
               </p>
             </div>
 
@@ -848,14 +929,6 @@ export function MarketSearchSubTab() {
                 <span>Extensão Chrome & Configurações</span>
               </a>
             </div>
-
-            {/* Dica de Funcionamento */}
-            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-left flex items-start gap-2.5 text-[11px] text-slate-600">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              <div>
-                <strong className="text-slate-800">Como funciona:</strong> Ao abrir a pesquisa no Mercado Livre pelo navegador com a <strong>Extensão Chrome</strong> ativa, ela injeta a barra de sincronização no topo. Basta 1 clique em &quot;Sincronizar no ERP&quot; para enviar 50+ anúncios reais para este painel.
-              </div>
-            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -871,18 +944,137 @@ export function MarketSearchSubTab() {
                   <th className="py-3 px-3 text-center">Avaliação / Vendas</th>
                   <th className="py-3 px-4 text-right">Ações de Inteligência</th>
                 </tr>
+                {/* Linha Interativa de Filtros por Coluna */}
+                <tr className="bg-slate-100/70 border-b border-slate-200">
+                  {/* Filtro Canal */}
+                  <th className="py-2 px-3">
+                    <select
+                      value={colChannel}
+                      onChange={(e) => setColChannel(e.target.value as any)}
+                      className="w-full text-[11px] font-medium py-1 px-1 bg-white border border-slate-200 rounded text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                    >
+                      <option value="all">Todos</option>
+                      <option value="mercadolivre">Mercado Livre</option>
+                      <option value="shopee">Shopee</option>
+                    </select>
+                  </th>
+
+                  {/* Filtro Busca Anúncio/Vendedor/ID */}
+                  <th className="py-2 px-3">
+                    <input
+                      type="text"
+                      placeholder="Filtrar por título, ID ou vendedor..."
+                      value={colSearch}
+                      onChange={(e) => setColSearch(e.target.value)}
+                      className="w-full text-[11px] font-medium py-1 px-2 bg-white border border-slate-200 rounded text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                    />
+                  </th>
+
+                  {/* Ordenação Preço Atual */}
+                  <th className="py-2 px-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (colPriceOrder === "default") setColPriceOrder("asc");
+                        else if (colPriceOrder === "asc") setColPriceOrder("desc");
+                        else setColPriceOrder("default");
+                      }}
+                      className={`inline-flex items-center gap-1 text-[11px] font-semibold py-1 px-2 rounded border transition ${
+                        colPriceOrder !== "default"
+                          ? "bg-indigo-50 border-indigo-300 text-indigo-700 font-bold"
+                          : "bg-white border-slate-200 text-slate-600 hover:bg-slate-50"
+                      }`}
+                      title="Clique para alternar ordenação por preço"
+                    >
+                      {colPriceOrder === "asc" ? "Menor ↑" : colPriceOrder === "desc" ? "Maior ↓" : "Preço ↕"}
+                    </button>
+                  </th>
+
+                  {/* Filtro Desconto & Campanha */}
+                  <th className="py-2 px-3 text-center">
+                    <select
+                      value={colCampaign}
+                      onChange={(e) => setColCampaign(e.target.value as any)}
+                      className="w-full text-[11px] font-medium py-1 px-1 bg-white border border-slate-200 rounded text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                    >
+                      <option value="all">Todas Ofertas</option>
+                      <option value="only_campaign">Só Promo / Desconto</option>
+                    </select>
+                  </th>
+
+                  {/* Filtro Vendedor & Reputação */}
+                  <th className="py-2 px-3">
+                    <select
+                      value={colSellerRep}
+                      onChange={(e) => setColSellerRep(e.target.value as any)}
+                      className="w-full text-[11px] font-medium py-1 px-1 bg-white border border-slate-200 rounded text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                    >
+                      <option value="all">Todas Lojas</option>
+                      <option value="platinum">Platinum</option>
+                      <option value="gold">Gold</option>
+                    </select>
+                  </th>
+
+                  {/* Filtro Envio / Logística */}
+                  <th className="py-2 px-3 text-center">
+                    <select
+                      value={colShipping}
+                      onChange={(e) => setColShipping(e.target.value as any)}
+                      className="w-full text-[11px] font-medium py-1 px-1 bg-white border border-slate-200 rounded text-slate-700 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                    >
+                      <option value="all">Todos Envios</option>
+                      <option value="full_flex">Full & Flex</option>
+                      <option value="free">Frete Grátis</option>
+                      <option value="padrao">Padrão</option>
+                    </select>
+                  </th>
+
+                  {/* Avaliação */}
+                  <th className="py-2 px-3 text-center text-[10px] text-slate-400 font-normal">
+                    4.0★+
+                  </th>
+
+                  {/* Ações */}
+                  <th className="py-2 px-4 text-right">
+                    {hasActiveColFilters && (
+                      <button
+                        type="button"
+                        onClick={clearColFilters}
+                        className="text-[10px] font-bold text-rose-600 hover:text-rose-800 bg-white border border-rose-200 hover:bg-rose-50 px-2 py-1 rounded transition"
+                      >
+                        Limpar
+                      </button>
+                    )}
+                  </th>
+                </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs">
-                {data.items.map((item) => {
-                  const isML = item.platform === "mercadolivre";
-                  return (
-                    <tr
-                      key={item.id}
-                      className="hover:bg-slate-50/70 transition-colors group"
-                    >
-                      {/* Badge do Marketplace */}
-                      <td className="py-3.5 px-4 align-top">
-                        <span
+                {filteredItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="py-12 text-center text-slate-500">
+                      <p className="text-xs font-semibold text-slate-700">
+                        Nenhum anúncio corresponde aos filtros selecionados nas colunas.
+                      </p>
+                      <button
+                        type="button"
+                        onClick={clearColFilters}
+                        className="mt-2 inline-flex items-center gap-1 px-3 py-1 bg-indigo-50 text-indigo-700 font-bold text-xs rounded-lg hover:bg-indigo-100 transition"
+                      >
+                        Limpar Filtros de Coluna
+                      </button>
+                    </td>
+                  </tr>
+                ) : (
+                  filteredItems.map((item) => {
+                    const isML = item.platform === "mercadolivre";
+                    return (
+                      <tr
+                        key={item.id}
+                        className="hover:bg-slate-50/70 transition-colors group"
+                      >
+                        {/* Badge do Marketplace */}
+                        <td className="py-3.5 px-4 align-top">
+                          <span
                           className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
                             isML
                               ? "bg-[#FFE600]/80 text-slate-900 border border-yellow-300"
@@ -1077,7 +1269,7 @@ export function MarketSearchSubTab() {
                       </td>
                     </tr>
                   );
-                })}
+                }))}
               </tbody>
             </table>
           </div>
