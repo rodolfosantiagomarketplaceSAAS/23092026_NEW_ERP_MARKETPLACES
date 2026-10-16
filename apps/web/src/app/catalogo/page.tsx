@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { MarketplacePrice } from "@/components/bi/MarketplacePrice";
+import { SyncMyListingsButton } from "@/components/catalogo/SyncMyListingsButton";
 
 export const dynamic = "force-dynamic";
 
@@ -114,7 +115,8 @@ export default async function CatalogoPage() {
                 Gerencie exclusivamente os anúncios oficiais cadastrados da sua loja integrados nos marketplaces.
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <SyncMyListingsButton />
               <Link
                 href="/inteligencia"
                 className="px-3 py-1.5 text-xs font-semibold bg-sky-600 hover:bg-sky-700 text-white rounded flex items-center gap-1.5 shadow-2xs transition-colors"

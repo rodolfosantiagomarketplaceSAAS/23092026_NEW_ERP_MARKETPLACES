@@ -17,34 +17,40 @@ interface HeaderProps {
 }
 
 export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
-  const [selectedOrg, setSelectedOrg] = useState("Sem Loja Vinculada");
+  const [selectedOrg, setSelectedOrg] = useState("Carregando loja...");
   const [hasConnectedChannel, setHasConnectedChannel] = useState(false);
 
   useEffect(() => {
-    try {
-      const ml = localStorage.getItem("erp_ml_integration");
-      const shp = localStorage.getItem("erp_shopee_integration");
-      if (ml) {
-        const parsed = JSON.parse(ml);
-        if (parsed.connected && parsed.accountName) {
-          setSelectedOrg(parsed.accountName);
-          setHasConnectedChannel(true);
-          return;
+    let isMounted = true;
+    async function checkIntegrations() {
+      try {
+        const res = await fetch("/api/integrations");
+        if (res.ok) {
+          const data = await res.json();
+          const activeMl = data.mercadolivre?.accounts?.find((a: any) => a.status === "online");
+          if (activeMl && isMounted) {
+            setSelectedOrg(activeMl.account_name || "Mercado Livre");
+            setHasConnectedChannel(true);
+            return;
+          }
+          if (data.shopee?.connected && isMounted) {
+            setSelectedOrg(data.shopee.account_name || "Shopee Oficial");
+            setHasConnectedChannel(true);
+            return;
+          }
         }
+      } catch {
+        // Ignora
       }
-      if (shp) {
-        const parsed = JSON.parse(shp);
-        if (parsed.connected && parsed.shopId) {
-          setSelectedOrg(`Shopee: ${parsed.shopId}`);
-          setHasConnectedChannel(true);
-          return;
-        }
+      if (isMounted) {
+        setSelectedOrg("Sem Loja Vinculada");
+        setHasConnectedChannel(false);
       }
-      setSelectedOrg("Sem Loja Vinculada");
-      setHasConnectedChannel(false);
-    } catch {
-      // Ignora
     }
+    checkIntegrations();
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
   return (
