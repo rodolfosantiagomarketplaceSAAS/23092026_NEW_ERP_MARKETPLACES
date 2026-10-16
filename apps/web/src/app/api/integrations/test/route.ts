@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getAuthContext } from "@/lib/auth/context";
 import { getActiveMarketplaceToken, validateMercadoLivreToken } from "@/lib/services/marketplaceIntegrations";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const ctx = await getAuthContext();
+  if (!ctx) return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
+  const scope = { userId: ctx.userId, organizationId: ctx.organizationId };
+
   try {
-    const { platform } = await req.json();
+    const { platform, sellerId } = await req.json();
 
     if (platform === "mercadolivre") {
-      const token = await getActiveMarketplaceToken("mercadolivre");
+      const token = await getActiveMarketplaceToken("mercadolivre", scope, sellerId);
       if (!token) {
         return NextResponse.json(
-          { success: false, error: "Nenhum token ou conta ativa do Mercado Livre encontrada." },
+          { success: false, error: "Conta não encontrada ou autorização expirada. Reconecte a conta do Mercado Livre." },
           { status: 400 }
         );
       }
@@ -29,7 +34,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (platform === "shopee") {
-      const token = await getActiveMarketplaceToken("shopee");
+      const token = await getActiveMarketplaceToken("shopee", scope);
       if (!token) {
         return NextResponse.json(
           { success: false, error: "Nenhum token ou credencial ativa da Shopee encontrada." },

@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { canManageIntegrations, getAuthContext } from "@/lib/auth/context";
 import { saveMarketplaceIntegration } from "@/lib/services/marketplaceIntegrations";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
+  const ctx = await getAuthContext();
+  if (!ctx) return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
+  if (!canManageIntegrations(ctx)) {
+    return NextResponse.json({ success: false, error: "Sem permissão para gerenciar integrações." }, { status: 403 });
+  }
+
   try {
     const body = await req.json();
     const { shopId, partnerId, partnerKey, accessToken, accountName } = body;
@@ -18,7 +25,7 @@ export async function POST(req: NextRequest) {
     const cleanShopId = (shopId || partnerId || "SHP_STORE").toString().trim();
     const storeName = accountName?.trim() || `Loja Shopee #${cleanShopId}`;
 
-    const saved = await saveMarketplaceIntegration({
+    const saved = await saveMarketplaceIntegration({ userId: ctx.userId, organizationId: ctx.organizationId }, {
       platform: "shopee",
       account_name: storeName,
       seller_id: cleanShopId,

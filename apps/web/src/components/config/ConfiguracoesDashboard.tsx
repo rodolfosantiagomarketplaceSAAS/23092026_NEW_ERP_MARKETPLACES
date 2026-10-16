@@ -26,6 +26,27 @@ import {
   AlertCircle,
 } from "lucide-react";
 
+interface MlAccount {
+  id: string;
+  account_name: string;
+  seller_id: string;
+  status: "online" | "expired" | "reauth_required";
+  metadata?: { reputation?: string; email?: string };
+}
+
+const ML_OAUTH_ERRORS: Record<string, string> = {
+  ml_nao_configurado: "A integração com o Mercado Livre ainda não foi configurada no servidor (ML_CLIENT_ID / ML_CLIENT_SECRET / ML_REDIRECT_URI).",
+  autorizacao_negada: "Você cancelou ou negou a autorização no Mercado Livre.",
+  callback_invalido: "Retorno inválido do Mercado Livre. Tente novamente.",
+  sessao_oauth_expirada: "A solicitação de conexão expirou (10 min). Clique em Conectar novamente.",
+  state_invalido: "Falha na verificação de segurança (state). Tente novamente.",
+  sessao_divergente: "Sua sessão do ERP mudou durante a autorização. Faça login e tente novamente.",
+  conta_divergente: "A conta retornada pelo Mercado Livre não confere. Tente novamente.",
+  codigo_expirado: "O código de autorização expirou ou já foi usado. Tente novamente.",
+  falha_token: "O Mercado Livre recusou a troca do código. Verifique Client ID, Secret, Redirect URI e PKCE no DevCenter.",
+  sem_permissao: "Apenas administradores podem conectar contas de marketplace.",
+};
+
 export function ConfiguracoesDashboard() {
   const [activeTab, setActiveTab] = useState<"api" | "marketplaces" | "reprice" | "database">("marketplaces");
 
@@ -41,20 +62,14 @@ export function ConfiguracoesDashboard() {
     status: "idle",
   });
 
-  // Estados de Conexão das Contas de Marketplaces (Padrão Tiny / Bling)
-  const [mlConnected, setMlConnected] = useState(false);
-  const [mlAccountName, setMlAccountName] = useState("");
-  const [mlSellerId, setMlSellerId] = useState("");
-  const [mlReputation, setMlReputation] = useState("platinum");
-  const [mlEmail, setMlEmail] = useState("");
-  const [mlAccessToken, setMlAccessToken] = useState("");
-  const [mlAppId, setMlAppId] = useState("");
-  const [mlSecretKey, setMlSecretKey] = useState("");
+  // Contas do Mercado Livre (OAuth oficial, multi-conta por empresa - padrão Bling / Tiny)
+  const [mlAccounts, setMlAccounts] = useState<MlAccount[]>([]);
+  const [mlOauthConfigured, setMlOauthConfigured] = useState(true);
   const [mlShippingType, setMlShippingType] = useState("FULL + FLEX (Híbrido)");
-  const [mlConnectionMode, setMlConnectionMode] = useState<"oauth" | "token">("oauth");
   const [mlConnecting, setMlConnecting] = useState(false);
-  const [mlTesting, setMlTesting] = useState(false);
-  const [mlTestFeedback, setMlTestFeedback] = useState<{ type: "success" | "error"; msg: string } | null>(null);
+  const [mlTestingId, setMlTestingId] = useState<string | null>(null);
+  const [mlTestFeedback, setMlTestFeedback] = useState<{ id: string; type: "success" | "error"; msg: string } | null>(null);
+  const mlConnected = mlAccounts.some((a) => a.status === "online");
 
   const [shopeeConnected, setShopeeConnected] = useState(false);
   const [shopeeAccountName, setShopeeAccountName] = useState("");
@@ -73,15 +88,8 @@ export function ConfiguracoesDashboard() {
       const res = await fetch("/api/integrations");
       if (res.ok) {
         const data = await res.json();
-        if (data.mercadolivre && data.mercadolivre.connected) {
-          setMlConnected(true);
-          setMlAccountName(data.mercadolivre.account_name || "Loja Mercado Livre");
-          setMlSellerId(data.mercadolivre.seller_id || "");
-          setMlReputation(data.mercadolivre.metadata?.reputation || "platinum");
-          setMlEmail(data.mercadolivre.metadata?.email || "");
-        } else {
-          setMlConnected(false);
-        }
+        setMlAccounts(data.mercadolivre?.accounts ?? []);
+        setMlOauthConfigured(data.mercadolivre?.oauthConfigured !== false);
 
         if (data.shopee && data.shopee.connected) {
           setShopeeConnected(true);
@@ -107,7 +115,8 @@ export function ConfiguracoesDashboard() {
         window.history.replaceState({}, document.title, window.location.pathname + "?tab=marketplaces");
       }
       if (sp.get("error")) {
-        alert(`❌ Erro na autorização: ${sp.get("error")}`);
+        const code = sp.get("error") || "";
+        alert(`❌ Erro na autorização: ${ML_OAUTH_ERRORS[code] || "Falha ao conectar. Tente novamente."}`);
         window.history.replaceState({}, document.title, window.location.pathname + "?tab=marketplaces");
       }
     }
@@ -142,108 +151,55 @@ export function ConfiguracoesDashboard() {
     alert("Novo Token de Acesso gerado! Lembre-se de atualizá-lo no popup da extensão Chrome.");
   };
 
-  // OAuth 1-Clique Mercado Livre (Padrão Tiny/Bling)
-  const handleOAuthConnectML = async () => {
+  // OAuth oficial Mercado Livre (padrão Bling / Tiny): o servidor gera state + PKCE e redireciona
+  const handleOAuthConnectML = () => {
     setMlConnecting(true);
-    try {
-      const res = await fetch("/api/integrations/mercadolivre/auth-url");
-      const json = await res.json();
-      if (json.hasOauthConfig && json.authUrl) {
-        window.location.href = json.authUrl;
-      } else {
-        setMlConnectionMode("token");
-        alert(
-          "💡 Para autorização 1-clique via OAuth Oficial, você pode colar seu Access Token no modo 'Conexão Direta (Token)' abaixo ou configurar seu App ID no arquivo .env."
-        );
-      }
-    } catch {
-      setMlConnectionMode("token");
-    } finally {
-      setMlConnecting(false);
-    }
+    window.location.href = "/api/integrations/mercadolivre/authorize";
   };
 
-  // Conectar ML com Access Token ou App ID/Secret
-  const handleTokenConnectML = async () => {
-    if (!mlAccessToken.trim() && !mlAppId.trim()) {
-      alert("Por favor, cole seu Token de Acesso (Access Token) ou informe seu App ID.");
-      return;
-    }
-    setMlConnecting(true);
-    setMlTestFeedback(null);
-    try {
-      const res = await fetch("/api/integrations/mercadolivre/connect", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          accessToken: mlAccessToken.trim(),
-          appId: mlAppId.trim(),
-          secretKey: mlSecretKey.trim(),
-          accountName: mlAccountName.trim(),
-        }),
-      });
-
-      const json = await res.json();
-      if (res.ok && json.success) {
-        setMlConnected(true);
-        setMlAccountName(json.account.account_name);
-        setMlSellerId(json.account.seller_id);
-        setMlReputation(json.account.metadata?.reputation || "platinum");
-        setMlAccessToken("");
-        alert(`✅ ${json.message}`);
-        loadIntegrations();
-      } else {
-        alert(`❌ Erro: ${json.error || "Falha na validação do token"}`);
-      }
-    } catch (err: any) {
-      alert(`❌ Erro de conexão: ${err.message}`);
-    } finally {
-      setMlConnecting(false);
-    }
-  };
-
-  // Testar Conexão ML em tempo real (Ping)
-  const handleTestML = async () => {
-    setMlTesting(true);
+  // Testar conexão de uma conta ML específica
+  const handleTestML = async (account: MlAccount) => {
+    setMlTestingId(account.id);
     setMlTestFeedback(null);
     try {
       const res = await fetch("/api/integrations/test", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: "mercadolivre" }),
+        body: JSON.stringify({ platform: "mercadolivre", sellerId: account.seller_id }),
       });
       const json = await res.json();
-      if (res.ok && json.success) {
-        setMlTestFeedback({ type: "success", msg: json.message });
-      } else {
-        setMlTestFeedback({ type: "error", msg: json.error || "Erro ao testar canal." });
-      }
+      setMlTestFeedback({
+        id: account.id,
+        type: res.ok && json.success ? "success" : "error",
+        msg: json.message || json.error || "Erro ao testar canal.",
+      });
+      if (!res.ok) loadIntegrations();
     } catch {
-      setMlTestFeedback({ type: "error", msg: "Falha de comunicação com o servidor do ERP." });
+      setMlTestFeedback({ id: account.id, type: "error", msg: "Falha de comunicação com o servidor do ERP." });
     } finally {
-      setMlTesting(false);
+      setMlTestingId(null);
     }
   };
 
-  // Desconectar ML (1-Clique)
-  const handleDisconnectML = async () => {
-    if (confirm("Deseja realmente desconectar a conta do Mercado Livre? A sincronização em tempo real será pausada.")) {
-      try {
-        const res = await fetch("/api/integrations/disconnect", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ platform: "mercadolivre" }),
-        });
-        if (res.ok) {
-          setMlConnected(false);
-          setMlAccountName("");
-          setMlSellerId("");
-          setMlTestFeedback(null);
-          alert("Conta do Mercado Livre desconectada com sucesso!");
-        }
-      } catch (err) {
-        console.error(err);
+  // Desconectar uma conta ML específica
+  const handleDisconnectML = async (account: MlAccount) => {
+    if (!confirm(`Deseja desconectar a conta "${account.account_name}" do Mercado Livre? A sincronização será pausada.`)) return;
+    try {
+      const res = await fetch("/api/integrations/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: "mercadolivre", integrationId: account.id }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setMlTestFeedback(null);
+        await loadIntegrations();
+        alert("Conta desconectada. Para revogar o acesso também no Mercado Livre, acesse Minha conta > Segurança > Aplicativos conectados.");
+      } else {
+        alert(`❌ ${json.error || "Falha ao desconectar."}`);
       }
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -460,29 +416,102 @@ export function ConfiguracoesDashboard() {
                 )}
               </div>
 
-              {mlConnected ? (
-                /* Estado Conectado ML (Padrão Tiny / Bling) */
-                <div className="space-y-3.5 text-xs">
-                  <div className="bg-gradient-to-br from-emerald-50/60 to-slate-50 border border-emerald-100 p-3.5 rounded-lg space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-semibold text-slate-500">Loja Conectada:</span>
-                      <span className="text-[10px] bg-emerald-600 text-white font-bold px-2 py-0.5 rounded-full uppercase">
-                        {mlReputation || "Platinum"}
-                      </span>
-                    </div>
-                    <div className="font-bold text-slate-900 text-sm flex items-center gap-2">
-                      <Store className="w-4 h-4 text-emerald-600" />
-                      <span>{mlAccountName}</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 pt-1 border-t border-emerald-100/60">
-                      <div>
-                        ID Vendedor: <code className="font-bold text-slate-800">{mlSellerId}</code>
+              {mlAccounts.length > 0 && (
+                <div className="space-y-2.5 text-xs">
+                  {mlAccounts.map((account) => {
+                    const needsReauth = account.status === "reauth_required";
+                    const feedback = mlTestFeedback?.id === account.id ? mlTestFeedback : null;
+                    return (
+                      <div
+                        key={account.id}
+                        className={`border p-3.5 rounded-lg space-y-2 ${
+                          needsReauth
+                            ? "bg-amber-50/70 border-amber-200"
+                            : "bg-gradient-to-br from-emerald-50/60 to-slate-50 border-emerald-100"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="font-bold text-slate-900 text-sm flex items-center gap-2 min-w-0">
+                            <Store className={`w-4 h-4 shrink-0 ${needsReauth ? "text-amber-600" : "text-emerald-600"}`} />
+                            <span className="truncate">{account.account_name}</span>
+                          </div>
+                          {needsReauth ? (
+                            <span className="text-[10px] bg-amber-500 text-white font-bold px-2 py-0.5 rounded-full shrink-0">
+                              Reautorizar
+                            </span>
+                          ) : (
+                            <span className="text-[10px] bg-emerald-600 text-white font-bold px-2 py-0.5 rounded-full uppercase shrink-0">
+                              {account.metadata?.reputation?.replace(/^\d+_/, "") || "Ativa"}
+                            </span>
+                          )}
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-[11px] text-slate-600 pt-1 border-t border-emerald-100/60">
+                          <div>
+                            ID Vendedor: <code className="font-bold text-slate-800">{account.seller_id}</code>
+                          </div>
+                          <div>
+                            Tokens: <span className="text-emerald-700 font-semibold">AES-256 + renovação automática</span>
+                          </div>
+                        </div>
+
+                        {needsReauth && (
+                          <p className="text-[11px] text-amber-800">
+                            A autorização desta conta expirou ou foi revogada no Mercado Livre. Reconecte para retomar a sincronização.
+                          </p>
+                        )}
+
+                        {feedback && (
+                          <div
+                            className={`p-2.5 rounded-lg text-xs flex items-center gap-2 ${
+                              feedback.type === "success"
+                                ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
+                                : "bg-red-50 border border-red-200 text-red-800"
+                            }`}
+                          >
+                            {feedback.type === "success" ? (
+                              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            ) : (
+                              <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                            )}
+                            <span>{feedback.msg}</span>
+                          </div>
+                        )}
+
+                        <div className="pt-1 flex items-center justify-between gap-2">
+                          {needsReauth ? (
+                            <button
+                              type="button"
+                              onClick={handleOAuthConnectML}
+                              disabled={mlConnecting || !mlOauthConfigured}
+                              className="px-3 py-1.5 bg-[#FFE600] hover:bg-[#F0D800] text-slate-950 rounded-lg text-xs font-bold flex items-center gap-1.5 transition disabled:opacity-60"
+                            >
+                              <Zap className="w-3.5 h-3.5 fill-slate-950" />
+                              <span>Reconectar</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => handleTestML(account)}
+                              disabled={mlTestingId === account.id}
+                              className="px-3 py-1.5 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-60"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${mlTestingId === account.id ? "animate-spin" : ""}`} />
+                              <span>{mlTestingId === account.id ? "Testando..." : "Testar Conexão"}</span>
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => handleDisconnectML(account)}
+                            className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition"
+                          >
+                            <Unlink className="w-3.5 h-3.5" />
+                            <span>Desconectar</span>
+                          </button>
+                        </div>
                       </div>
-                      <div>
-                        Segurança: <span className="text-emerald-700 font-semibold">Criptografia RLS Ativa</span>
-                      </div>
-                    </div>
-                  </div>
+                    );
+                  })}
 
                   <div>
                     <label className="text-[11px] text-slate-600 font-semibold block mb-1">
@@ -498,153 +527,57 @@ export function ConfiguracoesDashboard() {
                       <option>Coleta Padrão / Correios</option>
                     </select>
                   </div>
-
-                  {mlTestFeedback && (
-                    <div
-                      className={`p-2.5 rounded-lg text-xs flex items-center gap-2 ${
-                        mlTestFeedback.type === "success"
-                          ? "bg-emerald-50 border border-emerald-200 text-emerald-800"
-                          : "bg-red-50 border border-red-200 text-red-800"
-                      }`}
-                    >
-                      {mlTestFeedback.type === "success" ? (
-                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                      ) : (
-                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                      )}
-                      <span>{mlTestFeedback.msg}</span>
-                    </div>
-                  )}
-
-                  <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-2">
-                    <button
-                      onClick={handleTestML}
-                      disabled={mlTesting}
-                      className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition disabled:opacity-60"
-                    >
-                      <RefreshCw className={`w-3.5 h-3.5 ${mlTesting ? "animate-spin" : ""}`} />
-                      <span>{mlTesting ? "Testando Latência..." : "Testar Conexão"}</span>
-                    </button>
-
-                    <button
-                      onClick={handleDisconnectML}
-                      className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition"
-                    >
-                      <Unlink className="w-3.5 h-3.5" />
-                      <span>Desconectar Conta</span>
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                /* Estado Desconectado ML */
-                <div className="space-y-3.5 text-xs">
-                  {/* Seletor de Modo de Conexão */}
-                  <div className="flex bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs font-semibold">
-                    <button
-                      type="button"
-                      onClick={() => setMlConnectionMode("oauth")}
-                      className={`flex-1 py-1.5 rounded-md transition text-center ${
-                        mlConnectionMode === "oauth"
-                          ? "bg-white text-slate-900 shadow-2xs font-bold"
-                          : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      ⚡ 1-Clique (OAuth Oficial)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setMlConnectionMode("token")}
-                      className={`flex-1 py-1.5 rounded-md transition text-center ${
-                        mlConnectionMode === "token"
-                          ? "bg-white text-slate-900 shadow-2xs font-bold"
-                          : "text-slate-600 hover:text-slate-900"
-                      }`}
-                    >
-                      🔑 Conexão Direta (Token)
-                    </button>
-                  </div>
-
-                  {mlConnectionMode === "oauth" ? (
-                    /* MODO OAUTH 1-CLIQUE */
-                    <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3.5 space-y-3">
-                      <p className="text-[11px] text-slate-600 leading-relaxed">
-                        Conecte diretamente pela tela oficial do <strong>Mercado Livre</strong> com 1 clique. O sistema gerencia a renovação de tokens automaticamente.
-                      </p>
-
-                      <button
-                        type="button"
-                        onClick={handleOAuthConnectML}
-                        disabled={mlConnecting}
-                        className="w-full py-2.5 bg-[#FFE600] hover:bg-[#F0D800] text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center gap-2 transition shadow-xs active:scale-98"
-                      >
-                        <Zap className="w-4 h-4 fill-slate-950" />
-                        <span>{mlConnecting ? "Abrindo Mercado Livre..." : "Conectar com Mercado Livre (1-Clique)"}</span>
-                      </button>
-
-                      <div className="text-[10px] text-slate-500 text-center flex items-center justify-center gap-1">
-                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
-                        <span>Autorização oficial segura com permissões de Leitura e Escrita.</span>
-                      </div>
-                    </div>
-                  ) : (
-                    /* MODO TOKEN / CHAVES MANUAIS */
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-[11px] text-slate-700 font-semibold block mb-1">
-                          Access Token do Mercado Livre (Recomendado)
-                        </label>
-                        <input
-                          type="password"
-                          placeholder="APP_USR-8901234908... ou Bearer Token"
-                          value={mlAccessToken}
-                          onChange={(e) => setMlAccessToken(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                        />
-                        <span className="text-[10px] text-slate-500 mt-0.5 block">
-                          Cole o Access Token gerado no portal de desenvolvedores do Mercado Livre.
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="text-[11px] text-slate-700 font-semibold block mb-1">
-                            App ID (Opcional)
-                          </label>
-                          <input
-                            type="text"
-                            placeholder="Ex: 8901234908..."
-                            value={mlAppId}
-                            onChange={(e) => setMlAppId(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[11px] text-slate-700 font-semibold block mb-1">
-                            Client Secret (Opcional)
-                          </label>
-                          <input
-                            type="password"
-                            placeholder="Chave secreta..."
-                            value={mlSecretKey}
-                            onChange={(e) => setMlSecretKey(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs text-slate-900 font-mono focus:outline-none"
-                          />
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={handleTokenConnectML}
-                        disabled={mlConnecting}
-                        className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-2xs"
-                      >
-                        <LinkIcon className="w-3.5 h-3.5" />
-                        <span>{mlConnecting ? "Validando na API do ML..." : "Validar e Conectar Conta"}</span>
-                      </button>
-                    </div>
-                  )}
                 </div>
               )}
+
+              {/* Conexão OAuth oficial (padrão Bling / Tiny) */}
+              <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3.5 space-y-3 text-xs">
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  {mlAccounts.length > 0 ? (
+                    <>
+                      Para adicionar <strong>outra conta</strong>, saia da conta atual no site do Mercado Livre e clique abaixo
+                      fazendo login com a nova conta.
+                    </>
+                  ) : (
+                    <>
+                      Você será levado à tela oficial do <strong>Mercado Livre</strong> para autorizar o ERP. Nunca pedimos sua
+                      senha: recebemos apenas um token, criptografado e renovado automaticamente.
+                    </>
+                  )}
+                </p>
+
+                {!mlOauthConfigured && (
+                  <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-[11px] flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <span>
+                      Integração ainda não configurada no servidor. Defina <code>ML_CLIENT_ID</code>, <code>ML_CLIENT_SECRET</code>,{" "}
+                      <code>ML_REDIRECT_URI</code> e <code>INTEGRATIONS_ENCRYPTION_KEY</code>.
+                    </span>
+                  </div>
+                )}
+
+                <button
+                  type="button"
+                  id="ml-oauth-connect"
+                  onClick={handleOAuthConnectML}
+                  disabled={mlConnecting || !mlOauthConfigured}
+                  className="w-full py-2.5 bg-[#FFE600] hover:bg-[#F0D800] text-slate-950 font-bold rounded-lg text-xs flex items-center justify-center gap-2 transition shadow-xs active:scale-98 disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {mlAccounts.length > 0 ? <LinkIcon className="w-4 h-4" /> : <Zap className="w-4 h-4 fill-slate-950" />}
+                  <span>
+                    {mlConnecting
+                      ? "Abrindo Mercado Livre..."
+                      : mlAccounts.length > 0
+                        ? "Adicionar outra conta do Mercado Livre"
+                        : "Conectar com Mercado Livre"}
+                  </span>
+                </button>
+
+                <div className="text-[10px] text-slate-500 text-center flex items-center justify-center gap-1">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>OAuth 2.0 oficial com PKCE · tokens criptografados (AES-256-GCM)</span>
+                </div>
+              </div>
             </div>
 
             {/* CARD SHOPEE */}

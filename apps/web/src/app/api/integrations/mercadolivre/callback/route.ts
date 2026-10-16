@@ -1,68 +1,93 @@
-import { NextRequest, NextResponse } from "next/server";
-import { validateMercadoLivreToken, saveMarketplaceIntegration } from "@/lib/services/marketplaceIntegrations";
+import { NextRequest } from "next/server";
+import { getAuthContext } from "@/lib/auth/context";
+import { decryptSecret, safeEqual } from "@/lib/security/crypto";
+import {
+  exchangeAuthorizationCode,
+  fetchMercadoLivreUser,
+  getMercadoLivreConfig,
+  MercadoLivreOAuthError,
+} from "@/lib/integrations/mercadolivre/oauth";
+import { logIntegrationAudit, saveMarketplaceIntegration } from "@/lib/services/marketplaceIntegrations";
+import { ML_OAUTH_COOKIE, settingsRedirect } from "../shared";
 
 export const dynamic = "force-dynamic";
 
-export async function GET(req: NextRequest) {
-  const code = req.nextUrl.searchParams.get("code");
-  const error = req.nextUrl.searchParams.get("error");
-  const appId = process.env.ML_CLIENT_ID || process.env.MERCADOLIVRE_APP_ID;
-  const clientSecret = process.env.ML_CLIENT_SECRET || process.env.MERCADOLIVRE_SECRET_KEY;
-  const redirectUri = `${req.nextUrl.origin}/api/integrations/mercadolivre/callback`;
+interface OAuthTransaction {
+  state: string;
+  verifier: string;
+  uid: string;
+  exp: number;
+}
 
-  if (error || !code) {
-    return NextResponse.redirect(
-      new URL(`/configuracoes?tab=marketplaces&error=${encodeURIComponent(error || "Autorização cancelada")}`, req.url)
-    );
+function readTransaction(req: NextRequest): OAuthTransaction | null {
+  const raw = req.cookies.get(ML_OAUTH_COOKIE)?.value;
+  if (!raw) return null;
+  try {
+    return JSON.parse(decryptSecret(raw)) as OAuthTransaction;
+  } catch {
+    return null;
   }
+}
+
+/**
+ * Step 2 of the OAuth flow: validates state (CSRF), binds the result to the same user who
+ * started the flow, exchanges the code with PKCE and stores encrypted tokens for the tenant.
+ */
+export async function GET(req: NextRequest) {
+  const sp = req.nextUrl.searchParams;
+  const code = sp.get("code");
+  const state = sp.get("state");
+
+  if (sp.get("error")) return settingsRedirect(req, { error: "autorizacao_negada" });
+  if (!code || !state) return settingsRedirect(req, { error: "callback_invalido" });
+
+  const tx = readTransaction(req);
+  if (!tx || tx.exp < Date.now()) return settingsRedirect(req, { error: "sessao_oauth_expirada" });
+  if (!safeEqual(tx.state, state)) return settingsRedirect(req, { error: "state_invalido" });
+
+  const ctx = await getAuthContext();
+  if (!ctx || ctx.userId !== tx.uid) return settingsRedirect(req, { error: "sessao_divergente" });
+
+  const config = getMercadoLivreConfig();
+  if (!config) return settingsRedirect(req, { error: "ml_nao_configurado" });
+
+  const scope = { userId: ctx.userId, organizationId: ctx.organizationId };
+  const requestInfo = {
+    ip: req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? null,
+    userAgent: req.headers.get("user-agent"),
+  };
 
   try {
-    const tokenRes = await fetch("https://api.mercadolibre.com/oauth/token", {
-      method: "POST",
-      headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: "authorization_code",
-        client_id: appId || "",
-        client_secret: clientSecret || "",
-        code,
-        redirect_uri: redirectUri,
-      }),
-    });
+    const tokens = await exchangeAuthorizationCode(config, code, tx.verifier);
+    const mlUser = await fetchMercadoLivreUser(tokens.access_token);
 
-    if (!tokenRes.ok) {
-      const errText = await tokenRes.text();
-      console.error("Erro na troca de código OAuth ML:", errText);
-      return NextResponse.redirect(
-        new URL("/configuracoes?tab=marketplaces&error=Falha+ao+obter+token+Mercado+Livre", req.url)
-      );
+    if (String(tokens.user_id) !== mlUser.seller_id) {
+      return settingsRedirect(req, { error: "conta_divergente" });
     }
 
-    const tokenData = await tokenRes.json();
-    const mlUser = await validateMercadoLivreToken(tokenData.access_token);
-
-    await saveMarketplaceIntegration({
+    await saveMarketplaceIntegration(scope, {
       platform: "mercadolivre",
       account_name: mlUser.account_name,
       seller_id: mlUser.seller_id,
-      access_token: tokenData.access_token,
-      refresh_token: tokenData.refresh_token,
-      token_expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      token_expires_at: new Date(Date.now() + tokens.expires_in * 1000).toISOString(),
+      scopes: tokens.scope,
       metadata: {
         email: mlUser.email,
         permalink: mlUser.permalink,
         reputation: mlUser.reputation,
-        user_id_ml: tokenData.user_id,
-        scope: tokenData.scope,
+        country_id: mlUser.country_id,
+        site_id: mlUser.site_id,
       },
     });
 
-    return NextResponse.redirect(
-      new URL("/configuracoes?tab=marketplaces&success=ml_connected", req.url)
-    );
-  } catch (err: any) {
-    console.error("Erro no callback ML:", err);
-    return NextResponse.redirect(
-      new URL(`/configuracoes?tab=marketplaces&error=${encodeURIComponent(err.message)}`, req.url)
-    );
+    await logIntegrationAudit(scope, "marketplace_connected", { platform: "mercadolivre", seller_id: mlUser.seller_id }, requestInfo);
+    return settingsRedirect(req, { success: "ml_connected" });
+  } catch (err) {
+    const code = err instanceof MercadoLivreOAuthError ? err.code : "erro_interno";
+    console.error("[ML OAuth] Falha no callback:", code, err instanceof Error ? err.message : err);
+    await logIntegrationAudit(scope, "marketplace_connect_failed", { platform: "mercadolivre", code }, requestInfo);
+    return settingsRedirect(req, { error: code === "invalid_grant" ? "codigo_expirado" : "falha_token" });
   }
 }

@@ -26,6 +26,7 @@ export async function middleware(request: NextRequest) {
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/cron/") ||
     pathname.includes(".")
   ) {
     return response;

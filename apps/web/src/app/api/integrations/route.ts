@@ -1,23 +1,31 @@
 import { NextResponse } from "next/server";
+import { getAuthContext } from "@/lib/auth/context";
+import { getMercadoLivreConfig } from "@/lib/integrations/mercadolivre/oauth";
 import { getMarketplaceIntegrations } from "@/lib/services/marketplaceIntegrations";
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 export async function GET() {
-  try {
-    const integrations = await getMarketplaceIntegrations();
+  const ctx = await getAuthContext();
+  if (!ctx) return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
 
-    const ml = integrations.find((i) => i.platform === "mercadolivre");
+  try {
+    const integrations = await getMarketplaceIntegrations({ userId: ctx.userId, organizationId: ctx.organizationId });
+    const mlAccounts = integrations.filter((i) => i.platform === "mercadolivre");
     const shopee = integrations.find((i) => i.platform === "shopee");
 
     return NextResponse.json({
       success: true,
-      mercadolivre: ml ? { connected: true, ...ml } : { connected: false, platform: "mercadolivre" },
+      mercadolivre: {
+        connected: mlAccounts.some((a) => a.status === "online"),
+        oauthConfigured: Boolean(getMercadoLivreConfig()),
+        accounts: mlAccounts,
+      },
       shopee: shopee ? { connected: true, ...shopee } : { connected: false, platform: "shopee" },
       all: integrations,
     });
-  } catch (err: any) {
-    return NextResponse.json({ success: false, error: err.message }, { status: 500 });
+  } catch {
+    return NextResponse.json({ success: false, error: "Falha ao carregar integrações." }, { status: 500 });
   }
 }
