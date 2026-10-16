@@ -247,6 +247,7 @@ export interface MarketSearchResponse {
   limit: number;
   analytics: MarketSearchAnalytics;
   items: MarketSearchItem[];
+  needs_extension?: boolean;
 }
 
 export const importFromSearchSchema = z.object({

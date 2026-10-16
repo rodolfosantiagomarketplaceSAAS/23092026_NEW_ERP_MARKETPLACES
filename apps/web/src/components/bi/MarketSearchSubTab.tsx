@@ -425,7 +425,7 @@ export function MarketSearchSubTab() {
       )}
 
       {/* KPI Cards & Painel Analítico de Nicho */}
-      {analytics && (
+      {analytics && data && data.items.length > 0 && (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3.5">
           {/* Card Preço Médio & Mediana */}
           <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
@@ -523,7 +523,7 @@ export function MarketSearchSubTab() {
       )}
 
       {/* Seção Gráfica e Distribuição Analítica de Mercado */}
-      {analytics && (
+      {analytics && data && data.items.length > 0 && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Distribuição por Faixas de Preço (Sweet Spot) */}
           <div className="bg-white p-4 sm:p-5 rounded-xl border border-slate-200/80 shadow-xs lg:col-span-2">
@@ -803,10 +803,59 @@ export function MarketSearchSubTab() {
             </p>
           </div>
         ) : !data || data.items.length === 0 ? (
-          <div className="p-16 text-center space-y-2">
-            <AlertCircle className="w-8 h-8 text-slate-300 mx-auto" />
-            <p className="text-xs font-bold text-slate-700">Nenhum anúncio encontrado com os filtros selecionados.</p>
-            <p className="text-[11px] text-slate-400">Tente ajustar os filtros ou pesquisar por outro termo.</p>
+          <div className="p-8 sm:p-12 text-center max-w-2xl mx-auto space-y-5">
+            <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 shadow-xs">
+              <Zap className="w-7 h-7 text-amber-500" />
+            </div>
+
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-slate-900">
+                Coleta ao Vivo Necessária para &quot;{query}&quot;
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                O Mercado Livre bloqueia varreduras automáticas de robôs/servidores em nuvem (erro 403 da API de busca pública de terceiros). Sua loja <strong>já está vinculada com sucesso</strong> e seus anúncios próprios estão sincronizados no menu Catálogo.
+              </p>
+              <p className="text-[11px] text-slate-500">
+                Para extrair dados reais de concorrentes deste nicho sem bloqueios de IP, realize a coleta direta pelo seu navegador com 1 clique:
+              </p>
+            </div>
+
+            {/* Ações Diretas */}
+            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+              <a
+                href={`https://lista.mercadolivre.com.br/${encodeURIComponent(
+                  query
+                    .trim()
+                    .toLowerCase()
+                    .normalize("NFD")
+                    .replace(/[\u0300-\u036f]/g, "")
+                    .replace(/[^\w\s-]/g, "")
+                    .replace(/\s+/g, "-")
+                )}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 text-xs font-bold text-slate-950 bg-[#FFE600] hover:bg-[#F0D800] border border-amber-300 rounded-xl shadow-xs transition"
+              >
+                <span>🟡 Abrir e Capturar no Mercado Livre</span>
+                <ExternalLink className="w-4 h-4 text-slate-800" />
+              </a>
+
+              <a
+                href="/configuracoes"
+                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl transition"
+              >
+                <Settings className="w-3.5 h-3.5 text-slate-500" />
+                <span>Extensão Chrome & Configurações</span>
+              </a>
+            </div>
+
+            {/* Dica de Funcionamento */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-3 text-left flex items-start gap-2.5 text-[11px] text-slate-600">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <strong className="text-slate-800">Como funciona:</strong> Ao abrir a pesquisa no Mercado Livre pelo navegador com a <strong>Extensão Chrome</strong> ativa, ela injeta a barra de sincronização no topo. Basta 1 clique em &quot;Sincronizar no ERP&quot; para enviar 50+ anúncios reais para este painel.
+              </div>
+            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">

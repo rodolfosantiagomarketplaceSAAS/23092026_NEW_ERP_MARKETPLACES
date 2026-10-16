@@ -543,9 +543,24 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Se ainda estiver vazio (ex: executando no datacenter da Vercel onde a Akamai bloqueia requisições sem credencial)
+    // Se ainda estiver vazio (ex: executando no datacenter da Vercel onde a Akamai/Mercado Livre bloqueia requisições de servidor)
+    // Apenas utiliza catálogo verificado se o termo de busca for compatível (para não exibir PPF em buscas de câmeras ou outros nichos)
     if (rawItems.length === 0 && (platformFilter === "mercadolivre" || platformFilter === "all")) {
-      rawItems = getVerifiedRealMarketplaceListings(query, limit);
+      const qLower = query.toLowerCase();
+      const isPpfRelated =
+        qLower.includes("ppf") ||
+        qLower.includes("pelicula") ||
+        qLower.includes("película") ||
+        qLower.includes("farol") ||
+        qLower.includes("parachoque") ||
+        qLower.includes("macaneta") ||
+        qLower.includes("maçaneta") ||
+        qLower.includes("tpu") ||
+        qLower.includes("soleira");
+
+      if (isPpfRelated) {
+        rawItems = getVerifiedRealMarketplaceListings(query, limit);
+      }
     }
 
     // Se o filtro for Shopee ou Todos, incorpora anúncios Shopee monitorados
@@ -723,6 +738,7 @@ export async function GET(req: NextRequest) {
       limit,
       analytics,
       items: finalItems,
+      needs_extension: finalItems.length === 0,
     };
 
     return NextResponse.json(response);
