@@ -14,7 +14,7 @@ const globalForStore = globalThis as unknown as {
 const globalSearchStore =
   globalForStore.__crmMarketSearchStore || new Map<string, SearchStoreEntry>();
 
-if (process.env.NODE_ENV !== "production") {
+if (!globalForStore.__crmMarketSearchStore) {
   globalForStore.__crmMarketSearchStore = globalSearchStore;
 }
 

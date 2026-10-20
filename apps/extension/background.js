@@ -64,6 +64,13 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return true; // Mantém o canal aberto para resposta assíncrona
   }
 
+  if (request.action === "SYNC_SEARCH_ITEMS") {
+    handleSyncSearchItems(request.erpUrl, request.payload)
+      .then((res) => sendResponse(res))
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
   if (request.action === "TEST_CONNECTION") {
     handleTestConnection(request.erpUrl, request.apiToken)
       .then((res) => sendResponse(res))
@@ -153,5 +160,53 @@ async function handleTestConnection(erpUrl, apiToken) {
       throw new Error(`Falha de conexão em ${url}. Verifique se a URL está acessível e possui HTTPS válido.`);
     }
     throw new Error(`Falha ao conectar no ERP: ${err.message}`);
+  }
+}
+
+/**
+ * Despacha o bulk-sync de busca diretamente a partir do service worker (imune a CORS e bloqueios de página)
+ */
+async function handleSyncSearchItems(rawErpUrl, payload) {
+  const config = await getStoredConfig();
+  const erpUrl = normalizeErpUrl(rawErpUrl || config.erpUrl);
+  const endpoint = `${erpUrl}/api/bi/market-search/bulk-sync`;
+
+  const headers = {
+    "Content-Type": "application/json",
+  };
+
+  if (config.apiToken?.trim()) {
+    headers["Authorization"] = `Bearer ${config.apiToken.trim()}`;
+  }
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(payload),
+    });
+
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      throw new Error(data.error || `Erro HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    return {
+      success: true,
+      count: payload.items?.length || 0,
+      query: payload.query,
+      erpUrl,
+      redirectUrl:
+        data.redirectUrl ||
+        `/inteligencia?q=${encodeURIComponent(payload.query)}&platform=${payload.platform || "mercadolivre"}`,
+      ...data,
+    };
+  } catch (error) {
+    console.error("[ERP Background Worker] Erro no bulk-sync:", error);
+    if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
+      throw new Error(`Não foi possível conectar ao ERP em ${erpUrl}. Verifique se o servidor está online e permite conexões.`);
+    }
+    throw error;
   }
 }

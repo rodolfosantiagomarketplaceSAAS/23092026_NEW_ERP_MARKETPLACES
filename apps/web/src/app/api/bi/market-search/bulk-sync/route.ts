@@ -60,7 +60,15 @@ export async function POST(req: NextRequest) {
       }
 
       if (userId) {
-        const records = (items as MarketSearchItem[]).slice(0, 60).map((item) => ({
+        // Remove duplicatas de external_id para evitar erro de conflito no postgres (ON CONFLICT DO UPDATE)
+        const uniqueMap = new Map<string, MarketSearchItem>();
+        for (const it of items as MarketSearchItem[]) {
+          if (it?.external_id && !uniqueMap.has(it.external_id)) {
+            uniqueMap.set(it.external_id, it);
+          }
+        }
+
+        const records = Array.from(uniqueMap.values()).slice(0, 100).map((item) => ({
           user_id: userId,
           platform: cleanPlatform,
           external_id: item.external_id,
@@ -78,10 +86,12 @@ export async function POST(req: NextRequest) {
           last_scraped_at: new Date().toISOString(),
         }));
 
-        await supabase.from("competitor_listings").upsert(records, {
-          onConflict: "user_id, platform, external_id",
-          ignoreDuplicates: false,
-        });
+        if (records.length > 0) {
+          await supabase.from("competitor_listings").upsert(records, {
+            onConflict: "user_id, platform, external_id",
+            ignoreDuplicates: false,
+          });
+        }
       }
     } catch (dbErr) {
       console.warn("Aviso: falha ao persistir busca no Supabase:", dbErr);

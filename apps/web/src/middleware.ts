@@ -22,11 +22,23 @@ export async function middleware(request: NextRequest) {
 
   const pathname = request.nextUrl.pathname;
 
-  // Ignora assets estáticos do Next.js, API de autenticação e ícones
+  // Responde imediatamente para requisições de preflight CORS (OPTIONS)
+  if (request.method === "OPTIONS") {
+    return new NextResponse(null, {
+      status: 204,
+      headers: {
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+        "Access-Control-Allow-Headers":
+          "X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization",
+      },
+    });
+  }
+
+  // Ignora assets estáticos do Next.js, todas as rotas de API (possuem autenticação própria) e arquivos estáticos
   if (
     pathname.startsWith("/_next") ||
-    pathname.startsWith("/api/auth") ||
-    pathname.startsWith("/api/cron/") ||
+    pathname.startsWith("/api/") ||
     pathname.includes(".")
   ) {
     return response;

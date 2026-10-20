@@ -1154,17 +1154,56 @@
       items,
     };
 
-    const response = await fetch(`${erpUrl}/api/bi/market-search/bulk-sync`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
+    let result = null;
 
-    if (!response.ok) {
-      throw new Error(`Erro HTTP ${response.status} ao sincronizar com ${erpUrl}`);
+    // 1. Tenta sincronizar primeiro via Background Service Worker da extensão
+    // (completamente imune a CORS, CSP ou bloqueios de página)
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        result = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(
+            {
+              action: "SYNC_SEARCH_ITEMS",
+              erpUrl,
+              payload,
+            },
+            (response) => {
+              if (chrome.runtime.lastError) {
+                return reject(new Error(chrome.runtime.lastError.message));
+              }
+              if (response && response.success) {
+                return resolve(response);
+              }
+              return reject(new Error(response?.error || "Falha no background worker"));
+            }
+          );
+        });
+      }
+    } catch (bgErr) {
+      console.warn("[AutoSync] Falha via background worker, tentando fetch direto:", bgErr);
     }
 
-    const json = await response.json();
+    // 2. Se não executou pelo background worker, faz fetch direto
+    if (!result) {
+      const response = await fetch(`${erpUrl}/api/bi/market-search/bulk-sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Erro HTTP ${response.status} ao sincronizar com ${erpUrl}`);
+      }
+
+      const json = await response.json();
+      result = {
+        success: true,
+        count: items.length,
+        query,
+        erpUrl,
+        redirectUrl: json.redirectUrl || `/inteligencia?q=${encodeURIComponent(query)}&platform=${platform}`,
+      };
+    }
 
     // Notifica em tempo real a aba do ERP aberta no navegador
     try {
@@ -1182,13 +1221,7 @@
       console.warn("BroadcastChannel error:", bcErr);
     }
 
-    return {
-      success: true,
-      count: items.length,
-      query,
-      erpUrl,
-      redirectUrl: json.redirectUrl || `/inteligencia?q=${encodeURIComponent(query)}&platform=${platform}`,
-    };
+    return result;
   }
 
   /**
