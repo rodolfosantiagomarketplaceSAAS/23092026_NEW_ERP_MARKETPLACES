@@ -1,34 +1,72 @@
 import type { MarketSearchItem } from "@crm/types";
 
 // Cache em memória de pesquisas sincronizadas pela Extensão Chrome
-// Chave: `platform:termo_normalizado` -> Array de itens reais capturados
-const globalSearchStore = new Map<string, { timestamp: number; items: MarketSearchItem[] }>();
+// Anexado ao globalThis para persistir durante Hot-Reloading (HMR) no desenvolvimento Next.js
+interface SearchStoreEntry {
+  timestamp: number;
+  items: MarketSearchItem[];
+}
 
-function buildKey(query: string, platform: string): string {
-  const normQ = query.trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  return `${platform}:${normQ}`;
+const globalForStore = globalThis as unknown as {
+  __crmMarketSearchStore?: Map<string, SearchStoreEntry>;
+};
+
+const globalSearchStore =
+  globalForStore.__crmMarketSearchStore || new Map<string, SearchStoreEntry>();
+
+if (process.env.NODE_ENV !== "production") {
+  globalForStore.__crmMarketSearchStore = globalSearchStore;
+}
+
+function normalizeKey(str: string): string {
+  return str
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s-]/g, "")
+    .replace(/\s+/g, " ");
 }
 
 export function saveSyncedSearch(query: string, platform: string, items: MarketSearchItem[]) {
-  const key = buildKey(query, platform);
-  globalSearchStore.set(key, {
+  const normQ = normalizeKey(query);
+  const platKey = platform ? platform.toLowerCase() : "all";
+
+  globalSearchStore.set(`${platKey}:${normQ}`, {
     timestamp: Date.now(),
     items,
   });
-  // Também guarda com chave 'all' para buscas cross-marketplace
-  globalSearchStore.set(`all:${query.trim().toLowerCase()}`, {
+  // Guarda com chave 'all' para busca cross-marketplace
+  globalSearchStore.set(`all:${normQ}`, {
     timestamp: Date.now(),
     items,
   });
 }
 
 export function getSyncedSearch(query: string, platform: string): MarketSearchItem[] | null {
-  const key = buildKey(query, platform);
-  const entry = globalSearchStore.get(key);
-  if (!entry) {
-    // Tenta fallback sem a plataforma
-    const allEntry = globalSearchStore.get(`all:${query.trim().toLowerCase()}`);
-    return allEntry ? allEntry.items : null;
-  }
-  return entry.items;
+  const normQ = normalizeKey(query);
+  const platKey = platform ? platform.toLowerCase() : "all";
+
+  // 1. Busca exata pela plataforma especificada
+  const exact = globalSearchStore.get(`${platKey}:${normQ}`);
+  if (exact && exact.items.length > 0) return exact.items;
+
+  // 2. Busca exata na chave 'all'
+  const allEntry = globalSearchStore.get(`all:${normQ}`);
+  if (allEntry && allEntry.items.length > 0) return allEntry.items;
+
+  // 3. Busca aproximada (ex: se pesquisou "bateria automotiva" e busca "bateria")
+  let approximateMatch: MarketSearchItem[] | null = null;
+  globalSearchStore.forEach((entry, key) => {
+    if (approximateMatch) return;
+    const keyTerm = key.split(":")[1] || "";
+    if (keyTerm && (keyTerm.includes(normQ) || normQ.includes(keyTerm))) {
+      if (entry.items && entry.items.length > 0) {
+        approximateMatch = entry.items;
+      }
+    }
+  });
+
+  return approximateMatch;
 }
+

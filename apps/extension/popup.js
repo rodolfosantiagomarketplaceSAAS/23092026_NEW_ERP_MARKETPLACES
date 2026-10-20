@@ -8,7 +8,7 @@
  */
 function normalizeErpUrl(rawUrl) {
   let url = (rawUrl || "").trim().replace(/\/+$/, "");
-  if (!url) return "https://23092026-new-erp-marketplaces-web.vercel.app";
+  if (!url) return "http://localhost:3000";
 
   // Se o usuário digitou sem protocolo (ex: crm-marketplaces.vercel.app)
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
@@ -175,6 +175,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     });
   });
 
+  const btnSetLocalhost = document.getElementById("btnSetLocalhost");
+  const btnSetVercel = document.getElementById("btnSetVercel");
+  if (btnSetLocalhost) {
+    btnSetLocalhost.addEventListener("click", () => {
+      erpUrlInput.value = "http://localhost:3000";
+      saveBtn.click();
+    });
+  }
+  if (btnSetVercel) {
+    btnSetVercel.addEventListener("click", () => {
+      erpUrlInput.value = "https://23092026-new-erp-marketplaces-web.vercel.app";
+      saveBtn.click();
+    });
+  }
+
   // 5. Testar Conexão
   testBtn.addEventListener("click", () => {
     const erpUrl = normalizeErpUrl(erpUrlInput.value);
@@ -244,6 +259,21 @@ document.addEventListener("DOMContentLoaded", async () => {
             showFeedback(`✅ ${res.items.length} anúncios sincronizados com o ERP!`, "success");
             syncSearchBtn.style.backgroundColor = "#10B981";
             syncSearchBtn.innerText = "✓ Sincronizado com Sucesso!";
+
+            try {
+              if (typeof BroadcastChannel !== "undefined") {
+                const bc = new BroadcastChannel("crm_market_search_channel");
+                bc.postMessage({
+                  type: "SYNC_COMPLETED",
+                  query: res.query,
+                  count: res.items.length,
+                  platform: res.platform,
+                });
+                setTimeout(() => bc.close(), 1000);
+              }
+            } catch (bcErr) {
+              console.warn("BroadcastChannel erro:", bcErr);
+            }
 
             setTimeout(() => {
               chrome.tabs.create({

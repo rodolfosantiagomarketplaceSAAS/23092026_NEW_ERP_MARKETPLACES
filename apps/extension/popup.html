@@ -237,7 +237,15 @@
     <div class="card-title">Configurações do ERP</div>
     <div class="form-group">
       <label for="erpUrl">URL da API / SaaS:</label>
-      <input type="text" id="erpUrl" placeholder="https://23092026-new-erp-marketplaces-web.vercel.app">
+      <input type="text" id="erpUrl" placeholder="http://localhost:3000">
+      <div style="display: flex; gap: 6px; margin-top: 6px;">
+        <button type="button" id="btnSetLocalhost" class="btn btn-secondary" style="font-size: 10px; padding: 3px 6px;">
+          ⚡ Localhost (3000)
+        </button>
+        <button type="button" id="btnSetVercel" class="btn btn-secondary" style="font-size: 10px; padding: 3px 6px;">
+          ☁️ Vercel Produção
+        </button>
+      </div>
     </div>
     <div class="form-group">
       <label for="apiToken">Bearer Token / Chave de Acesso:</label>

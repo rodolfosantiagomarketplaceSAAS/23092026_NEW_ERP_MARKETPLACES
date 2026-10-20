@@ -173,6 +173,73 @@ export function MarketSearchSubTab() {
     setColPriceOrder("default");
   };
 
+  const [isCollectingWithExt, setIsCollectingWithExt] = useState(false);
+
+  const getMlSearchUrl = useCallback((q: string) => {
+    const norm = q
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^\w\s-]/g, "")
+      .replace(/\s+/g, "-");
+    const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+    return `https://lista.mercadolivre.com.br/${encodeURIComponent(norm)}#crm_auto_sync=1&erp_url=${encodeURIComponent(origin)}`;
+  }, []);
+
+  const getShopeeSearchUrl = useCallback((q: string) => {
+    const origin = typeof window !== "undefined" ? window.location.origin : "http://localhost:3000";
+    return `https://shopee.com.br/search?keyword=${encodeURIComponent(q.trim())}#crm_auto_sync=1&erp_url=${encodeURIComponent(origin)}`;
+  }, []);
+
+  const handleCollectWithExtension = useCallback((targetPlatform: "mercadolivre" | "shopee" = "mercadolivre") => {
+    if (!query.trim()) return;
+    setIsCollectingWithExt(true);
+    showToast(`⚡ Abrindo ${targetPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"} com coleta da extensão...`);
+
+    const url = targetPlatform === "mercadolivre" ? getMlSearchUrl(query) : getShopeeSearchUrl(query);
+    window.open(url, "_blank");
+
+    // Polling inteligente para atualizar assim que a extensão enviar
+    let attempts = 0;
+    const pollInterval = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(`/api/bi/market-search?q=${encodeURIComponent(query.trim())}&platform=${platform}`);
+        if (res.ok) {
+          const json: MarketSearchResponse = await res.json();
+          if (json?.items && json.items.length > 0) {
+            setData(json);
+            setIsCollectingWithExt(false);
+            clearInterval(pollInterval);
+            showToast(`🎉 ${json.items.length} anúncios sincronizados com sucesso pela extensão!`);
+          }
+        }
+      } catch {}
+
+      if (attempts >= 12) {
+        setIsCollectingWithExt(false);
+        clearInterval(pollInterval);
+      }
+    }, 2000);
+  }, [query, platform, getMlSearchUrl, getShopeeSearchUrl]);
+
+  // Ouve notificações em tempo real enviadas pela Extensão via BroadcastChannel
+  useEffect(() => {
+    if (typeof window === "undefined" || !("BroadcastChannel" in window)) return;
+    const channel = new BroadcastChannel("crm_market_search_channel");
+    channel.onmessage = (event) => {
+      if (event.data?.type === "SYNC_COMPLETED") {
+        setIsCollectingWithExt(false);
+        showToast(`🎉 ${event.data.count} anúncios sincronizados via extensão! Atualizando painel...`);
+        handleSearch();
+      }
+    };
+    return () => {
+      channel.close();
+    };
+  }, [handleSearch]);
+
   // Carrega busca padrão inicial ou lê query params caso venha da extensão
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -442,35 +509,25 @@ export function MarketSearchSubTab() {
           <div className="flex flex-wrap items-center justify-between gap-2.5 pt-3 border-t border-slate-100">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-semibold text-slate-500">Coleta ao Vivo no Navegador:</span>
-              <a
-                href={`https://lista.mercadolivre.com.br/${encodeURIComponent(
-                  query
-                    .trim()
-                    .toLowerCase()
-                    .normalize("NFD")
-                    .replace(/[\u0300-\u036f]/g, "")
-                    .replace(/[^\w\s-]/g, "")
-                    .replace(/\s+/g, "-")
-                )}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-950 bg-[#FFE600] hover:bg-[#F0D800] border border-amber-300 rounded-lg shadow-2xs transition"
-                title="Abre a pesquisa no Mercado Livre. A Extensão Chrome injetará o botão flutuante para sincronizar 50+ anúncios ao vivo com 1 clique!"
+              <button
+                type="button"
+                onClick={() => handleCollectWithExtension("mercadolivre")}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-950 bg-[#FFE600] hover:bg-[#F0D800] border border-amber-300 rounded-lg shadow-2xs transition active:scale-95 cursor-pointer"
+                title="Abre a pesquisa no Mercado Livre com auto-sincronização via Extensão Chrome."
               >
-                <span>🟡 Abrir Busca no Mercado Livre</span>
+                <span>⚡ Coletar no Mercado Livre via Extensão</span>
                 <ExternalLink className="w-3.5 h-3.5 text-slate-800" />
-              </a>
+              </button>
 
-              <a
-                href={`https://shopee.com.br/search?keyword=${encodeURIComponent(query.trim())}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-[#EE4D2D] hover:bg-[#D73211] border border-[#EE4D2D] rounded-lg shadow-2xs transition"
-                title="Abre a pesquisa na Shopee. A Extensão Chrome injetará o botão flutuante para sincronizar 50+ anúncios ao vivo com 1 clique!"
+              <button
+                type="button"
+                onClick={() => handleCollectWithExtension("shopee")}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-[#EE4D2D] hover:bg-[#D73211] border border-[#EE4D2D] rounded-lg shadow-2xs transition active:scale-95 cursor-pointer"
+                title="Abre a pesquisa na Shopee com auto-sincronização via Extensão Chrome."
               >
-                <span>🟠 Abrir Busca na Shopee</span>
+                <span>🟠 Coletar na Shopee</span>
                 <ExternalLink className="w-3.5 h-3.5 text-white" />
-              </a>
+              </button>
             </div>
 
             <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
@@ -888,47 +945,75 @@ export function MarketSearchSubTab() {
           </div>
         ) : !data || data.items.length === 0 ? (
           <div className="p-8 sm:p-12 text-center max-w-2xl mx-auto space-y-5">
-            <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 shadow-xs">
-              <Zap className="w-7 h-7 text-amber-500" />
-            </div>
+            {isCollectingWithExt ? (
+              <div className="space-y-4">
+                <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-500/10 border border-amber-300 flex items-center justify-center text-amber-600 shadow-xs animate-pulse">
+                  <RefreshCw className="w-7 h-7 text-amber-600 animate-spin" />
+                </div>
+                <div className="space-y-1.5">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Coleta em andamento via Extensão Chrome...
+                  </h3>
+                  <p className="text-xs text-slate-600 max-w-md mx-auto leading-relaxed">
+                    A página de busca foi aberta no seu navegador. A Extensão está extraindo os anúncios de &quot;{query}&quot; e sincronizando em tempo real com este painel.
+                  </p>
+                </div>
+                <div className="pt-2">
+                  <button
+                    type="button"
+                    onClick={handleSearch}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Verificar Agora</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="w-14 h-14 mx-auto rounded-2xl bg-amber-50 border border-amber-200 flex items-center justify-center text-amber-600 shadow-xs">
+                  <Zap className="w-7 h-7 text-amber-500" />
+                </div>
 
-            <div className="space-y-1.5">
-              <h3 className="text-sm font-bold text-slate-900">
-                Nenhum anúncio localizado para &quot;{query}&quot;
-              </h3>
-              <p className="text-xs text-slate-600 leading-relaxed">
-                A busca automática via API oficial consultou o catálogo de produtos e anúncios ativos do Mercado Livre. Se este termo for muito específico ou não possuir produtos ativos no catálogo, você também pode abrir a busca no navegador:
-              </p>
-            </div>
+                <div className="space-y-1.5">
+                  <h3 className="text-sm font-bold text-slate-900">
+                    Nenhum anúncio localizado para &quot;{query}&quot;
+                  </h3>
+                  <p className="text-xs text-slate-600 leading-relaxed">
+                    O Mercado Livre aplica bloqueios de IP contra consultas automatizadas de servidor. A forma recomendada e 100% segura de obter dados reais de concorrência é através da <strong>Extensão Chrome Integrada</strong>, que envia todos os anúncios, preços, Buybox e reputações para este ERP com 1 clique:
+                  </p>
+                </div>
 
-            {/* Ações Diretas */}
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
-              <a
-                href={`https://lista.mercadolivre.com.br/${encodeURIComponent(
-                  query
-                    .trim()
-                    .toLowerCase()
-                    .normalize("NFD")
-                    .replace(/[\u0300-\u036f]/g, "")
-                    .replace(/[^\w\s-]/g, "")
-                    .replace(/\s+/g, "-")
-                )}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-2.5 text-xs font-bold text-slate-950 bg-[#FFE600] hover:bg-[#F0D800] border border-amber-300 rounded-xl shadow-xs transition"
-              >
-                <span>🟡 Abrir e Capturar no Mercado Livre</span>
-                <ExternalLink className="w-4 h-4 text-slate-800" />
-              </a>
+                {/* Ações Diretas */}
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => handleCollectWithExtension("mercadolivre")}
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-5 py-3 text-xs font-bold text-slate-950 bg-[#FFE600] hover:bg-[#F0D800] border border-amber-300 rounded-xl shadow-xs transition active:scale-98 cursor-pointer"
+                  >
+                    <Zap className="w-4 h-4 text-slate-900 fill-slate-900" />
+                    <span>Coletar Anúncios no Mercado Livre via Extensão</span>
+                    <ExternalLink className="w-3.5 h-3.5 text-slate-800" />
+                  </button>
 
-              <a
-                href="/configuracoes"
-                className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl transition"
-              >
-                <Settings className="w-3.5 h-3.5 text-slate-500" />
-                <span>Extensão Chrome & Configurações</span>
-              </a>
-            </div>
+                  <button
+                    type="button"
+                    onClick={() => handleCollectWithExtension("shopee")}
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-bold text-white bg-[#EE4D2D] hover:bg-[#D73211] border border-[#EE4D2D] rounded-xl transition cursor-pointer"
+                  >
+                    <span>🟠 Coletar na Shopee</span>
+                  </button>
+
+                  <a
+                    href="/configuracoes"
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-2 px-4 py-3 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 rounded-xl transition"
+                  >
+                    <Settings className="w-3.5 h-3.5 text-slate-500" />
+                    <span>Configurar Extensão</span>
+                  </a>
+                </div>
+              </>
+            )}
           </div>
         ) : (
           <div className="overflow-x-auto">

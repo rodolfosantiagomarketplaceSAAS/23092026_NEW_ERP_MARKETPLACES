@@ -12,6 +12,48 @@
   if (window.__CRM_MARKETPLACES_CONTENT_INJECTED__) return;
   window.__CRM_MARKETPLACES_CONTENT_INJECTED__ = true;
 
+  // 1. Detecta se está executando no próprio ERP (Localhost ou Vercel)
+  const isErpPage =
+    window.location.hostname === "localhost" ||
+    window.location.hostname === "127.0.0.1" ||
+    window.location.hostname.includes("vercel.app");
+
+  if (isErpPage) {
+    const currentErpUrl = window.location.origin;
+    try {
+      chrome.storage?.local?.set({ erpUrl: currentErpUrl });
+      chrome.storage?.sync?.set({ erpUrl: currentErpUrl });
+    } catch {}
+
+    window.__CRM_MARKETPLACES_EXTENSION_ACTIVE__ = true;
+    document.documentElement.setAttribute("data-crm-extension-installed", "true");
+    window.dispatchEvent(
+      new CustomEvent("CRM_EXTENSION_DETECTED", {
+        detail: { version: "1.0.0", origin: currentErpUrl },
+      })
+    );
+
+    window.addEventListener("message", (event) => {
+      if (event.data?.type === "CRM_TRIGGER_SEARCH_EXT") {
+        const { query, platform } = event.data;
+        if (platform === "shopee") {
+          window.open(
+            `https://shopee.com.br/search?keyword=${encodeURIComponent(query)}#crm_auto_sync=1&erp_url=${encodeURIComponent(currentErpUrl)}`,
+            "_blank"
+          );
+        } else {
+          const normQ = (query || "").trim().toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^\w\s-]/g, "").replace(/\s+/g, "-");
+          window.open(
+            `https://lista.mercadolivre.com.br/${encodeURIComponent(normQ)}#crm_auto_sync=1&erp_url=${encodeURIComponent(currentErpUrl)}`,
+            "_blank"
+          );
+        }
+      }
+    });
+
+    return;
+  }
+
   // Detecta plataforma
   const isMercadoLivre = window.location.hostname.includes("mercadolivre.com.br");
   const isShopee = window.location.hostname.includes("shopee.com.br");
@@ -823,21 +865,45 @@
   // ==============================================================================
   // CAPTURA EM MASSA DE PÁGINAS DE PESQUISA (MERCADO LIVRE & SHOPEE)
   // ==============================================================================
+  // ==============================================================================
+  // CAPTURA EM MASSA DE PÁGINAS DE PESQUISA (MERCADO LIVRE & SHOPEE)
+  // ==============================================================================
+  function getAutoSyncParams() {
+    const urlParams = new URLSearchParams(window.location.search);
+    const hash = window.location.hash ? window.location.hash.substring(1) : "";
+    const hashParams = new URLSearchParams(hash);
+
+    const isAutoSync =
+      urlParams.get("crm_auto_sync") === "1" ||
+      urlParams.get("crm_sync") === "1" ||
+      hashParams.get("crm_auto_sync") === "1" ||
+      hashParams.get("crm_sync") === "1";
+
+    let erpUrl = urlParams.get("erp_url") || hashParams.get("erp_url") || null;
+    if (erpUrl) erpUrl = decodeURIComponent(erpUrl).trim().replace(/\/+$/, "");
+
+    return { isAutoSync, erpUrl };
+  }
+
   function isSearchListingPage() {
     if (isMercadoLivre) {
+      const { isAutoSync } = getAutoSyncParams();
       return (
+        isAutoSync ||
         window.location.hostname.includes("lista.mercadolivre.com.br") ||
         window.location.pathname.startsWith("/c/") ||
         window.location.search.includes("as_word=") ||
         window.location.search.includes("q=") ||
-        document.querySelectorAll("li.ui-search-layout__item, div.poly-card").length >= 3
+        document.querySelectorAll(
+          "li.ui-search-layout__item, div.poly-card, div.ui-search-result, [class*='poly-card'], div.ui-search-result__wrapper"
+        ).length >= 2
       );
     }
     if (isShopee) {
       return (
         window.location.pathname.includes("/search") ||
         window.location.search.includes("keyword=") ||
-        document.querySelectorAll('div[data-sqe="item"]').length >= 3
+        document.querySelectorAll('div[data-sqe="item"]').length >= 2
       );
     }
     return false;
@@ -864,47 +930,100 @@
   function extractAllSearchItems() {
     const items = [];
     if (isMercadoLivre) {
-      const elements = document.querySelectorAll("li.ui-search-layout__item, div.poly-card");
+      const elements = document.querySelectorAll(
+        "li.ui-search-layout__item, div.poly-card, div.ui-search-result, div[class*='poly-card'], div.ui-search-result__wrapper"
+      );
       elements.forEach((el, index) => {
         try {
           const imgEl = el.querySelector("img");
-          const thumbnail = imgEl ? (imgEl.src || imgEl.getAttribute("data-src") || imgEl.srcset?.split(" ")[0]) : null;
-          const linkEl = el.querySelector("a[href*='mercadolivre.com.br']");
-          if (!linkEl) return;
-          const permalink = linkEl.href.split("#")[0];
+          let thumbnail = null;
+          if (imgEl) {
+            thumbnail =
+              imgEl.getAttribute("data-src") ||
+              imgEl.src ||
+              (imgEl.srcset ? imgEl.srcset.split(" ")[0] : null);
+            if (thumbnail && (thumbnail.startsWith("data:") || thumbnail.includes("pixel.gif"))) {
+              thumbnail = null;
+            }
+          }
 
-          const titleEl = el.querySelector(".poly-component__title a, h2 a, a.ui-search-item__group__element, [class*='title'] a");
-          const title = titleEl ? titleEl.innerText.trim() : (imgEl?.alt || "").trim();
+          // Busca link e título com suporte a novos polycards
+          const titleEl = el.querySelector(
+            "a.poly-component__title, .poly-component__title a, .poly-component__title, h2.poly-box a, h2 a, a.ui-search-item__group__element, [class*='title'] a, h2.ui-search-item__title, .ui-search-item__title"
+          );
+          let title = titleEl ? (titleEl.innerText || titleEl.textContent || "").trim() : (imgEl?.alt || "").trim();
           if (!title) return;
 
-          const widMatch = permalink.match(/(MLB-?\d+)/i) || el.innerHTML.match(/wid=(MLB\d+)/i);
+          let linkEl = (titleEl && titleEl.tagName === "A")
+            ? titleEl
+            : el.querySelector("a.poly-component__title, a[href*='mercadolivre.com.br'], a[href*='/MLB-'], a[href*='/p/MLB'], a.ui-search-link");
+          if (!linkEl) linkEl = el.querySelector("a");
+          if (!linkEl || !linkEl.href) return;
+
+          const permalink = linkEl.href.split("#")[0];
+
+          const widMatch =
+            permalink.match(/(MLB-?\d+)/i) ||
+            el.innerHTML.match(/wid=(MLB\d+)/i) ||
+            permalink.match(/\/p\/(MLB\d+)/i);
           const external_id = widMatch ? widMatch[1].replace("-", "") : `MLB${Date.now()}_${index}`;
 
+          // Preço Atual
           let current_price = 0;
-          const priceFrac = el.querySelector(".poly-price__amount .andes-money-amount__fraction, .andes-money-amount__fraction");
-          const priceCents = el.querySelector(".poly-price__amount .andes-money-amount__cents, .andes-money-amount__cents");
+          const priceFrac = el.querySelector(
+            ".poly-price__amount .andes-money-amount__fraction, .andes-money-amount__fraction"
+          );
+          const priceCents = el.querySelector(
+            ".poly-price__amount .andes-money-amount__cents, .andes-money-amount__cents"
+          );
           if (priceFrac) {
-            current_price = parseFloat(priceFrac.innerText.replace(/\./g, "")) + (priceCents ? parseFloat(priceCents.innerText) / 100 : 0);
+            const frac = parseFloat(priceFrac.innerText.replace(/\./g, "").trim());
+            const cent = priceCents ? parseFloat(priceCents.innerText.trim()) / 100 : 0;
+            current_price = frac + cent;
           }
+
+          if (!current_price || isNaN(current_price)) {
+            const priceTextMatch = el.innerText.match(/R\$\s*([\d\.,]+)/);
+            if (priceTextMatch) {
+              current_price = parseBrlCurrency(priceTextMatch[1]);
+            }
+          }
+
           if (!current_price || isNaN(current_price)) return;
 
-          const prevFrac = el.querySelector(".andes-money-amount--previous .andes-money-amount__fraction");
-          const original_price = prevFrac ? parseFloat(prevFrac.innerText.replace(/\./g, "")) : null;
+          // Preço Original & Desconto
+          const prevFrac = el.querySelector(
+            ".andes-money-amount--previous .andes-money-amount__fraction, s .andes-money-amount__fraction"
+          );
+          const original_price = prevFrac ? parseFloat(prevFrac.innerText.replace(/\./g, "").trim()) : null;
 
           const discountEl = el.querySelector(".poly-price__discount-polylabel, .andes-money-amount__discount");
-          const discountPct = discountEl ? parseInt(discountEl.innerText.replace(/[^\d]/g, ""), 10) || null : null;
+          let discountPct = discountEl ? parseInt(discountEl.innerText.replace(/[^\d]/g, ""), 10) || null : null;
+          if (!discountPct && original_price && original_price > current_price) {
+            discountPct = Math.round(((original_price - current_price) / original_price) * 100);
+          }
 
-          const is_full = /full/i.test(el.innerHTML) && el.querySelector("svg") !== null;
+          const is_full = /full/i.test(el.innerHTML) && (el.querySelector("svg") !== null || el.innerText.includes("FULL"));
           const is_free_shipping = /frete grátis/i.test(el.innerText) || /chegará grátis/i.test(el.innerText);
 
           const promoEl = el.querySelector("[class*='polylabel']");
-          const promo_badge = promoEl ? promoEl.innerText.trim() : (discountPct ? `${discountPct}% OFF` : null);
+          const promo_badge = promoEl ? promoEl.innerText.trim() : (discountPct ? `${discountPct}% OFF` : is_full ? "FULL" : null);
 
-          const sellerEl = el.querySelector(".poly-component__seller, [class*='seller']");
+          const sellerEl = el.querySelector(".poly-component__seller, .ui-search-item__seller-info, [class*='seller']");
           const seller_name = sellerEl ? sellerEl.innerText.replace(/^Por\s+/i, "").trim() : "Vendedor Mercado Livre";
 
           const ratingEl = el.querySelector(".poly-component__review-compacted, .poly-reviews__rating");
-          const rating = ratingEl ? parseFloat(ratingEl.innerText.replace(",", ".")) : 4.8;
+          let rating = ratingEl ? parseFloat(ratingEl.innerText.replace(",", ".")) : 4.8;
+          if (isNaN(rating)) rating = 4.8;
+
+          // Vendas aproximadas
+          const soldMatch = el.innerText.match(/(\+?\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
+          let sales_count = 150 + (index * 45);
+          if (soldMatch) {
+            let num = parseFloat(soldMatch[1].replace("+", "").replace(/\./g, "").replace(",", "."));
+            if (soldMatch[2] && (soldMatch[2].toLowerCase().startsWith("mil") || soldMatch[2].toLowerCase() === "k")) num *= 1000;
+            if (!isNaN(num) && num > 0) sales_count = Math.round(num);
+          }
 
           items.push({
             id: external_id,
@@ -924,9 +1043,9 @@
             thumbnail_url: thumbnail,
             seller_name,
             seller_reputation: "platinum",
-            sales_count_approx: 150 + (index * 60),
-            rating: isNaN(rating) ? 4.8 : rating,
-            reviews_count: 45 + index * 8,
+            sales_count_approx: sales_count,
+            rating,
+            reviews_count: Math.min(500, Math.round(sales_count * 0.15) + 20),
             is_already_monitored: false,
             matched_my_listing_id: null,
           });
@@ -998,6 +1117,146 @@
   }
 
   /**
+   * Helper para obter a URL do ERP configurada
+   */
+  async function resolveErpUrl(overrideUrl = null) {
+    if (overrideUrl) return overrideUrl;
+    const { erpUrl: paramUrl } = getAutoSyncParams();
+    if (paramUrl) return paramUrl;
+
+    return new Promise((resolve) => {
+      chrome.storage.local?.get(["erpUrl"], (localData) => {
+        chrome.storage.sync?.get(["erpUrl"], (syncData) => {
+          let url = (localData?.erpUrl || syncData?.erpUrl || "").trim().replace(/\/+$/, "");
+          if (!url) url = "http://localhost:3000";
+          resolve(url);
+        });
+      });
+    });
+  }
+
+  /**
+   * Envia os itens coletados para o ERP via bulk-sync
+   */
+  async function sendItemsToErp(overrideUrl = null) {
+    const items = extractAllSearchItems();
+    if (items.length === 0) {
+      throw new Error("Nenhum anúncio localizado na página atual.");
+    }
+
+    const query = extractSearchQuery();
+    const erpUrl = await resolveErpUrl(overrideUrl);
+    const platform = isMercadoLivre ? "mercadolivre" : "shopee";
+
+    const payload = {
+      query,
+      platform,
+      items,
+    };
+
+    const response = await fetch(`${erpUrl}/api/bi/market-search/bulk-sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Erro HTTP ${response.status} ao sincronizar com ${erpUrl}`);
+    }
+
+    const json = await response.json();
+
+    // Notifica em tempo real a aba do ERP aberta no navegador
+    try {
+      if (typeof BroadcastChannel !== "undefined") {
+        const channel = new BroadcastChannel("crm_market_search_channel");
+        channel.postMessage({
+          type: "SYNC_COMPLETED",
+          query,
+          count: items.length,
+          platform,
+        });
+        setTimeout(() => channel.close(), 1000);
+      }
+    } catch (bcErr) {
+      console.warn("BroadcastChannel error:", bcErr);
+    }
+
+    return {
+      success: true,
+      count: items.length,
+      query,
+      erpUrl,
+      redirectUrl: json.redirectUrl || `/inteligencia?q=${encodeURIComponent(query)}&platform=${platform}`,
+    };
+  }
+
+  /**
+   * Exibe toast flutuante no topo/canto da página
+   */
+  function showFloatingNotification(msg, status = "info", erpUrl = null, redirectUrl = null) {
+    let box = document.getElementById("crm-floating-notification");
+    if (!box) {
+      box = document.createElement("div");
+      box.id = "crm-floating-notification";
+      box.style.position = "fixed";
+      box.style.top = "20px";
+      box.style.right = "20px";
+      box.style.zIndex = "9999999";
+      box.style.borderRadius = "10px";
+      box.style.padding = "12px 18px";
+      box.style.fontSize = "13px";
+      box.style.fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+      box.style.boxShadow = "0 10px 35px rgba(0,0,0,0.3)";
+      box.style.display = "flex";
+      box.style.alignItems = "center";
+      box.style.gap = "12px";
+      box.style.transition = "all 0.3s ease";
+      document.body.appendChild(box);
+    }
+
+    if (status === "loading") {
+      box.style.backgroundColor = "#0F172A";
+      box.style.color = "#FFFFFF";
+      box.style.border = "1px solid #334155";
+      box.innerHTML = `
+        <span style="display:inline-block;animation:spin 1s linear infinite;">⚡</span>
+        <span style="font-weight:600;">${msg}</span>
+      `;
+    } else if (status === "success") {
+      box.style.backgroundColor = "#064E3B";
+      box.style.color = "#ECFDF5";
+      box.style.border = "1px solid #10B981";
+      box.innerHTML = `
+        <span style="font-weight:bold;font-size:16px;">✓</span>
+        <span style="font-weight:600;">${msg}</span>
+        ${
+          erpUrl && redirectUrl
+            ? `<a href="${erpUrl}${redirectUrl}" target="_blank" style="background:#10B981;color:#FFFFFF;text-decoration:none;padding:6px 12px;border-radius:6px;font-weight:700;font-size:11px;margin-left:6px;">Ver no ERP →</a>`
+            : ""
+        }
+        <button id="crm-close-toast" style="background:transparent;border:none;color:#A7F3D0;cursor:pointer;font-size:16px;margin-left:4px;">✕</button>
+      `;
+      const btn = document.getElementById("crm-close-toast");
+      if (btn) btn.onclick = () => box.remove();
+      setTimeout(() => {
+        if (box && box.parentElement) box.remove();
+      }, 7000);
+    } else {
+      box.style.backgroundColor = "#7F1D1D";
+      box.style.color = "#FEF2F2";
+      box.style.border = "1px solid #EF4444";
+      box.innerHTML = `
+        <span>⚠️</span>
+        <span style="font-weight:600;">${msg}</span>
+        <button id="crm-close-toast" style="background:transparent;border:none;color:#FECACA;cursor:pointer;font-size:16px;margin-left:4px;">✕</button>
+      `;
+      const btn = document.getElementById("crm-close-toast");
+      if (btn) btn.onclick = () => box.remove();
+    }
+  }
+
+  /**
    * Injeta barra de sincronização quando estiver em página de pesquisa
    */
   function injectSearchSyncFloatingBar() {
@@ -1056,59 +1315,29 @@
         syncBtn.style.opacity = "0.7";
         syncBtn.disabled = true;
 
-        chrome.storage.local.get(["erpUrl"], (localData) => {
-          chrome.storage.sync.get(["erpUrl"], async (syncData) => {
-            let rawUrl = (localData?.erpUrl || syncData?.erpUrl || "").trim().replace(/\/+$/, "");
-            if (!rawUrl || rawUrl === "http://localhost:3000") {
-              rawUrl = "https://23092026-new-erp-marketplaces-web.vercel.app";
-            }
-            let erpUrl = rawUrl;
-            if (!erpUrl.startsWith("http://") && !erpUrl.startsWith("https://")) erpUrl = `https://${erpUrl}`;
-
-            try {
-              const payload = {
-                query,
-                platform: isMercadoLivre ? "mercadolivre" : "shopee",
-                items: extractAllSearchItems(),
-              };
-
-              const response = await fetch(`${erpUrl}/api/bi/market-search/bulk-sync`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
-
-              if (response.ok) {
-                const json = await response.json();
-                bar.innerHTML = `
-                  <div style="display:flex;align-items:center;gap:8px;">
-                    <span style="color:#10B981;font-weight:700;font-size:14px;">✓</span>
-                    <span style="font-weight:600;color:#F8FAFC;">${payload.items.length} anúncios sincronizados no ERP!</span>
-                  </div>
-                  <a href="${erpUrl}${json.redirectUrl || '/inteligencia'}" target="_blank" style="background-color:#10B981;color:#FFFFFF;text-decoration:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:700;display:inline-block;">
-                    Ver Análise Completa no ERP →
-                  </a>
-                  <button id="crm-close-search-bar-2" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1;padding:0 4px;margin-left:4px;">
-                    ✕
-                  </button>
-                `;
-                const closeBtn2 = document.getElementById("crm-close-search-bar-2");
-                if (closeBtn2) closeBtn2.onclick = () => bar.remove();
-              } else {
-                alert(`Erro ao enviar dados ao ERP (${response.status}). Verifique a URL configurada na extensão.`);
-                syncBtn.innerText = "Tentar Novamente";
-                syncBtn.disabled = false;
-                syncBtn.style.opacity = "1";
-              }
-            } catch (err) {
-              console.error(err);
-              alert(`Falha de conexão com o ERP (${erpUrl}). Verifique se o ERP está em execução.`);
-              syncBtn.innerText = "Tentar Novamente";
-              syncBtn.disabled = false;
-              syncBtn.style.opacity = "1";
-            }
-          });
-        });
+        try {
+          const res = await sendItemsToErp();
+          bar.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="color:#10B981;font-weight:700;font-size:14px;">✓</span>
+              <span style="font-weight:600;color:#F8FAFC;">${res.count} anúncios sincronizados no ERP!</span>
+            </div>
+            <a href="${res.erpUrl}${res.redirectUrl}" target="_blank" style="background-color:#10B981;color:#FFFFFF;text-decoration:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:700;display:inline-block;">
+              Ver Análise Completa no ERP →
+            </a>
+            <button id="crm-close-search-bar-2" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1;padding:0 4px;margin-left:4px;">
+              ✕
+            </button>
+          `;
+          const closeBtn2 = document.getElementById("crm-close-search-bar-2");
+          if (closeBtn2) closeBtn2.onclick = () => bar.remove();
+        } catch (err) {
+          console.error(err);
+          alert(`Falha ao sincronizar com o ERP: ${err.message}`);
+          syncBtn.innerText = "Tentar Novamente";
+          syncBtn.disabled = false;
+          syncBtn.style.opacity = "1";
+        }
       };
     }
   }
@@ -1152,6 +1381,46 @@
     }
   });
 
+  // Salva no storage caso tenha recebido erp_url no hash ou query params
+  const { isAutoSync, erpUrl: initialErpUrl } = getAutoSyncParams();
+  if (initialErpUrl) {
+    try {
+      chrome.storage?.local?.set({ erpUrl: initialErpUrl });
+      chrome.storage?.sync?.set({ erpUrl: initialErpUrl });
+    } catch {}
+  }
+
+  // Disparo automático caso requisitado pelo ERP (crm_auto_sync=1)
+  if (isAutoSync) {
+    showFloatingNotification("⚡ Coletando anúncios automaticamente para o ERP...", "loading");
+    setTimeout(async () => {
+      try {
+        const result = await sendItemsToErp(initialErpUrl);
+        showFloatingNotification(
+          `✅ ${result.count} anúncios de "${result.query}" enviados ao ERP!`,
+          "success",
+          result.erpUrl,
+          result.redirectUrl
+        );
+      } catch (e) {
+        console.warn("[ERP AutoSync] Falha inicial, aguardando carregamento dos cards:", e);
+        setTimeout(async () => {
+          try {
+            const retryRes = await sendItemsToErp(initialErpUrl);
+            showFloatingNotification(
+              `✅ ${retryRes.count} anúncios de "${retryRes.query}" enviados ao ERP!`,
+              "success",
+              retryRes.erpUrl,
+              retryRes.redirectUrl
+            );
+          } catch (retryErr) {
+            showFloatingNotification(`Falha ao sincronizar: ${retryErr.message}`, "error");
+          }
+        }, 1500);
+      }
+    }, 1000);
+  }
+
   // Aguarda DOM estabilizar e injeta os botões corretos
   setTimeout(() => {
     if (isSearchListingPage()) {
@@ -1176,4 +1445,5 @@
     }
   }, 1500);
 })();
+
 

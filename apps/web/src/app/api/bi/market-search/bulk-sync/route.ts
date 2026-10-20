@@ -41,31 +41,48 @@ export async function POST(req: NextRequest) {
     // Persiste também no Supabase para suportar ambientes Serverless na nuvem (Vercel)
     try {
       const supabase = createSupabaseAdminClient();
-      const { data: users } = await supabase.from("products").select("user_id").limit(1);
-      const userId = users && users.length > 0 ? users[0].user_id : "00000000-0000-0000-0000-000000000000";
+      let userId: string | null = null;
 
-      const records = (items as MarketSearchItem[]).slice(0, 60).map((item) => ({
-        user_id: userId,
-        platform: cleanPlatform,
-        external_id: item.external_id,
-        seller_name: item.seller_name || "Vendedor do Marketplace",
-        seller_reputation: item.seller_reputation || "platinum",
-        title: item.title,
-        current_price: Number(item.current_price) || 0,
-        original_price: item.original_price ? Number(item.original_price) : null,
-        shipping_type: item.shipping_type || "padrao",
-        promo_badge: item.promo_badge || null,
-        permalink: item.permalink || "",
-        thumbnail_url: item.thumbnail_url || null,
-        sales_count_approx: item.sales_count_approx || 0,
-        rating: item.rating || 4.8,
-        last_scraped_at: new Date().toISOString(),
-      }));
+      // Busca ID de um usuário válido (user_profiles, products ou auth.users)
+      const { data: profile } = await supabase.from("user_profiles").select("id").limit(1).maybeSingle();
+      if (profile?.id) {
+        userId = profile.id;
+      } else {
+        const { data: prodUser } = await supabase.from("products").select("user_id").limit(1).maybeSingle();
+        if (prodUser?.user_id) {
+          userId = prodUser.user_id;
+        } else {
+          const { data: authData } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1 });
+          if (authData?.users?.[0]?.id) {
+            userId = authData.users[0].id;
+          }
+        }
+      }
 
-      await supabase.from("competitor_listings").upsert(records, {
-        onConflict: "user_id, platform, external_id",
-        ignoreDuplicates: false,
-      });
+      if (userId) {
+        const records = (items as MarketSearchItem[]).slice(0, 60).map((item) => ({
+          user_id: userId,
+          platform: cleanPlatform,
+          external_id: item.external_id,
+          seller_name: item.seller_name || "Vendedor do Marketplace",
+          seller_reputation: item.seller_reputation || "platinum",
+          title: item.title,
+          current_price: Number(item.current_price) || 0,
+          original_price: item.original_price ? Number(item.original_price) : null,
+          shipping_type: item.shipping_type || "padrao",
+          promo_badge: item.promo_badge || null,
+          permalink: item.permalink || "",
+          thumbnail_url: item.thumbnail_url || null,
+          sales_count_approx: item.sales_count_approx || 0,
+          rating: item.rating || 4.8,
+          last_scraped_at: new Date().toISOString(),
+        }));
+
+        await supabase.from("competitor_listings").upsert(records, {
+          onConflict: "user_id, platform, external_id",
+          ignoreDuplicates: false,
+        });
+      }
     } catch (dbErr) {
       console.warn("Aviso: falha ao persistir busca no Supabase:", dbErr);
     }
