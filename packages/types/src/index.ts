@@ -269,3 +269,61 @@ export const importFromSearchSchema = z.object({
 
 export type ImportFromSearchInput = z.infer<typeof importFromSearchSchema>;
 
+// ==============================================================================
+// 6. REPRICING DINÂMICO & SIMULADOR DE MARGEM LÍQUIDA REAL (UNIT ECONOMICS)
+// ==============================================================================
+export interface CostStructure {
+  cmv: number;                         // Custo da Mercadoria Vendida (R$)
+  custoEmbalagem?: number;             // Embalagem e insumos adicionais (R$)
+  aliquotaImpostoPct?: number;         // Alíquota estimada (ex: 6% Simples Nacional)
+  comissaoMarketplacePct?: number;     // Taxa de comissão do canal (ex: 12% ou 17%)
+  tarifaFixaMarketplace?: number;      // Taxa fixa para pedidos de menor valor (ex: R$ 6.00)
+  custoFreteMedio?: number;            // Custo de envio médio suportado pelo seller
+  margemMinimaPct?: number;            // Margem líquida mínima tolerada (ex: 15%)
+}
+
+export interface SimulationResult {
+  precoSugerido: number;
+  lucroLiquidoReais: number;
+  margemLiquidaPct: number;
+  ehViavel: boolean;
+  motivoInviabilidade?: string;
+  precoPisoSugerido: number;
+  detalhamento: {
+    valorComissao: number;
+    valorImposto: number;
+    custoTotal: number;
+  };
+}
+
+export type RepricingStrategy = "undercut" | "match" | "target_margin";
+export type RepricingUnviableAction = "alert_only" | "set_floor";
+
+export interface RepricingRule {
+  id?: string;
+  user_id?: string;
+  my_listing_id: string;
+  strategy: RepricingStrategy;
+  difference_value: number;
+  max_price?: number | null;
+  min_price?: number | null;
+  respect_min_margin: boolean;
+  on_unviable: RepricingUnviableAction;
+  is_auto_apply: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export const repricingRuleSchema = z.object({
+  my_listing_id: z.string().uuid("ID do anúncio inválido"),
+  strategy: z.enum(["undercut", "match", "target_margin"]),
+  difference_value: z.number().min(0.01).default(0.10),
+  max_price: z.number().positive().nullable().optional(),
+  min_price: z.number().positive().nullable().optional(),
+  respect_min_margin: z.boolean().default(true),
+  on_unviable: z.enum(["alert_only", "set_floor"]).default("alert_only"),
+  is_auto_apply: z.boolean().default(false),
+});
+
+export type RepricingRuleInput = z.infer<typeof repricingRuleSchema>;
+

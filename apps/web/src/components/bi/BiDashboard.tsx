@@ -26,6 +26,8 @@ export function BiDashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [syncingBatch, setSyncingBatch] = useState<boolean>(false);
+  const [syncSuccessMsg, setSyncSuccessMsg] = useState<string | null>(null);
 
   // Carrega dados da API comparativa
   const fetchData = useCallback(async () => {
@@ -49,6 +51,32 @@ export function BiDashboard() {
       setLoading(false);
     }
   }, [activePlatform, search, statusFilter]);
+
+  // Dispara sincronização e varredura em lote
+  const handleSyncBatch = async () => {
+    setSyncingBatch(true);
+    setSyncSuccessMsg(null);
+    try {
+      const res = await fetch("/api/bi/sync-batch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: activePlatform, forceAll: true }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setSyncSuccessMsg(json.message || "Sincronização concluída com sucesso!");
+        await fetchData();
+        setTimeout(() => setSyncSuccessMsg(null), 5000);
+      } else {
+        alert(json.message || json.error || "Erro ao sincronizar anúncios.");
+      }
+    } catch (err) {
+      console.error("Erro na sincronização em lote:", err);
+      alert("Falha na comunicação com o servidor ao sincronizar.");
+    } finally {
+      setSyncingBatch(false);
+    }
+  };
 
   // Inscrição Realtime no canal Postgres via Hook
   const { highlightedIds, triggerHighlight, lastEventTime } = useRealtimeCompetitors({
@@ -322,13 +350,23 @@ export function BiDashboard() {
           </button>
         </div>
 
-        {/* Indicador de Realtime e Botão de Teste */}
+        {/* Indicador de Realtime e Botões de Ação */}
         <div className="flex items-center space-x-2 pb-1">
           {lastEventTime && (
             <span className="text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
               ⚡ Último evento Realtime: {lastEventTime}
             </span>
           )}
+
+          <button
+            onClick={handleSyncBatch}
+            disabled={syncingBatch}
+            className="inline-flex items-center gap-1.5 px-3 py-1 text-[11px] font-semibold text-white bg-indigo-600 hover:bg-indigo-700 border border-indigo-700 rounded shadow-2xs transition-colors disabled:opacity-60"
+            title="Força varredura e atualização de preços dos concorrentes vinculados"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${syncingBatch ? "animate-spin" : ""}`} />
+            {syncingBatch ? "Sincronizando..." : "Sincronizar e Carregar Preços Agora"}
+          </button>
 
           <button
             onClick={simulateRealtimePriceDrop}
@@ -340,6 +378,18 @@ export function BiDashboard() {
           </button>
         </div>
       </div>
+
+      {syncSuccessMsg && (
+        <div className="bg-emerald-50 border border-emerald-300 text-emerald-900 px-3.5 py-2 rounded-md text-xs flex items-center justify-between animate-in fade-in">
+          <span>{syncSuccessMsg}</span>
+          <button
+            onClick={() => setSyncSuccessMsg(null)}
+            className="text-emerald-700 font-bold hover:text-emerald-950 text-xs ml-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Cards de Métricas e KPIs de Competitividade Estilo Tiny ERP */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">

@@ -1,8 +1,9 @@
 "use client";
 
-import React, { useState } from "react";
-import { X, TrendingDown, DollarSign, CheckCircle2, AlertTriangle, ExternalLink } from "lucide-react";
+import React, { useState, useMemo } from "react";
+import { X, TrendingDown, DollarSign, CheckCircle2, AlertTriangle, ExternalLink, ShieldAlert, Calculator } from "lucide-react";
 import type { ComparativeListingGroup } from "@crm/types";
+import { ProfitMarginCalculator } from "@/lib/services/pricingSimulator";
 
 interface RepriceModalProps {
   group: ComparativeListingGroup | null;
@@ -24,9 +25,17 @@ export function RepriceModal({ group, isOpen, onClose, onSuccess }: RepriceModal
   const [isSaving, setIsSaving] = useState(false);
   const [savedSuccess, setSavedSuccess] = useState(false);
 
-  // Cálculos financeiros imediatos
-  const grossProfit = simulatedPrice - costPrice;
-  const marginPct = simulatedPrice > 0 ? (grossProfit / simulatedPrice) * 100 : 0;
+  // Simulação de Margem Líquida Real (Unit Economics de Marketplace)
+  const simulation = useMemo(() => {
+    const isPremium = group.my_listing.listing_type === "premium";
+    return ProfitMarginCalculator.simulate(simulatedPrice, {
+      cmv: costPrice,
+      comissaoMarketplacePct: isPremium ? 17.0 : 12.0,
+      aliquotaImpostoPct: 6.0,
+      margemMinimaPct: 15.0,
+    });
+  }, [simulatedPrice, costPrice, group.my_listing.listing_type]);
+
   const isWinning = lowestCompetitor ? simulatedPrice < lowestCompetitor : true;
   const isTied = lowestCompetitor ? simulatedPrice === lowestCompetitor : false;
 
@@ -150,48 +159,76 @@ export function RepriceModal({ group, isOpen, onClose, onSuccess }: RepriceModal
             </div>
           </div>
 
-          {/* Projeção de Margem e Diagnóstico de Buybox */}
+          {/* Projeção de Margem Líquida Real e Diagnóstico de Buybox */}
           <div
-            className={`p-3 rounded border text-xs flex items-center justify-between ${
-              grossProfit <= 0
-                ? "bg-red-50 border-red-300 text-red-800"
+            className={`p-3 rounded border text-xs space-y-2.5 ${
+              !simulation.ehViavel
+                ? "bg-red-50/70 border-red-300 text-red-900"
                 : isWinning
-                ? "bg-emerald-50 border-emerald-300 text-emerald-800"
+                ? "bg-emerald-50/70 border-emerald-300 text-emerald-900"
                 : isTied
-                ? "bg-amber-50 border-amber-300 text-amber-800"
+                ? "bg-amber-50/70 border-amber-300 text-amber-900"
                 : "bg-slate-100 border-slate-300 text-slate-800"
             }`}
           >
-            <div>
-              <div className="font-bold flex items-center gap-1.5">
-                {grossProfit <= 0 ? (
-                  <>
-                    <AlertTriangle className="w-4 h-4 text-red-600" />
-                    Atenção: Margem Negativa ou Prejuízo!
-                  </>
-                ) : isWinning ? (
-                  <>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
-                    Posição: Ganhando a Buybox!
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="w-4 h-4 text-amber-600" />
-                    Posição: Ainda acima ou empatado com o concorrente.
-                  </>
-                )}
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="font-bold flex items-center gap-1.5">
+                  {!simulation.ehViavel ? (
+                    <>
+                      <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+                      <span>Alerta de Margem Baixa ou Inviável</span>
+                    </>
+                  ) : isWinning ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>Posição: Menor Preço (Ganhando Buybox)!</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
+                      <span>Posição: {isTied ? "Empatado com concorrente" : "Acima do mercado"}</span>
+                    </>
+                  )}
+                </div>
+                <div className="text-[11px] mt-0.5">
+                  Lucro Líquido Real: <strong className="font-bold">R$ {simulation.lucroLiquidoReais.toFixed(2)}</strong> (
+                  <span className={simulation.ehViavel ? "text-emerald-700 font-bold" : "text-red-700 font-bold"}>
+                    {simulation.margemLiquidaPct.toFixed(1)}% líquido
+                  </span>)
+                </div>
               </div>
-              <div className="text-[11px] mt-0.5 opacity-90">
-                Lucro Bruto: <strong>R$ {grossProfit.toFixed(2)}</strong> ({marginPct.toFixed(1)}% de margem)
+
+              <div className="text-right">
+                <span className="text-[9px] uppercase font-bold text-slate-500">Status no Radar</span>
+                <div className="font-black text-xs">
+                  {isWinning ? "MAIS BARATO" : isTied ? "EMPATADO" : "MAIS CARO"}
+                </div>
               </div>
             </div>
 
-            <div className="text-right">
-              <span className="text-[10px] uppercase font-bold text-slate-500">Status Previsto</span>
-              <div className="font-black text-xs">
-                {isWinning ? "MAIS BARATO" : isTied ? "EMPATADO" : "MAIS CARO"}
+            {/* Detalhamento de Deduções da Plataforma & Impostos */}
+            <div className="pt-2 border-t border-slate-200/80 grid grid-cols-3 gap-2 text-[10px]">
+              <div className="bg-white/80 p-1.5 rounded border border-slate-200">
+                <span className="text-slate-500 block">Comissão ({group.my_listing.listing_type === "premium" ? "17%" : "12%"}):</span>
+                <strong className="text-slate-800">R$ {simulation.detalhamento.valorComissao.toFixed(2)}</strong>
+              </div>
+              <div className="bg-white/80 p-1.5 rounded border border-slate-200">
+                <span className="text-slate-500 block">Impostos (6%):</span>
+                <strong className="text-slate-800">R$ {simulation.detalhamento.valorImposto.toFixed(2)}</strong>
+              </div>
+              <div className="bg-white/80 p-1.5 rounded border border-slate-200">
+                <span className="text-slate-500 block">Preço Piso Seguro:</span>
+                <strong className="text-indigo-700">R$ {simulation.precoPisoSugerido.toFixed(2)}</strong>
               </div>
             </div>
+
+            {!simulation.ehViavel && simulation.motivoInviabilidade && (
+              <div className="text-[10px] text-red-700 bg-red-100/80 p-1.5 rounded flex items-center gap-1">
+                <ShieldAlert className="w-3.5 h-3.5 shrink-0 text-red-600" />
+                <span>{simulation.motivoInviabilidade}</span>
+              </div>
+            )}
           </div>
         </div>
 
