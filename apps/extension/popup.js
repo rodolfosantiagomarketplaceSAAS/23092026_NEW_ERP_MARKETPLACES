@@ -100,21 +100,22 @@ document.addEventListener("DOMContentLoaded", async () => {
         // Se estiver em página de pesquisa de produtos (Mercado Livre ou Shopee)
         if (response.isSearch) {
           if (cardSectionTitle) cardSectionTitle.innerText = "Pesquisa de Mercado (Aba Ativa)";
-          if (listingSelectContainer) listingSelectContainer.style.display = "none";
           if (captureNowBtn) captureNowBtn.style.display = "none";
-          if (syncSearchBtn) {
-            syncSearchBtn.style.display = "block";
-            syncSearchBtn.innerText = `🚀 Sincronizar Pesquisa com ERP (${response.itemsCount} anúncios)`;
-          }
+          if (syncSearchBtn) syncSearchBtn.style.display = "block";
 
           pageInfoBox.innerHTML = `
             <div class="detected-prod">
               <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"} — Pesquisa</strong>
               <span>Termo: <strong style="color:#1e293b;">&quot;${response.query || "Busca"}&quot;</strong></span>
               <span>Anúncios Detectados: <strong style="color:#4F46E5;">${response.itemsCount} anúncios</strong></span>
-              <span style="color:#64748B; font-size:10px; margin-top:2px;">Clique abaixo para enviar ao ERP e ver gráficos de preços, Buybox e concorrentes.</span>
+              <span style="color:#64748B; font-size:10px; margin-top:2px;">Selecione seu anúncio abaixo para vincular todos os concorrentes ao Radar Comparativo (1:N), ou deixe em branco para ver na Pesquisa de Mercado.</span>
             </div>
           `;
+
+          // Carrega anúncios próprios para permitir pareamento em lote
+          await loadMyListings(savedUrl, res.apiToken || "", currentDetectedPlatform, res.selectedMyListingId);
+          window.__CURRENT_SEARCH_COUNT__ = response.itemsCount;
+          updateButtonLabel();
           return;
         }
 
@@ -214,6 +215,18 @@ document.addEventListener("DOMContentLoaded", async () => {
   });
 
   function updateButtonLabel() {
+    const isSearchMode = !!window.__CURRENT_SEARCH_COUNT__;
+    if (isSearchMode && syncSearchBtn) {
+      const count = window.__CURRENT_SEARCH_COUNT__;
+      if (myListingSelect.value) {
+        syncSearchBtn.innerText = `🔗 Sincronizar e Vincular ao Meu Anúncio (${count} anúncios)`;
+        syncSearchBtn.style.backgroundColor = "#059669";
+      } else {
+        syncSearchBtn.innerText = `🚀 Sincronizar com Pesquisa de Mercado (${count} anúncios)`;
+        syncSearchBtn.style.backgroundColor = "#4F46E5";
+      }
+    }
+
     if (myListingSelect.value) {
       captureNowBtn.innerText = "🔗 Capturar e Vincular ao Meu Anúncio";
     } else {
@@ -238,12 +251,14 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         const erpUrl = normalizeErpUrl(erpUrlInput.value);
         const apiToken = apiTokenInput.value.trim();
+        const selectedMyListingId = myListingSelect.value || null;
 
         try {
           const payload = {
             query: res.query,
             platform: res.platform,
             items: res.items,
+            my_listing_id: selectedMyListingId,
           };
 
           const headers = { "Content-Type": "application/json" };
@@ -256,7 +271,11 @@ document.addEventListener("DOMContentLoaded", async () => {
           });
 
           if (syncRes.ok) {
-            showFeedback(`✅ ${res.items.length} anúncios sincronizados com o ERP!`, "success");
+            const syncJson = await syncRes.json();
+            const msg = selectedMyListingId
+              ? `✅ ${res.items.length} concorrentes vinculados com sucesso ao seu anúncio no Radar!`
+              : `✅ ${res.items.length} anúncios sincronizados na Pesquisa de Mercado!`;
+            showFeedback(msg, "success");
             syncSearchBtn.style.backgroundColor = "#10B981";
             syncSearchBtn.innerText = "✓ Sincronizado com Sucesso!";
 
@@ -268,6 +287,7 @@ document.addEventListener("DOMContentLoaded", async () => {
                   query: res.query,
                   count: res.items.length,
                   platform: res.platform,
+                  my_listing_id: selectedMyListingId,
                 });
                 setTimeout(() => bc.close(), 1000);
               }
@@ -275,9 +295,15 @@ document.addEventListener("DOMContentLoaded", async () => {
               console.warn("BroadcastChannel erro:", bcErr);
             }
 
+            const redirectTarget = syncJson.redirectUrl || (
+              selectedMyListingId
+                ? `${erpUrl}/inteligencia?tab=radar&platform=${res.platform}`
+                : `${erpUrl}/inteligencia?tab=pesquisa&q=${encodeURIComponent(res.query)}&platform=${res.platform}`
+            );
+
             setTimeout(() => {
               chrome.tabs.create({
-                url: `${erpUrl}/inteligencia?q=${encodeURIComponent(res.query)}&platform=${res.platform}`,
+                url: redirectTarget.startsWith("http") ? redirectTarget : `${erpUrl}${redirectTarget}`,
               });
             }, 600);
           } else {

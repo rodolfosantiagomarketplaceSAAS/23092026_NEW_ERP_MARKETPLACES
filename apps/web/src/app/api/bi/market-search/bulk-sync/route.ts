@@ -19,7 +19,7 @@ export async function OPTIONS() {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { query, platform, items } = body;
+    const { query, platform, items, my_listing_id } = body;
 
     if (!query || !items || !Array.isArray(items)) {
       return NextResponse.json(
@@ -39,6 +39,7 @@ export async function POST(req: NextRequest) {
     saveSyncedSearch(query, cleanPlatform, items as MarketSearchItem[]);
 
     // Persiste também no Supabase para suportar ambientes Serverless na nuvem (Vercel)
+    let totalMatched = 0;
     try {
       const supabase = createSupabaseAdminClient();
       let userId: string | null = null;
@@ -87,24 +88,60 @@ export async function POST(req: NextRequest) {
         }));
 
         if (records.length > 0) {
-          await supabase.from("competitor_listings").upsert(records, {
-            onConflict: "user_id, platform, external_id",
-            ignoreDuplicates: false,
-          });
+          const { data: insertedComps, error: compError } = await supabase
+            .from("competitor_listings")
+            .upsert(records, {
+              onConflict: "user_id, platform, external_id",
+              ignoreDuplicates: false,
+            })
+            .select("id, current_price");
+
+          if (!compError && insertedComps && insertedComps.length > 0) {
+            // Se o usuário selecionou um anúncio próprio no popup, cria os vínculos (1:N) imediatamente!
+            if (my_listing_id) {
+              const matchRecords = insertedComps.map((c) => ({
+                user_id: userId,
+                my_listing_id,
+                competitor_listing_id: c.id,
+                is_active: true,
+              }));
+
+              await supabase.from("listing_matches").upsert(matchRecords, {
+                onConflict: "my_listing_id, competitor_listing_id",
+              });
+
+              totalMatched = matchRecords.length;
+            }
+
+            // Registra os preços iniciais no histórico
+            const historyRows = insertedComps.map((c) => ({
+              competitor_listing_id: c.id,
+              price: c.current_price,
+              recorded_at: new Date().toISOString(),
+            }));
+            await supabase.from("price_history").insert(historyRows);
+          }
         }
       }
     } catch (dbErr) {
       console.warn("Aviso: falha ao persistir busca no Supabase:", dbErr);
     }
 
+    const redirectUrl = my_listing_id
+      ? `/inteligencia?tab=radar&platform=${cleanPlatform}`
+      : `/inteligencia?tab=pesquisa&q=${encodeURIComponent(query)}&platform=${cleanPlatform}`;
+
     return NextResponse.json(
       {
         success: true,
-        message: `${items.length} anúncios da pesquisa foram sincronizados com sucesso no ERP!`,
+        message: my_listing_id
+          ? `✅ ${items.length} concorrentes vinculados com sucesso ao seu anúncio no Radar Comparativo!`
+          : `${items.length} anúncios da pesquisa foram sincronizados com sucesso no ERP!`,
         count: items.length,
+        totalMatched,
         query,
         platform: cleanPlatform,
-        redirectUrl: `/inteligencia?q=${encodeURIComponent(query)}&platform=${cleanPlatform}`,
+        redirectUrl,
       },
       {
         headers: {

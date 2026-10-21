@@ -1,13 +1,23 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, Suspense } from "react";
+import { useSearchParams } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { BiDashboard } from "@/components/bi/BiDashboard";
 import { MarketSearchSubTab } from "@/components/bi/MarketSearchSubTab";
 import { Radio, Search, Sparkles } from "lucide-react";
 
-export default function InteligenciaPage() {
-  const [activeSubTab, setActiveSubTab] = useState<"radar" | "pesquisa">("pesquisa");
+function InteligenciaContent() {
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") === "radar" ? "radar" : "pesquisa";
+  const [activeSubTab, setActiveSubTab] = useState<"radar" | "pesquisa">(initialTab);
+
+  useEffect(() => {
+    const tabParam = searchParams.get("tab");
+    if (tabParam === "radar" || tabParam === "pesquisa") {
+      setActiveSubTab(tabParam);
+    }
+  }, [searchParams]);
 
   return (
     <>
@@ -72,5 +82,13 @@ export default function InteligenciaPage() {
         </div>
       </main>
     </>
+  );
+}
+
+export default function InteligenciaPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-center text-slate-500 text-sm">Carregando Inteligência de Mercado...</div>}>
+      <InteligenciaContent />
+    </Suspense>
   );
 }
