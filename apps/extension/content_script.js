@@ -885,7 +885,29 @@
     return { isAutoSync, erpUrl };
   }
 
+  function isProductPage() {
+    if (isMercadoLivre) {
+      return (
+        window.location.hostname.startsWith("produto.") ||
+        /MLB-?\d+/i.test(window.location.pathname) ||
+        !!document.querySelector(".ui-pdp-title, h1.ui-pdp-title, .ui-pdp-container, .ui-pdp-price")
+      );
+    }
+    if (isShopee) {
+      return (
+        /-i\.\d+\.\d+/.test(window.location.pathname) ||
+        !!document.querySelector(".page-product, ._44qnta, .f7A667")
+      );
+    }
+    return false;
+  }
+
   function isSearchListingPage() {
+    // Se for um anúncio individual de produto, NUNCA é página de busca
+    if (isProductPage()) {
+      return false;
+    }
+
     if (isMercadoLivre) {
       const { isAutoSync } = getAutoSyncParams();
       return (
@@ -895,7 +917,7 @@
         window.location.search.includes("as_word=") ||
         window.location.search.includes("q=") ||
         document.querySelectorAll(
-          "li.ui-search-layout__item, div.poly-card, div.ui-search-result, [class*='poly-card'], div.ui-search-result__wrapper"
+          "li.ui-search-layout__item, section.ui-search-results li, div.ui-search-result__wrapper"
         ).length >= 2
       );
     }
@@ -903,7 +925,7 @@
       return (
         window.location.pathname.includes("/search") ||
         window.location.search.includes("keyword=") ||
-        document.querySelectorAll('div[data-sqe="item"]').length >= 2
+        document.querySelectorAll('div[data-sqe="item"]').length >= 5
       );
     }
     return false;
