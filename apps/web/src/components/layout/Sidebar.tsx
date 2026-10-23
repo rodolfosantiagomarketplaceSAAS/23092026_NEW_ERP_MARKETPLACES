@@ -1,11 +1,12 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, Suspense } from "react";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import {
   LayoutDashboard,
   Boxes,
+  Radio,
   ShoppingCart,
   TrendingUp,
   Settings,
@@ -25,12 +26,13 @@ import {
   type OrganizationInfo,
 } from "@/lib/services/auth";
 
-export function Sidebar() {
+function SidebarContent() {
   const [collapsed, setCollapsed] = useState(false);
   const [profile, setProfile] = useState<UserProfileInfo | null>(null);
   const [org, setOrg] = useState<OrganizationInfo | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   // Verifica se está em rota pública/autenticação/aguardando liberação (não exibe sidebar)
   const isAuthRoute =
@@ -55,6 +57,7 @@ export function Sidebar() {
   }
 
   const isSuperAdmin = profile?.email?.toLowerCase() === "rodolfo.mecatronica@gmail.com";
+  const isRadar = pathname === "/inteligencia" && searchParams?.get("tab") === "radar";
 
   const menuItems = [
     {
@@ -68,6 +71,12 @@ export function Sidebar() {
       href: "/catalogo",
       icon: Boxes,
       badge: null,
+    },
+    {
+      label: "Radar Comparativo",
+      href: "/inteligencia?tab=radar",
+      icon: Radio,
+      badge: "1:N",
     },
     {
       label: "Vendas & Pedidos",
@@ -158,7 +167,14 @@ export function Sidebar() {
         <nav className="p-2 space-y-1">
           {menuItems.map((item) => {
             const Icon = item.icon;
-            const isActive = pathname === item.href || (item.href === "/inteligencia" && pathname === "/");
+            let isActive = false;
+            if (item.href === "/inteligencia?tab=radar") {
+              isActive = isRadar;
+            } else if (item.href === "/inteligencia") {
+              isActive = (pathname === "/inteligencia" || pathname === "/") && !isRadar;
+            } else {
+              isActive = pathname === item.href;
+            }
 
             return (
               <Link
@@ -187,6 +203,8 @@ export function Sidebar() {
                         ? "bg-sky-800 text-white"
                         : item.badge === "ADM"
                         ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                        : item.badge === "1:N"
+                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
                         : item.isPrimary
                         ? "bg-amber-400/20 text-amber-300 border border-amber-400/30"
                         : "bg-slate-800 text-slate-400"
@@ -263,5 +281,13 @@ export function Sidebar() {
         )}
       </div>
     </aside>
+  );
+}
+
+export function Sidebar() {
+  return (
+    <Suspense fallback={<aside className="h-screen w-64 bg-[#0F172A] shrink-0" />}>
+      <SidebarContent />
+    </Suspense>
   );
 }

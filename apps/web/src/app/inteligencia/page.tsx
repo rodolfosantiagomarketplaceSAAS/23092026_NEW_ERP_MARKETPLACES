@@ -1,13 +1,14 @@
 "use client";
 
 import React, { useState, useEffect, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { BiDashboard } from "@/components/bi/BiDashboard";
 import { MarketSearchSubTab } from "@/components/bi/MarketSearchSubTab";
 import { Radio, Search, Sparkles } from "lucide-react";
 
 function InteligenciaContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") === "radar" ? "radar" : "pesquisa";
   const [activeSubTab, setActiveSubTab] = useState<"radar" | "pesquisa">(initialTab);
@@ -18,6 +19,11 @@ function InteligenciaContent() {
       setActiveSubTab(tabParam);
     }
   }, [searchParams]);
+
+  const handleSelectTab = (tab: "radar" | "pesquisa") => {
+    setActiveSubTab(tab);
+    router.replace(`/inteligencia?tab=${tab}`, { scroll: false });
+  };
 
   return (
     <>
@@ -44,7 +50,7 @@ function InteligenciaContent() {
             <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold self-start sm:self-auto shadow-2xs">
               <button
                 type="button"
-                onClick={() => setActiveSubTab("pesquisa")}
+                onClick={() => handleSelectTab("pesquisa")}
                 className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 ${
                   activeSubTab === "pesquisa"
                     ? "bg-white text-indigo-700 shadow-sm font-bold"
@@ -60,7 +66,7 @@ function InteligenciaContent() {
 
               <button
                 type="button"
-                onClick={() => setActiveSubTab("radar")}
+                onClick={() => handleSelectTab("radar")}
                 className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 ${
                   activeSubTab === "radar"
                     ? "bg-white text-indigo-700 shadow-sm font-bold"
