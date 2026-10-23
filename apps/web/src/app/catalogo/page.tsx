@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Eye,
   Flame,
+  Percent,
 } from "lucide-react";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { SyncMyListingsButton } from "@/components/catalogo/SyncMyListingsButton";
@@ -135,8 +136,10 @@ export default async function CatalogoPage() {
   const mlCount = myListings.filter((i: any) => i.platform === "mercadolivre").length;
   const shopeeCount = myListings.filter((i: any) => i.platform === "shopee").length;
   const totalVisits = myListings.reduce((acc: number, cur: any) => acc + (cur.visits || 0), 0);
+  const totalSoldAll = myListings.reduce((acc: number, cur: any) => acc + (cur.sold_quantity || 0), 0);
   const totalSales30d = myListings.reduce((acc: number, cur: any) => acc + (cur.sales_last_30_days || 0), 0);
   const totalSales7d = myListings.reduce((acc: number, cur: any) => acc + (cur.sales_last_7_days || 0), 0);
+  const overallConversion = totalVisits > 0 ? ((totalSoldAll / totalVisits) * 100).toFixed(1) : "0.0";
   const avgPrice =
     totalListings > 0
       ? myListings.reduce((acc: number, cur: any) => acc + cur.price, 0) / totalListings
@@ -171,7 +174,7 @@ export default async function CatalogoPage() {
           </div>
 
           {/* Cards de Métricas do Catálogo Próprio */}
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
             <div className="bg-white border border-[#E2E8F0] p-3 rounded shadow-2xs">
               <div className="text-[11px] font-medium text-slate-500 flex items-center gap-1">
                 <Boxes className="w-3.5 h-3.5 text-sky-600" />
@@ -220,7 +223,20 @@ export default async function CatalogoPage() {
               </div>
             </div>
 
-            <div className="bg-white border border-[#E2E8F0] p-3 rounded shadow-2xs col-span-2 sm:col-span-1">
+            <div className="bg-white border border-emerald-200 bg-emerald-50/20 p-3 rounded shadow-2xs">
+              <div className="text-[11px] font-medium text-emerald-800 flex items-center gap-1">
+                <Percent className="w-3.5 h-3.5 text-emerald-600" />
+                Taxa de Conversão
+              </div>
+              <div className="text-xl font-bold text-emerald-900 mt-1">
+                {overallConversion}%
+              </div>
+              <div className="text-[10px] text-emerald-700 font-semibold mt-0.5">
+                Vendas / Visitas total
+              </div>
+            </div>
+
+            <div className="bg-white border border-[#E2E8F0] p-3 rounded shadow-2xs">
               <div className="text-[11px] font-medium text-slate-500">Ticket Médio</div>
               <div className="text-xl font-bold text-slate-900 mt-1">
                 R$ {avgPrice.toFixed(2).replace(".", ",")}
