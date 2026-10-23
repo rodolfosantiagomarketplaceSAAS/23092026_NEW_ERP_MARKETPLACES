@@ -8,20 +8,20 @@
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
-  /* Barra de rolagem corporativa compacta */
+  /* Barra de rolagem corporativa compacta e visível */
   ::-webkit-scrollbar {
     width: 6px;
-    height: 6px;
+    height: 8px;
   }
   ::-webkit-scrollbar-track {
     background: #F1F5F9;
   }
   ::-webkit-scrollbar-thumb {
-    background: #CBD5E1;
-    border-radius: 3px;
+    background: #94A3B8;
+    border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #94A3B8;
+    background: #64748B;
   }
 }
 

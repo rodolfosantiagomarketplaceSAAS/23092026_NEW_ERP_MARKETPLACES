@@ -22,8 +22,8 @@ function InteligenciaContent() {
   return (
     <>
       <Header platformName="Módulo de Inteligência de Negócios" />
-      <main className="p-4 sm:p-6 flex-1">
-        <div className="max-w-[1600px] mx-auto space-y-5">
+      <main className="p-4 sm:p-6 flex-1 min-w-0 w-full">
+        <div className="max-w-[1600px] w-full mx-auto space-y-5 min-w-0">
           {/* Cabeçalho do Módulo & Navegação de Subabas */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1 border-b border-slate-200">
             <div>
