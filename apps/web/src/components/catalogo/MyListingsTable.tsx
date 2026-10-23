@@ -1579,7 +1579,21 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                   </div>
                                 </td>
                                 <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                  R$ {v.classicOption.price.toFixed(2).replace(".", ",")}
+                                  {v.classicOption.originalPrice && v.classicOption.originalPrice > v.classicOption.price ? (
+                                    <div className="flex flex-col">
+                                      <span className="text-[10px] text-slate-400 line-through">
+                                        R$ {v.classicOption.originalPrice.toFixed(2).replace(".", ",")}
+                                      </span>
+                                      <span className="text-slate-900 font-bold flex items-center gap-1">
+                                        R$ {v.classicOption.price.toFixed(2).replace(".", ",")}
+                                        <span className="text-[9px] font-bold bg-[#00A650] text-white px-1 py-0.2 rounded">
+                                          {Math.round(((v.classicOption.originalPrice - v.classicOption.price) / v.classicOption.originalPrice) * 100)}% OFF
+                                        </span>
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span>R$ {v.classicOption.price.toFixed(2).replace(".", ",")}</span>
+                                  )}
                                 </td>
                                 <td className="py-2.5 px-3">
                                   <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded">
@@ -1669,7 +1683,21 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                   </div>
                                 </td>
                                 <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                  R$ {v.premiumOption.price.toFixed(2).replace(".", ",")}
+                                  {v.premiumOption.originalPrice && v.premiumOption.originalPrice > v.premiumOption.price ? (
+                                    <div className="flex flex-col">
+                                      <span className="text-[10px] text-slate-400 line-through">
+                                        R$ {v.premiumOption.originalPrice.toFixed(2).replace(".", ",")}
+                                      </span>
+                                      <span className="text-slate-900 font-bold flex items-center gap-1">
+                                        R$ {v.premiumOption.price.toFixed(2).replace(".", ",")}
+                                        <span className="text-[9px] font-bold bg-[#00A650] text-white px-1 py-0.2 rounded">
+                                          {Math.round(((v.premiumOption.originalPrice - v.premiumOption.price) / v.premiumOption.originalPrice) * 100)}% OFF
+                                        </span>
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span>R$ {v.premiumOption.price.toFixed(2).replace(".", ",")}</span>
+                                  )}
                                 </td>
                                 <td className="py-2.5 px-3">
                                   <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">
@@ -1777,7 +1805,21 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                 </div>
                               </td>
                               <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                R$ {cListing.price.toFixed(2).replace(".", ",")}
+                                {cListing.original_price && cListing.original_price > cListing.price ? (
+                                  <div className="flex flex-col">
+                                    <span className="text-[10px] text-slate-400 line-through">
+                                      R$ {cListing.original_price.toFixed(2).replace(".", ",")}
+                                    </span>
+                                    <span className="text-slate-900 font-bold flex items-center gap-1">
+                                      R$ {cListing.price.toFixed(2).replace(".", ",")}
+                                      <span className="text-[9px] font-bold bg-[#00A650] text-white px-1 py-0.2 rounded">
+                                        {Math.round(((cListing.original_price - cListing.price) / cListing.original_price) * 100)}% OFF
+                                      </span>
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span>R$ {cListing.price.toFixed(2).replace(".", ",")}</span>
+                                )}
                               </td>
                               <td className="py-2.5 px-3">
                                 <span className="text-[10px] font-bold text-slate-700 bg-white border border-slate-200 px-2 py-0.5 rounded">
@@ -1878,7 +1920,21 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                 </div>
                               </td>
                               <td className="py-2.5 px-3 font-semibold text-slate-900 text-xs">
-                                R$ {pListing.price.toFixed(2).replace(".", ",")}
+                                {pListing.original_price && pListing.original_price > pListing.price ? (
+                                  <div className="flex flex-col">
+                                    <span className="text-[10px] text-slate-400 line-through">
+                                      R$ {pListing.original_price.toFixed(2).replace(".", ",")}
+                                    </span>
+                                    <span className="text-slate-900 font-bold flex items-center gap-1">
+                                      R$ {pListing.price.toFixed(2).replace(".", ",")}
+                                      <span className="text-[9px] font-bold bg-[#00A650] text-white px-1 py-0.2 rounded">
+                                        {Math.round(((pListing.original_price - pListing.price) / pListing.original_price) * 100)}% OFF
+                                      </span>
+                                    </span>
+                                  </div>
+                                ) : (
+                                  <span>R$ {pListing.price.toFixed(2).replace(".", ",")}</span>
+                                )}
                               </td>
                               <td className="py-2.5 px-3">
                                 <span className="text-[10px] font-bold text-amber-900 bg-amber-100 border border-amber-300 px-2 py-0.5 rounded">

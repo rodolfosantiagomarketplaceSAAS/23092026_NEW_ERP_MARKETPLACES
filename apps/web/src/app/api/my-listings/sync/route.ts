@@ -157,8 +157,26 @@ export async function POST(req: NextRequest) {
       const itemsUrl = `https://api.mercadolibre.com/items?ids=${chunk.join(",")}`;
       const visitsUrl = `https://api.mercadolibre.com/visits/items?ids=${chunk.join(",")}`;
 
-      // Busca dados dos anúncios e dados de visitas oficiais em paralelo
-      const [itemsRes, visitsRes] = await Promise.all([
+      // Busca dados dos anúncios, dados de visitas oficiais e preço promocional/venda (sale_price) em paralelo
+      const salePricePromises = chunk.map(async (itemId) => {
+        try {
+          const spRes = await fetch(`https://api.mercadolibre.com/items/${itemId}/sale_price`, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "User-Agent": "CRM-Marketplaces-ERP/2.0",
+              Accept: "application/json",
+            },
+            cache: "no-store",
+          });
+          if (spRes.ok) {
+            const spData = await spRes.json();
+            return { id: itemId, data: spData };
+          }
+        } catch {}
+        return { id: itemId, data: null };
+      });
+
+      const [itemsRes, visitsRes, salePrices] = await Promise.all([
         fetch(itemsUrl, {
           headers: { Authorization: `Bearer ${accessToken}` },
           cache: "no-store",
@@ -167,6 +185,7 @@ export async function POST(req: NextRequest) {
           headers: { Authorization: `Bearer ${accessToken}` },
           cache: "no-store",
         }).catch(() => null),
+        Promise.all(salePricePromises),
       ]);
 
       if (!itemsRes.ok) continue;
@@ -178,6 +197,17 @@ export async function POST(req: NextRequest) {
           visitsMap = await visitsRes.json();
         } catch {
           visitsMap = {};
+        }
+      }
+
+      // Mapa de preços de venda vigentes (/items/{id}/sale_price)
+      const salePriceMap = new Map<string, { amount: number; regular_amount: number | null }>();
+      for (const sp of salePrices) {
+        if (sp?.data?.amount !== undefined && sp.data.amount !== null) {
+          salePriceMap.set(sp.id, {
+            amount: Number(sp.data.amount),
+            regular_amount: sp.data.regular_amount ? Number(sp.data.regular_amount) : null,
+          });
         }
       }
 
@@ -201,6 +231,36 @@ export async function POST(req: NextRequest) {
         );
         const itemSku = skuAttr?.value_name || item.seller_custom_field || null;
 
+        // Resolução oficial e precisa de preços:
+        // 1. Prioridade máxima: endpoint oficial /items/{id}/sale_price (reflete promoções ativas, campanhas e descontos individuais)
+        // 2. Segunda prioridade: promoções ativas detectadas na central de promoções do vendedor (seller-promotions)
+        // 3. Fallback: campos originais do anúncio (item.price, item.original_price, item.base_price)
+        const spInfo = salePriceMap.get(item.id);
+        const activePromo = promoMap.get(item.id);
+
+        let currentPrice = Number(item.price || 0);
+        let originalPrice: number | null = null;
+
+        if (spInfo && spInfo.amount > 0) {
+          currentPrice = spInfo.amount;
+          if (spInfo.regular_amount && spInfo.regular_amount > spInfo.amount) {
+            originalPrice = spInfo.regular_amount;
+          }
+        } else if (activePromo && activePromo.price > 0) {
+          currentPrice = activePromo.price;
+          originalPrice = activePromo.original_price > activePromo.price
+            ? activePromo.original_price
+            : Number(item.price || item.base_price || 0);
+        }
+
+        if (!originalPrice) {
+          if (item.original_price && Number(item.original_price) > currentPrice) {
+            originalPrice = Number(item.original_price);
+          } else if (item.base_price && Number(item.base_price) > currentPrice) {
+            originalPrice = Number(item.base_price);
+          }
+        }
+
         // Extração rica de variações (cor, acabamento, etc)
         const parsedVariations = Array.isArray(item.variations)
           ? item.variations.map((v: any) => {
@@ -211,11 +271,22 @@ export async function POST(req: NextRequest) {
                 ? v.attribute_combinations.map((c: any) => `${c.name}: ${c.value_name}`).join(" | ")
                 : "Variação Padrão";
 
+              const varBasePrice = Number(v.price || item.price || 0);
+              let varCurrentPrice = varBasePrice;
+              let varOrigPrice: number | null = v.original_price ? Number(v.original_price) : null;
+
+              if (originalPrice && originalPrice > currentPrice && (!varOrigPrice || varOrigPrice <= varCurrentPrice)) {
+                if (varCurrentPrice === originalPrice) {
+                  varOrigPrice = originalPrice;
+                  varCurrentPrice = currentPrice;
+                }
+              }
+
               return {
                 id: v.id,
                 name: comboName,
-                price: Number(v.price || item.price || 0),
-                original_price: v.original_price ? Number(v.original_price) : null,
+                price: varCurrentPrice,
+                original_price: varOrigPrice,
                 sku: varSkuAttr?.value_name || v.seller_custom_field || null,
                 available_quantity: v.available_quantity || 0,
                 sold_quantity: v.sold_quantity || 0,
@@ -223,22 +294,6 @@ export async function POST(req: NextRequest) {
               };
             })
           : [];
-
-        // Preços: verifica se o anúncio participa de promoção ativa do vendedor
-        let currentPrice = Number(item.price || 0);
-        let originalPrice: number | null = null;
-
-        const activePromo = promoMap.get(item.id);
-        if (activePromo && activePromo.price > 0) {
-          currentPrice = activePromo.price;
-          originalPrice = activePromo.original_price > activePromo.price
-            ? activePromo.original_price
-            : Number(item.price || item.base_price || 0);
-        } else if (item.original_price && Number(item.original_price) > currentPrice) {
-          originalPrice = Number(item.original_price);
-        } else if (item.base_price && Number(item.base_price) > currentPrice) {
-          originalPrice = Number(item.base_price);
-        }
         const soldQty = Number(item.sold_quantity || 0);
         const availableQty = Number(item.available_quantity || 0);
 
