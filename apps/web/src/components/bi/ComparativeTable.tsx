@@ -1,13 +1,13 @@
 "use client";
 
 import React, { useState } from "react";
-import Image from "next/image";
 import {
   ChevronDown,
   ChevronRight,
   ExternalLink,
   SlidersHorizontal,
   Link as LinkIcon,
+  PlusCircle,
   Truck,
   Zap,
   Tag,
@@ -15,15 +15,16 @@ import {
   TrendingDown,
   TrendingUp,
   Minus,
-  Sparkles,
   Trash2,
   Radio,
   Calendar,
   ShoppingBag,
+  Store,
 } from "lucide-react";
 import type { ComparativeListingGroup, CompetitorComparisonItem } from "@crm/types";
 import { RepriceModal } from "./RepriceModal";
 import { MarketplacePrice } from "./MarketplacePrice";
+import { AddCompetitorModal } from "./AddCompetitorModal";
 
 function formatDate(dateString?: string | null) {
   if (!dateString) return null;
@@ -48,9 +49,10 @@ interface ComparativeTableProps {
   groups: ComparativeListingGroup[];
   highlightedIds?: Record<string, boolean>;
   onPriceUpdated?: (groupId: string, newPrice: number) => void;
-  onOpenPairModal?: (groupId: string) => void;
+  onOpenPairModal?: (group: ComparativeListingGroup) => void;
   onDeleteCompetitor?: (myListingId: string, competitorId: string) => void;
   onDeleteMyListing?: (myListingId: string, title: string) => void;
+  onCompetitorAdded?: () => void;
 }
 
 export function ComparativeTable({
@@ -60,20 +62,28 @@ export function ComparativeTable({
   onOpenPairModal,
   onDeleteCompetitor,
   onDeleteMyListing,
+  onCompetitorAdded,
 }: ComparativeTableProps) {
-  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({
-    "ml-001": true, // Deixa o primeiro expandido por padrão
-    "shp-001": true,
+  // Inicializa com as linhas que possuem concorrentes expandidas
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    groups.forEach((g) => {
+      if (g.competitors && g.competitors.length > 0) {
+        initial[g.my_listing.id] = true;
+      }
+    });
+    return initial;
   });
 
   const [selectedGroupForReprice, setSelectedGroupForReprice] = useState<ComparativeListingGroup | null>(null);
+  const [selectedGroupForAdd, setSelectedGroupForAdd] = useState<ComparativeListingGroup | null>(null);
 
   const toggleRow = (id: string) => {
     setExpandedRows((prev) => ({ ...prev, [id]: !prev[id] }));
   };
 
   /**
-   * Renderiza Badge de Logística do Mercado Livre e Shopee
+   * Renderiza Badge de Logística
    */
   const renderShippingBadge = (type: string) => {
     switch (type) {
@@ -161,20 +171,34 @@ export function ComparativeTable({
 
   return (
     <div className="bg-white border border-[#E2E8F0] rounded-md shadow-xs overflow-hidden">
-      {/* Tabela de Alta Densidade Estilo Tiny ERP */}
+      {/* Tabela de Alta Densidade Estilo Tiny ERP com Colunas Claras */}
       <div className="overflow-x-auto">
         <table className="w-full text-left border-collapse text-xs">
           <thead>
+            {/* Linha 1 de Cabeçalho: Agrupamento Visual */}
+            <tr className="bg-slate-100/90 border-b border-slate-200 text-slate-700 font-bold text-[10.5px] uppercase tracking-wider">
+              <th className="py-2 px-3 w-8 text-center"></th>
+              <th colSpan={3} className="py-2 px-3 border-r border-slate-200 bg-slate-100 text-slate-800">
+                📦 MEU ANÚNCIO (DADOS PRÓPRIOS NO CANAL)
+              </th>
+              <th colSpan={4} className="py-2 px-3 bg-amber-50/70 text-amber-900 border-r border-slate-200">
+                🎯 ANÚNCIO DO CONCORRENTE & DISCREPÂNCIA DE PREÇO (1:N)
+              </th>
+              <th className="py-2 px-3 text-center min-w-[120px] bg-slate-100">
+                AÇÕES
+              </th>
+            </tr>
+            {/* Linha 2 de Cabeçalho: Colunas Específicas */}
             <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#475569] font-bold text-[11px] uppercase tracking-wider">
-              <th className="py-2.5 px-3 w-8 text-center"></th>
+              <th className="py-2 px-3 w-8 text-center"></th>
               <th className="py-2.5 px-3 min-w-[280px]">Produto / SKU / Anúncio Próprio</th>
               <th className="py-2.5 px-3 text-right">Meu Preço</th>
-              <th className="py-2.5 px-3 text-right">Menor Concorrente</th>
-              <th className="py-2.5 px-3 text-center">Discrepância</th>
-              <th className="py-2.5 px-3">Logística</th>
-              <th className="py-2.5 px-3">Tipo / Reputação</th>
-              <th className="py-2.5 px-3">Promoções</th>
-              <th className="py-2.5 px-3 text-center min-w-[140px]">Ações Rápidas</th>
+              <th className="py-2.5 px-3 border-r border-slate-200">Logística Própria</th>
+              <th className="py-2.5 px-3 text-right bg-amber-50/30">Menor Concorrente</th>
+              <th className="py-2.5 px-3 text-center bg-amber-50/30">Discrepância</th>
+              <th className="py-2.5 px-3 bg-amber-50/30">Logística / Tipo Concorrente</th>
+              <th className="py-2.5 px-3 border-r border-slate-200 bg-amber-50/30">Promoções</th>
+              <th className="py-2.5 px-3 text-center">Ações Rápidas</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-[#E2E8F0]">
@@ -189,14 +213,14 @@ export function ComparativeTable({
                       Nenhum anúncio monitorado no Radar de Mercado
                     </p>
                     <p className="text-[11px] text-slate-500 text-center leading-relaxed">
-                      Você pode utilizar a aba <strong>Pesquisa de Mercado</strong> para pesquisar produtos concorrentes e adicioná-los com 1-clique ao Radar, ou capturá-los via Extensão Web.
+                      Utilize a extensão web diretamente no anúncio do concorrente para vinculá-lo ao seu anúncio ou adicionar novos concorrentes ao monitoramento.
                     </p>
                   </div>
                 </td>
               </tr>
             ) : (
               groups.map((group) => {
-                const isExpanded = !!expandedRows[group.my_listing.id];
+                const isExpanded = expandedRows[group.my_listing.id] !== false; // Padrão aberto se tiver concorrentes
                 const hasCompetitors = group.competitors.length > 0;
                 const isRadar = group.my_listing.listing_type === "radar";
 
@@ -210,10 +234,10 @@ export function ComparativeTable({
                           <button
                             onClick={() => toggleRow(group.my_listing.id)}
                             className="p-1 rounded hover:bg-slate-200 text-slate-500 transition-colors"
-                            title={isExpanded ? "Recolher Concorrentes" : "Ver Concorrentes"}
+                            title={isExpanded ? "Recolher Sublinhas de Concorrentes" : "Expandir Concorrentes Pareados"}
                           >
                             {isExpanded ? (
-                              <ChevronDown className="w-3.5 h-3.5" />
+                              <ChevronDown className="w-3.5 h-3.5 text-indigo-600 font-bold" />
                             ) : (
                               <ChevronRight className="w-3.5 h-3.5" />
                             )}
@@ -223,7 +247,7 @@ export function ComparativeTable({
                         )}
                       </td>
 
-                      {/* Produto & SKU */}
+                      {/* 1. Meu Produto & SKU */}
                       <td className="py-2.5 px-3">
                         <div className="flex items-start space-x-3">
                           <div className="w-14 h-14 rounded-lg border border-slate-200 bg-white shrink-0 flex items-center justify-center overflow-hidden p-0.5 shadow-xs">
@@ -244,15 +268,16 @@ export function ComparativeTable({
                                   <Radio className="w-2.5 h-2.5 text-sky-600 animate-pulse" /> Radar Concorrente
                                 </span>
                               )}
+                              {/* TÍTULO CLICÁVEL: DIRECIONA AO ANÚNCIO */}
                               <a
                                 href={group.my_listing.permalink}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="font-semibold text-slate-900 hover:text-sky-600 line-clamp-1 leading-snug transition-colors hover:underline inline-flex items-center gap-1 group/title"
-                                title="Abrir anúncio no marketplace"
+                                className="font-semibold text-slate-900 hover:text-indigo-600 line-clamp-1 leading-snug transition-colors hover:underline inline-flex items-center gap-1 group/title"
+                                title="Clique para abrir seu anúncio no marketplace"
                               >
                                 <span>{group.my_listing.title}</span>
-                                <ExternalLink className="w-3 h-3 text-slate-400 group-hover/title:text-sky-600 shrink-0 opacity-70 group-hover/title:opacity-100 transition-opacity" />
+                                <ExternalLink className="w-3 h-3 text-slate-400 group-hover/title:text-indigo-600 shrink-0 opacity-70 group-hover/title:opacity-100 transition-opacity" />
                               </a>
                             </div>
                             <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
@@ -288,7 +313,7 @@ export function ComparativeTable({
                         </div>
                       </td>
 
-                      {/* Meu Preço */}
+                      {/* 2. Meu Preço */}
                       <td className="py-2.5 px-3 text-right">
                         {isRadar ? (
                           <div>
@@ -297,16 +322,7 @@ export function ComparativeTable({
                               originalPrice={group.my_listing.original_price}
                               align="right"
                             />
-                            <div className="text-[10px] text-slate-400 mt-0.5">Preço de Referência</div>
-                            <button
-                              onClick={() => setSelectedGroupForReprice(group)}
-                              className="text-[10px] text-sky-600 hover:text-sky-800 underline font-medium block ml-auto mt-0.5"
-                              title="Definir custo ou preço pretendido para calcular margem"
-                            >
-                              {group.my_listing.product_cost_price
-                                ? `Custo: R$ ${Number(group.my_listing.product_cost_price).toFixed(2)}`
-                                : "Definir Meu Custo"}
-                            </button>
+                            <div className="text-[10px] text-slate-400 mt-0.5">Preço Referência</div>
                           </div>
                         ) : (
                           <div>
@@ -324,8 +340,13 @@ export function ComparativeTable({
                         )}
                       </td>
 
-                      {/* Menor Concorrente */}
-                      <td className="py-2.5 px-3 text-right">
+                      {/* 3. Logística Própria */}
+                      <td className="py-2.5 px-3 border-r border-slate-200">
+                        {renderShippingBadge(group.my_listing.shipping_type)}
+                      </td>
+
+                      {/* 4. Menor Concorrente */}
+                      <td className="py-2.5 px-3 text-right bg-amber-50/20">
                         {group.lowest_competitor_price !== null ? (
                           <div>
                             <MarketplacePrice
@@ -338,16 +359,24 @@ export function ComparativeTable({
                               align="right"
                             />
                             <div className="text-[10px] text-slate-500 mt-0.5">
-                              {group.competitors.length} monitorado(s)
+                              {group.competitors.length} concorrente(s) vinculado(s)
                             </div>
                           </div>
                         ) : (
-                          <span className="text-slate-400 italic text-[11px]">Nenhum pareado</span>
+                          <div className="flex flex-col items-end">
+                            <span className="text-slate-400 italic text-[11px]">Nenhum pareado</span>
+                            <button
+                              onClick={() => setSelectedGroupForAdd(group)}
+                              className="text-[10.5px] font-bold text-indigo-600 hover:text-indigo-800 underline mt-0.5 inline-flex items-center gap-1"
+                            >
+                              <PlusCircle className="w-3 h-3" /> Adicionar Concorrente
+                            </button>
+                          </div>
                         )}
                       </td>
 
-                      {/* Discrepância / Buybox Status */}
-                      <td className="py-2.5 px-3 text-center">
+                      {/* 5. Discrepância / Buybox Status */}
+                      <td className="py-2.5 px-3 text-center bg-amber-50/20">
                         {isRadar ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
                             <Radio className="w-3 h-3 text-sky-600 animate-pulse" />
@@ -381,24 +410,42 @@ export function ComparativeTable({
                         )}
                       </td>
 
-                      {/* Logística */}
-                      <td className="py-2.5 px-3">
-                        {renderShippingBadge(group.my_listing.shipping_type)}
+                      {/* 6. Logística / Tipo Concorrente */}
+                      <td className="py-2.5 px-3 bg-amber-50/20">
+                        {group.competitors.length > 0 ? (
+                          <div className="flex flex-col gap-1">
+                            {renderShippingBadge(group.competitors[0].shipping_type)}
+                            {renderReputationBadge(group.competitors[0].seller_reputation)}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 text-[10px]">—</span>
+                        )}
                       </td>
 
-                      {/* Tipo / Reputação */}
-                      <td className="py-2.5 px-3">
-                        {renderReputationBadge(null, group.my_listing.listing_type)}
+                      {/* 7. Promoções */}
+                      <td className="py-2.5 px-3 border-r border-slate-200 bg-amber-50/20">
+                        {group.competitors.length > 0 && group.competitors[0].promo_badge ? (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                            {group.competitors[0].promo_badge}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 text-[11px]">—</span>
+                        )}
                       </td>
 
-                      {/* Promoção */}
-                      <td className="py-2.5 px-3">
-                        <span className="text-slate-400 text-[11px]">Normal</span>
-                      </td>
-
-                      {/* Ações Rápidas */}
+                      {/* 8. Ações Rápidas */}
                       <td className="py-2.5 px-3 text-center">
                         <div className="flex items-center justify-center space-x-1">
+                          {/* Adicionar Concorrente ao Meu Anúncio (1:N) */}
+                          <button
+                            onClick={() => setSelectedGroupForAdd(group)}
+                            className="p-1.5 rounded hover:bg-indigo-50 text-indigo-600 border border-transparent hover:border-indigo-200 transition-colors"
+                            title="Vincular Mais um Concorrente a Este Anúncio (1:N)"
+                          >
+                            <PlusCircle className="w-3.5 h-3.5" />
+                          </button>
+
+                          {/* Simulação de Reprecificação */}
                           <button
                             onClick={() => setSelectedGroupForReprice(group)}
                             className="p-1.5 rounded hover:bg-sky-50 text-sky-700 border border-transparent hover:border-sky-200 transition-colors"
@@ -407,6 +454,7 @@ export function ComparativeTable({
                             <SlidersHorizontal className="w-3.5 h-3.5" />
                           </button>
 
+                          {/* Link Externo */}
                           <a
                             href={group.my_listing.permalink}
                             target="_blank"
@@ -417,14 +465,7 @@ export function ComparativeTable({
                             <ExternalLink className="w-3.5 h-3.5" />
                           </a>
 
-                          <button
-                            onClick={() => onOpenPairModal && onOpenPairModal(group.my_listing.id)}
-                            className="p-1.5 rounded hover:bg-slate-100 text-slate-600 border border-transparent hover:border-slate-200 transition-colors"
-                            title={isRadar ? "Parear a outro anúncio" : "Parear Novo Concorrente Manualmente"}
-                          >
-                            <LinkIcon className="w-3.5 h-3.5" />
-                          </button>
-
+                          {/* Remover */}
                           <button
                             onClick={() => {
                               const msg = isRadar
@@ -443,31 +484,45 @@ export function ComparativeTable({
                       </td>
                     </tr>
 
-                    {/* Linhas Filhas: Concorrentes Pareados (Accordion 1:N) */}
+                    {/* SUBLINHAS: Concorrentes Pareados (Estrutura 1:N Clara) */}
                     {isExpanded && hasCompetitors && (
-                      <tr className="bg-[#F8FAFC]">
-                        <td colSpan={9} className="p-0 border-t border-b border-[#E2E8F0]">
-                          <div className="pl-12 pr-4 py-2 space-y-1">
-                            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1">
-                              <Sparkles className="w-3 h-3 text-amber-500" />
-                              Concorrentes Pareados ({group.competitors.length}):
+                      <tr className="bg-slate-50/80">
+                        <td colSpan={9} className="p-0 border-t border-b border-slate-200">
+                          <div className="pl-10 pr-3 py-2 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="text-[10.5px] font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                                <span className="w-2 h-2 rounded-full bg-indigo-600"></span>
+                                Concorrentes Vinculados a este anúncio ({group.competitors.length}):
+                              </span>
+                              <button
+                                onClick={() => setSelectedGroupForAdd(group)}
+                                className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 bg-white border border-indigo-200 hover:bg-indigo-50 px-2 py-0.5 rounded shadow-2xs inline-flex items-center gap-1 transition-colors"
+                              >
+                                <PlusCircle className="w-3 h-3" /> Vincular Outro Concorrente
+                              </button>
                             </div>
-                            <div className="divide-y divide-slate-200/80 rounded border border-slate-200 bg-white">
-                              {group.competitors.map((comp) => {
+
+                            <div className="divide-y divide-slate-200 rounded-md border border-slate-200 bg-white shadow-2xs overflow-hidden">
+                              {group.competitors.map((comp, compIndex) => {
                                 const isHighlighted = highlightedIds[comp.id];
 
                                 return (
                                   <div
                                     key={comp.id}
-                                    className={`flex items-center justify-between py-2 px-3 text-xs transition-all duration-300 ${
+                                    className={`flex items-center justify-between py-2.5 px-3 text-xs transition-all duration-300 ${
                                       isHighlighted
                                         ? "realtime-highlight bg-amber-100/60 font-semibold"
                                         : "hover:bg-slate-50/80"
                                     }`}
                                   >
-                                    {/* Info Concorrente */}
-                                    <div className="flex items-center space-x-2.5 w-[38%]">
-                                      <div className="w-10 h-10 rounded border border-slate-200 bg-white shrink-0 flex items-center justify-center overflow-hidden p-0.5 shadow-xs">
+                                    {/* Indicador de Sublinha */}
+                                    <div className="w-6 text-center text-slate-400 font-mono text-[10px] shrink-0">
+                                      #{compIndex + 1}
+                                    </div>
+
+                                    {/* Info Concorrente (Título com link clicável) */}
+                                    <div className="flex items-center space-x-2.5 w-[38%] min-w-0 pr-3">
+                                      <div className="w-9 h-9 rounded border border-slate-200 bg-white shrink-0 flex items-center justify-center overflow-hidden p-0.5 shadow-xs">
                                         {comp.thumbnail_url ? (
                                           <img
                                             src={comp.thumbnail_url}
@@ -478,19 +533,23 @@ export function ComparativeTable({
                                           <Tag className="w-3.5 h-3.5 text-slate-400" />
                                         )}
                                       </div>
-                                      <div className="flex flex-col">
+                                      <div className="flex flex-col min-w-0">
+                                        {/* TÍTULO CLICÁVEL DO CONCORRENTE: DIRECIONA AO LINK */}
                                         <a
                                           href={comp.permalink}
                                           target="_blank"
                                           rel="noopener noreferrer"
-                                          className="font-medium text-slate-800 hover:text-sky-600 line-clamp-1 hover:underline transition-colors inline-flex items-center gap-1 group/comptitle"
-                                          title="Abrir anúncio concorrente no marketplace"
+                                          className="font-semibold text-slate-800 hover:text-indigo-600 truncate hover:underline transition-colors inline-flex items-center gap-1 group/comptitle"
+                                          title="Clique para abrir o anúncio do concorrente no marketplace"
                                         >
-                                          <span>{comp.title}</span>
-                                          <ExternalLink className="w-2.5 h-2.5 text-slate-400 group-hover/comptitle:text-sky-600 shrink-0 opacity-70 group-hover/comptitle:opacity-100 transition-opacity" />
+                                          <span className="truncate">{comp.title}</span>
+                                          <ExternalLink className="w-2.5 h-2.5 text-slate-400 group-hover/comptitle:text-indigo-600 shrink-0 opacity-70 group-hover/comptitle:opacity-100 transition-opacity" />
                                         </a>
                                         <div className="text-[10px] text-slate-500 flex items-center gap-2 mt-0.5">
-                                          <span>Loja: <strong className="text-slate-700">{comp.seller_name}</strong></span>
+                                          <span className="flex items-center gap-0.5">
+                                            <Store className="w-3 h-3 text-slate-400" />
+                                            Loja: <strong className="text-slate-700">{comp.seller_name}</strong>
+                                          </span>
                                           <span>•</span>
                                           <span>ID: <code>{comp.external_id}</code></span>
                                         </div>
@@ -517,7 +576,7 @@ export function ComparativeTable({
                                     </div>
 
                                     {/* Preço do Concorrente */}
-                                    <div className="w-[14%] text-right">
+                                    <div className="w-[14%] text-right pr-2">
                                       <MarketplacePrice
                                         currentPrice={comp.current_price}
                                         originalPrice={comp.original_price}
@@ -526,35 +585,35 @@ export function ComparativeTable({
                                       />
                                     </div>
 
-                                    {/* Diferença vs Meu Preço */}
-                                    <div className="w-[14%] text-center">
+                                    {/* Discrepância vs Meu Preço */}
+                                    <div className="w-[15%] text-center">
                                       {comp.price_difference_brl > 0 ? (
-                                        <span className="text-[11px] font-bold text-[#EF4444]">
+                                        <span className="text-[11px] font-bold text-[#EF4444] bg-red-50 border border-red-200 px-2 py-0.5 rounded">
                                           +R$ {comp.price_difference_brl.toFixed(2)} (+{comp.price_difference_pct}%)
                                         </span>
                                       ) : comp.price_difference_brl === 0 ? (
-                                        <span className="text-[11px] font-bold text-amber-600">
-                                          Empate
+                                        <span className="text-[11px] font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded">
+                                          Empate (R$ 0,00)
                                         </span>
                                       ) : (
-                                        <span className="text-[11px] font-bold text-emerald-600">
+                                        <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded">
                                           -R$ {Math.abs(comp.price_difference_brl).toFixed(2)} ({comp.price_difference_pct}%)
                                         </span>
                                       )}
                                     </div>
 
                                     {/* Logística */}
-                                    <div className="w-[12%]">
+                                    <div className="w-[11%]">
                                       {renderShippingBadge(comp.shipping_type)}
                                     </div>
 
                                     {/* Reputação */}
-                                    <div className="w-[12%]">
+                                    <div className="w-[11%]">
                                       {renderReputationBadge(comp.seller_reputation)}
                                     </div>
 
                                     {/* Selo Promocional */}
-                                    <div className="w-[10%]">
+                                    <div className="w-[9%]">
                                       {comp.promo_badge ? (
                                         <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
                                           {comp.promo_badge}
@@ -564,13 +623,13 @@ export function ComparativeTable({
                                       )}
                                     </div>
 
-                                    {/* Ações Concorrente (Link Externo e Excluir) */}
-                                    <div className="w-[8%] flex items-center justify-end space-x-1">
+                                    {/* Ações Sublinha */}
+                                    <div className="w-[7%] flex items-center justify-end space-x-1">
                                       <a
                                         href={comp.permalink}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-slate-500 hover:text-slate-900 inline-flex p-1 rounded hover:bg-slate-100 transition-colors"
+                                        className="text-slate-500 hover:text-indigo-600 inline-flex p-1 rounded hover:bg-slate-100 transition-colors"
                                         title="Abrir anúncio concorrente no marketplace"
                                       >
                                         <ExternalLink className="w-3.5 h-3.5" />
@@ -602,6 +661,16 @@ export function ComparativeTable({
           </tbody>
         </table>
       </div>
+
+      {/* Modal de Adicionar Concorrente (1:N) */}
+      <AddCompetitorModal
+        group={selectedGroupForAdd}
+        isOpen={!!selectedGroupForAdd}
+        onClose={() => setSelectedGroupForAdd(null)}
+        onSuccess={(msg) => {
+          if (onCompetitorAdded) onCompetitorAdded();
+        }}
+      />
 
       {/* Modal de Reprecificação e Margem */}
       <RepriceModal

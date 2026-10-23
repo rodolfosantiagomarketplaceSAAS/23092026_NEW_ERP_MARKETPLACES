@@ -2,6 +2,61 @@ import { NextRequest, NextResponse } from "next/server";
 import { removeCompetitorMatch, removeMyListing } from "@/lib/data/comparativeStore";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
+export async function POST(req: NextRequest) {
+  try {
+    const body = await req.json();
+    const { my_listing_id, competitor_listing_id } = body;
+
+    if (!my_listing_id || !competitor_listing_id) {
+      return NextResponse.json(
+        { error: "É necessário informar 'my_listing_id' e 'competitor_listing_id'." },
+        { status: 400 }
+      );
+    }
+
+    const supabase = createSupabaseAdminClient();
+
+    // 1. Obtém o usuário associado ao anúncio próprio
+    const { data: myListing } = await supabase
+      .from("my_listings")
+      .select("user_id")
+      .eq("id", my_listing_id)
+      .single();
+
+    const userId = myListing?.user_id || "69ee4850-318b-4d9e-83ab-6743f264b6aa";
+
+    // 2. Cria ou atualiza o vínculo no listing_matches
+    const { error: matchError } = await supabase
+      .from("listing_matches")
+      .upsert(
+        {
+          user_id: userId,
+          my_listing_id,
+          competitor_listing_id,
+          is_active: true,
+        },
+        { onConflict: "my_listing_id,competitor_listing_id" }
+      );
+
+    if (matchError) {
+      console.error("[POST /api/competitors/matches] Erro ao parear:", matchError);
+      return NextResponse.json(
+        { error: "Falha ao registrar pareamento no banco de dados.", details: matchError.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      success: true,
+      message: "Concorrente vinculado com sucesso ao seu anúncio!",
+    });
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Erro desconhecido";
+    console.error("[POST /api/competitors/matches] Erro:", message);
+    return NextResponse.json({ error: "Erro interno ao parear concorrente.", details: message }, { status: 500 });
+  }
+}
+
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);

@@ -512,8 +512,9 @@ export function BiDashboard() {
           onPriceUpdated={handlePriceUpdated}
           onDeleteCompetitor={handleDeleteCompetitor}
           onDeleteMyListing={handleDeleteMyListing}
-          onOpenPairModal={(id) => {
-            alert(`Para vincular novos concorrentes ao anúncio [${id}], utilize a extensão no Chrome ou o botão 'Capturar Concorrente (ERP)' diretamente no anúncio do concorrente.`);
+          onCompetitorAdded={fetchData}
+          onOpenPairModal={(group) => {
+            fetchData();
           }}
         />
       )}
