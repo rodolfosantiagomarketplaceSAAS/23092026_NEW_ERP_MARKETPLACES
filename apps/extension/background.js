@@ -152,21 +152,32 @@ async function handleSyncSearchItems(rawErpUrl, payload) {
   };
 }
 
-async function handleGetMyListings(platform) {
+async function handleGetMyListings(platform, query = "") {
   const config = await getStoredConfig();
-  const res = await fetch(`${config.erpUrl}/api/my-listings?platform=${encodeURIComponent(platform)}`, {
+  const params = new URLSearchParams();
+  if (platform && platform !== "all") {
+    params.set("platform", platform);
+  } else if (platform === "all") {
+    params.set("platform", "all");
+  }
+  params.set("limit", "1000");
+  if (query) {
+    params.set("q", query);
+  }
+
+  const res = await fetch(`${config.erpUrl}/api/my-listings?${params.toString()}`, {
     headers: authHeaders(config.apiToken),
   });
   if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
   const data = await res.json();
-  return { success: true, items: Array.isArray(data.items) ? data.items : [] };
+  return { success: true, items: Array.isArray(data.items) ? data.items : [], total: data.total || 0 };
 }
 
 const handlers = {
   ERP_SESSION: (req) => handleErpSession(req),
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
   SYNC_SEARCH_ITEMS: (req) => handleSyncSearchItems(req.erpUrl, req.payload),
-  GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform),
+  GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),
   GET_STATUS: async () => {
     const [{ connectionStatus }, config] = await Promise.all([
       chrome.storage.local.get(["connectionStatus"]),

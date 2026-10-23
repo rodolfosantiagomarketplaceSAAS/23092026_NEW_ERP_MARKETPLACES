@@ -35,6 +35,22 @@ document.addEventListener("DOMContentLoaded", async () => {
   const listingSelectContainer = document.getElementById("listingSelectContainer");
   const myListingSelect = document.getElementById("myListingSelect");
   const listingHint = document.getElementById("listingHint");
+  const listingCountBadge = document.getElementById("listingCountBadge");
+  const platformChips = document.getElementById("platformChips");
+  const selectedListingCard = document.getElementById("selectedListingCard");
+  const selectedSkuTag = document.getElementById("selectedSkuTag");
+  const selectedPriceTag = document.getElementById("selectedPriceTag");
+  const selectedTitleText = document.getElementById("selectedTitleText");
+  const btnToggleDropdown = document.getElementById("btnToggleDropdown");
+  const btnResetToRadar = document.getElementById("btnResetToRadar");
+  const searchBoxWrapper = document.getElementById("searchBoxWrapper");
+  const listingSearchInput = document.getElementById("listingSearchInput");
+  const listingSearchClear = document.getElementById("listingSearchClear");
+  const listingDropdownList = document.getElementById("listingDropdownList");
+
+  let allMyListings = [];
+  let activePlatformFilter = "all";
+  let isDropdownOpen = false;
 
   let currentDetectedPlatform = null;
   let currentScrapedData = null;
@@ -332,41 +348,365 @@ document.addEventListener("DOMContentLoaded", async () => {
   // Salva no storage a seleção do anúncio para sincronia
   myListingSelect.addEventListener("change", () => {
     chrome.storage.local.set({ selectedMyListingId: myListingSelect.value });
+    renderSelectedCard(myListingSelect.value);
     updateButtonLabel();
   });
 
-  // Carrega anúncios próprios do usuário autenticado no ERP
-  async function loadMyListings(platform) {
-    listingSelectContainer.style.display = "block";
+  function normalizeStr(val) {
+    return (val || "")
+      .toString()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .toLowerCase();
+  }
 
-    chrome.runtime.sendMessage({ action: "GET_MY_LISTINGS", platform }, (res) => {
-      const items = res?.items || [];
-      if (items.length > 0) {
+  function escapeHtml(str) {
+    return (str || "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#039;");
+  }
+
+  function highlightMatches(text, query) {
+    if (!query || !text) return escapeHtml(text);
+    const rawText = String(text);
+    const normText = normalizeStr(rawText);
+    const normQuery = normalizeStr(query);
+
+    const matchIndex = normText.indexOf(normQuery);
+    if (matchIndex === -1) return escapeHtml(rawText);
+
+    const before = escapeHtml(rawText.slice(0, matchIndex));
+    const matched = escapeHtml(rawText.slice(matchIndex, matchIndex + query.length));
+    const after = escapeHtml(rawText.slice(matchIndex + query.length));
+
+    return `${before}<mark class="search-highlight">${matched}</mark>${after}`;
+  }
+
+  function selectListing(id, shouldSave = true) {
+    const targetId = id || "";
+    myListingSelect.value = targetId;
+    if (shouldSave) {
+      chrome.storage.local.set({ selectedMyListingId: targetId });
+    }
+    renderSelectedCard(targetId);
+    updateButtonLabel();
+    closeDropdown();
+  }
+
+  function openDropdown() {
+    isDropdownOpen = true;
+    if (searchBoxWrapper) searchBoxWrapper.style.display = "flex";
+    if (listingDropdownList) listingDropdownList.style.display = "block";
+    if (listingSearchInput) {
+      listingSearchInput.focus();
+      listingSearchInput.select();
+    }
+    renderDropdownList();
+  }
+
+  function closeDropdown() {
+    isDropdownOpen = false;
+    if (searchBoxWrapper) searchBoxWrapper.style.display = "none";
+    if (listingDropdownList) listingDropdownList.style.display = "none";
+  }
+
+  function toggleDropdown() {
+    if (isDropdownOpen) {
+      closeDropdown();
+    } else {
+      openDropdown();
+    }
+  }
+
+  if (btnToggleDropdown) {
+    btnToggleDropdown.addEventListener("click", toggleDropdown);
+  }
+
+  if (btnResetToRadar) {
+    btnResetToRadar.addEventListener("click", () => {
+      selectListing("", true);
+      showFeedback("Modo alterado para Radar de Mercado (sem vínculo)", "success");
+    });
+  }
+
+  // Chips de filtro por marketplace
+  if (platformChips) {
+    platformChips.addEventListener("click", (e) => {
+      const chip = e.target.closest(".platform-chip");
+      if (!chip) return;
+      const targetPlatform = chip.dataset.platform;
+      activePlatformFilter = targetPlatform;
+
+      platformChips.querySelectorAll(".platform-chip").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.platform === targetPlatform);
+      });
+
+      renderDropdownList();
+    });
+  }
+
+  // Campo de busca em tempo real
+  if (listingSearchInput) {
+    listingSearchInput.addEventListener("input", () => {
+      const query = listingSearchInput.value.trim();
+      if (listingSearchClear) {
+        listingSearchClear.style.display = query ? "block" : "none";
+      }
+      renderDropdownList();
+    });
+
+    listingSearchInput.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        closeDropdown();
+        return;
+      }
+
+      const items = listingDropdownList?.querySelectorAll(".listing-item") || [];
+      if (items.length === 0) return;
+
+      let currentIndex = -1;
+      items.forEach((item, idx) => {
+        if (item.classList.contains("active-nav")) currentIndex = idx;
+      });
+
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const nextIndex = currentIndex < items.length - 1 ? currentIndex + 1 : 0;
+        items.forEach((item) => item.classList.remove("active-nav"));
+        items[nextIndex].classList.add("active-nav");
+        items[nextIndex].scrollIntoView({ block: "nearest" });
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        const prevIndex = currentIndex > 0 ? currentIndex - 1 : items.length - 1;
+        items.forEach((item) => item.classList.remove("active-nav"));
+        items[prevIndex].classList.add("active-nav");
+        items[prevIndex].scrollIntoView({ block: "nearest" });
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        const activeItem = listingDropdownList.querySelector(".listing-item.active-nav") || items[0];
+        if (activeItem) {
+          const id = activeItem.dataset.id || "";
+          selectListing(id, true);
+        }
+      }
+    });
+  }
+
+  if (listingSearchClear) {
+    listingSearchClear.addEventListener("click", () => {
+      listingSearchInput.value = "";
+      listingSearchClear.style.display = "none";
+      renderDropdownList();
+      listingSearchInput.focus();
+    });
+  }
+
+  function renderSelectedCard(selectedId) {
+    if (!selectedListingCard) return;
+
+    if (!selectedId) {
+      selectedListingCard.className = "selected-listing-card radar-mode";
+      if (selectedSkuTag) selectedSkuTag.innerText = "📡 MODO RADAR";
+      if (selectedPriceTag) selectedPriceTag.innerText = "Sem vínculo direto";
+      if (selectedTitleText) {
+        selectedTitleText.innerText = "Radar de Mercado (Monitorar sem anúncio próprio)";
+      }
+      if (btnResetToRadar) btnResetToRadar.style.display = "none";
+      if (btnToggleDropdown) btnToggleDropdown.innerText = "🔍 Buscar / Vincular a Anúncio Próprio";
+      return;
+    }
+
+    const item = allMyListings.find((i) => String(i.id) === String(selectedId));
+    if (item) {
+      selectedListingCard.className = "selected-listing-card";
+      if (selectedSkuTag) {
+        selectedSkuTag.innerText = item.product_sku ? `SKU: ${item.product_sku}` : "SEM SKU";
+      }
+      if (selectedPriceTag) {
+        selectedPriceTag.innerText = `R$ ${Number(item.current_price || 0).toFixed(2)}`;
+      }
+      if (selectedTitleText) {
+        const platformLabel = item.platform === "mercadolivre" ? "ML" : item.platform === "shopee" ? "Shopee" : "";
+        selectedTitleText.innerHTML = `${platformLabel ? `<strong>[${platformLabel}]</strong> ` : ""}${escapeHtml(item.title)}`;
+      }
+      if (btnResetToRadar) btnResetToRadar.style.display = "inline-flex";
+      if (btnToggleDropdown) btnToggleDropdown.innerText = "🔄 Trocar Anúncio";
+    } else {
+      // Caso o ID salvo não esteja na lista carregada
+      selectedListingCard.className = "selected-listing-card";
+      if (selectedSkuTag) selectedSkuTag.innerText = "ANÚNCIO VINCULADO";
+      if (selectedPriceTag) selectedPriceTag.innerText = "";
+      if (selectedTitleText) selectedTitleText.innerText = `ID: ${selectedId}`;
+      if (btnResetToRadar) btnResetToRadar.style.display = "inline-flex";
+      if (btnToggleDropdown) btnToggleDropdown.innerText = "🔄 Trocar Anúncio";
+    }
+  }
+
+  function renderDropdownList() {
+    if (!listingDropdownList) return;
+
+    const query = (listingSearchInput?.value || "").trim();
+    const queryNorm = normalizeStr(query);
+
+    // Filtra por plataforma
+    let filtered = allMyListings;
+    if (activePlatformFilter && activePlatformFilter !== "all") {
+      filtered = filtered.filter((i) => i.platform === activePlatformFilter);
+    }
+
+    // Filtra por termo de busca
+    if (queryNorm) {
+      filtered = filtered.filter((item) => {
+        const titleMatch = normalizeStr(item.title).includes(queryNorm);
+        const skuMatch = normalizeStr(item.product_sku || "").includes(queryNorm);
+        const idMatch = normalizeStr(item.external_id || "").includes(queryNorm);
+        return titleMatch || skuMatch || idMatch;
+      });
+    }
+
+    // Atualiza contador no cabeçalho
+    if (listingCountBadge) {
+      if (allMyListings.length === 0) {
+        listingCountBadge.innerText = "0 anúncios";
+      } else if (filtered.length === allMyListings.length) {
+        listingCountBadge.innerText = `${allMyListings.length} anúncios disponíveis`;
+      } else {
+        listingCountBadge.innerText = `${filtered.length} de ${allMyListings.length}`;
+      }
+    }
+
+    const currentSelectedId = myListingSelect.value || "";
+
+    let html = "";
+
+    // Opção 1 fixa no topo: Modo Radar
+    const isRadarSelected = !currentSelectedId;
+    html += `
+      <div class="listing-item radar-option ${isRadarSelected ? "selected" : ""}" data-id="">
+        <div class="item-meta-row">
+          <span class="item-sku" style="background:#D1FAE5; color:#065F46;">📡 MODO RADAR</span>
+          <span style="font-size:10px; font-weight:600; color:#059669;">Livre</span>
+        </div>
+        <div class="item-title">
+          <strong>Radar de Mercado</strong> (Monitorar sem vincular a anúncio próprio)
+        </div>
+      </div>
+    `;
+
+    if (filtered.length === 0 && query) {
+      html += `
+        <div class="empty-search-state">
+          Nenhum anúncio encontrado para <strong>&quot;${escapeHtml(query)}&quot;</strong>.
+          <br>
+          <button type="button" class="btn btn-secondary" id="btnEmptyClear" style="width:auto; padding:4px 8px; font-size:10px; margin-top:6px;">
+            ✕ Limpar Busca
+          </button>
+        </div>
+      `;
+    } else {
+      filtered.forEach((item) => {
+        const isSelected = String(item.id) === String(currentSelectedId);
+        const skuDisplay = item.product_sku ? `[${item.product_sku}]` : "[Sem SKU]";
+        const priceFormatted = Number(item.current_price || 0).toFixed(2);
+        const isShopee = item.platform === "shopee";
+        const platformBadge = isShopee
+          ? `<span class="item-platform-badge shopee">Shopee</span>`
+          : `<span class="item-platform-badge">ML</span>`;
+
+        html += `
+          <div class="listing-item ${isSelected ? "selected" : ""}" data-id="${item.id}">
+            <div class="item-meta-row">
+              <span class="item-sku">${highlightMatches(skuDisplay, query)}</span>
+              <div style="display:flex; align-items:center; gap:4px;">
+                ${platformBadge}
+                <span class="item-price">R$ ${priceFormatted}</span>
+                ${isSelected ? `<span style="color:#2563EB; font-weight:700; font-size:11px;">✓</span>` : ""}
+              </div>
+            </div>
+            <div class="item-title">
+              ${highlightMatches(item.title, query)}
+            </div>
+          </div>
+        `;
+      });
+    }
+
+    listingDropdownList.innerHTML = html;
+
+    // Conecta cliques nos itens
+    listingDropdownList.querySelectorAll(".listing-item").forEach((el) => {
+      el.addEventListener("click", () => {
+        const id = el.dataset.id || "";
+        selectListing(id, true);
+      });
+    });
+
+    const emptyClear = listingDropdownList.querySelector("#btnEmptyClear");
+    if (emptyClear) {
+      emptyClear.addEventListener("click", () => {
+        if (listingSearchInput) listingSearchInput.value = "";
+        if (listingSearchClear) listingSearchClear.style.display = "none";
+        renderDropdownList();
+        if (listingSearchInput) listingSearchInput.focus();
+      });
+    }
+  }
+
+  // Carrega catálogo completo de anúncios próprios do usuário autenticado no ERP
+  async function loadMyListings(platform) {
+    if (listingSelectContainer) listingSelectContainer.style.display = "block";
+    if (listingCountBadge) listingCountBadge.innerText = "Carregando anúncios...";
+
+    // Define plataforma inicial no chip
+    if (platform && (platform === "mercadolivre" || platform === "shopee")) {
+      activePlatformFilter = platform;
+    } else {
+      activePlatformFilter = "all";
+    }
+
+    if (platformChips) {
+      platformChips.querySelectorAll(".platform-chip").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.platform === activePlatformFilter);
+      });
+    }
+
+    // Solicita todos os anúncios (limit 1000) para permitir busca instantânea e alternância de abas
+    chrome.runtime.sendMessage({ action: "GET_MY_LISTINGS", platform: "all" }, (res) => {
+      allMyListings = res?.items || [];
+
+      // Popula select nativo com todas as opções para compatibilidade retroativa total
+      if (allMyListings.length > 0) {
         let optionsHtml = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
         optionsHtml += `<optgroup label="Vincular a um Anúncio Próprio:">`;
-        items.forEach((item) => {
-          optionsHtml += `<option value="${item.id}">[${item.product_sku || "Sem SKU"}] ${item.title.slice(0, 32)}... (R$ ${Number(item.current_price).toFixed(2)})</option>`;
+        allMyListings.forEach((item) => {
+          optionsHtml += `<option value="${item.id}">[${item.product_sku || "Sem SKU"}] ${escapeHtml(item.title.slice(0, 40))}... (R$ ${Number(item.current_price).toFixed(2)})</option>`;
         });
         optionsHtml += `</optgroup>`;
         myListingSelect.innerHTML = optionsHtml;
 
         if (listingHint) {
-          listingHint.innerHTML = "Dica: Escolha seu anúncio para comparar Buybox ou mantenha em 'Radar' para apenas espionar preços.";
+          listingHint.innerHTML = "💡 Dica: Escolha seu anúncio para comparar Buybox e monitorar concorrentes diretamente.";
         }
 
         chrome.storage.local.get(["selectedMyListingId"], (store) => {
-          if (store.selectedMyListingId) {
-            myListingSelect.value = store.selectedMyListingId;
-          }
+          const storedId = store.selectedMyListingId || "";
+          myListingSelect.value = storedId;
+          renderSelectedCard(storedId);
+          updateButtonLabel();
         });
-        updateButtonLabel();
       } else {
         myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
         if (listingHint) {
           listingHint.innerHTML = "💡 Concorrentes serão monitorados diretamente no <strong>Radar de Mercado</strong> do ERP.";
         }
+        renderSelectedCard("");
         updateButtonLabel();
       }
+
+      renderDropdownList();
     });
   }
 

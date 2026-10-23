@@ -14,7 +14,7 @@
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
       background-color: #F8FAFC;
       color: #0F172A;
-      width: 360px;
+      width: 380px;
       padding: 14px;
       font-size: 12px;
     }
@@ -213,6 +213,268 @@
     }
     details.card summary::-webkit-details-marker { display: none; }
     details.card[open] summary { margin-bottom: 8px; }
+
+    /* Barra de Produto / Combobox Avançado */
+    .product-picker-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 6px;
+    }
+    .listing-count-badge {
+      font-size: 10px;
+      font-weight: 600;
+      color: #475569;
+      background-color: #F1F5F9;
+      padding: 2px 7px;
+      border-radius: 10px;
+      border: 1px solid #E2E8F0;
+    }
+    .platform-chips {
+      display: flex;
+      gap: 4px;
+      margin-bottom: 8px;
+    }
+    .platform-chip {
+      font-size: 10px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 12px;
+      border: 1px solid #CBD5E1;
+      background-color: #FFFFFF;
+      color: #475569;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+    .platform-chip:hover {
+      background-color: #F1F5F9;
+      border-color: #94A3B8;
+    }
+    .platform-chip.active {
+      background-color: #0F172A;
+      color: #FFFFFF;
+      border-color: #0F172A;
+    }
+    .selected-listing-card {
+      border: 1.5px solid #0284C7;
+      border-radius: 6px;
+      padding: 8px 10px;
+      background-color: #F0F9FF;
+      margin-bottom: 8px;
+      transition: all 0.15s ease;
+    }
+    .selected-listing-card.radar-mode {
+      border-color: #10B981;
+      background-color: #F0FDF4;
+    }
+    .selected-card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      margin-bottom: 4px;
+    }
+    .selected-sku-tag {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10px;
+      font-weight: 700;
+      color: #0369A1;
+      background-color: #E0F2FE;
+      padding: 1px 6px;
+      border-radius: 4px;
+    }
+    .radar-mode .selected-sku-tag {
+      color: #065F46;
+      background-color: #D1FAE5;
+    }
+    .selected-price-tag {
+      font-size: 11px;
+      font-weight: 700;
+      color: #059669;
+    }
+    .selected-title {
+      font-size: 11px;
+      font-weight: 600;
+      color: #0F172A;
+      line-height: 1.35;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .selected-card-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-top: 6px;
+      padding-top: 5px;
+      border-top: 1px dashed #BAE6FD;
+    }
+    .radar-mode .selected-card-actions {
+      border-top-color: #A7F3D0;
+    }
+    .btn-link-action {
+      background: none;
+      border: none;
+      color: #0284C7;
+      font-size: 10px;
+      font-weight: 600;
+      cursor: pointer;
+      padding: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+    }
+    .btn-link-action:hover {
+      text-decoration: underline;
+    }
+    .btn-link-action.danger {
+      color: #DC2626;
+    }
+    .search-box-wrapper {
+      position: relative;
+      display: flex;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .search-icon-svg {
+      position: absolute;
+      left: 9px;
+      width: 14px;
+      height: 14px;
+      color: #94A3B8;
+      pointer-events: none;
+    }
+    .search-clear-btn {
+      position: absolute;
+      right: 8px;
+      background: none;
+      border: none;
+      color: #94A3B8;
+      cursor: pointer;
+      font-size: 13px;
+      padding: 2px 4px;
+      display: none;
+      line-height: 1;
+    }
+    .search-clear-btn:hover {
+      color: #0F172A;
+    }
+    .search-input-field {
+      width: 100%;
+      padding: 7px 28px 7px 30px !important;
+      font-size: 11px !important;
+      border: 1px solid #CBD5E1;
+      border-radius: 6px;
+      outline: none;
+      background-color: #FFFFFF;
+    }
+    .search-input-field:focus {
+      border-color: #0284C7;
+      box-shadow: 0 0 0 2px rgba(2, 132, 199, 0.15);
+    }
+    .listing-dropdown-list {
+      max-height: 230px;
+      overflow-y: auto;
+      border: 1px solid #CBD5E1;
+      border-radius: 6px;
+      background-color: #FFFFFF;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      margin-bottom: 8px;
+    }
+    .listing-dropdown-list::-webkit-scrollbar {
+      width: 5px;
+    }
+    .listing-dropdown-list::-webkit-scrollbar-thumb {
+      background: #CBD5E1;
+      border-radius: 4px;
+    }
+    .listing-item {
+      padding: 7px 10px;
+      border-bottom: 1px solid #F1F5F9;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      transition: background-color 0.1s ease, border-left 0.1s ease;
+    }
+    .listing-item:last-child {
+      border-bottom: none;
+    }
+    .listing-item:hover, .listing-item.active-nav {
+      background-color: #F8FAFC;
+      border-left: 3px solid #0284C7;
+      padding-left: 7px;
+    }
+    .listing-item.selected {
+      background-color: #EFF6FF;
+      border-left: 3px solid #2563EB;
+      padding-left: 7px;
+    }
+    .listing-item.radar-option {
+      background-color: #F0FDF4;
+      border-bottom: 2px solid #E2E8F0;
+    }
+    .listing-item.radar-option:hover {
+      background-color: #DCFCE7;
+      border-left: 3px solid #10B981;
+      padding-left: 7px;
+    }
+    .item-meta-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+    }
+    .item-sku {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 10px;
+      font-weight: 700;
+      color: #334155;
+      background: #E2E8F0;
+      padding: 1px 5px;
+      border-radius: 3px;
+    }
+    .item-price {
+      font-size: 11px;
+      font-weight: 700;
+      color: #059669;
+    }
+    .item-platform-badge {
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 3px;
+      background: #FEF3C7;
+      color: #92400E;
+    }
+    .item-platform-badge.shopee {
+      background: #FFEDD5;
+      color: #C2410C;
+    }
+    .item-title {
+      font-size: 11px;
+      color: #1E293B;
+      line-height: 1.3;
+      white-space: normal;
+      word-break: break-word;
+    }
+    mark.search-highlight {
+      background-color: #FEF08A;
+      color: #854D0E;
+      font-weight: 700;
+      border-radius: 2px;
+      padding: 0 1px;
+    }
+    .empty-search-state {
+      padding: 14px 10px;
+      text-align: center;
+      font-size: 11px;
+      color: #64748B;
+    }
+    .empty-search-state button {
+      margin-top: 6px;
+    }
   </style>
 </head>
 <body>
@@ -247,11 +509,54 @@
       🚀 Sincronizar Pesquisa com ERP
     </button>
 
+    <!-- Seletor de Anúncio Próprio com Barra de Busca Inteligente -->
     <div class="form-group" id="listingSelectContainer" style="display: none;">
-      <label for="myListingSelect">Modo de Monitoramento:</label>
-      <select id="myListingSelect">
+      <div class="product-picker-header">
+        <label for="listingSearchInput" style="margin-bottom: 0; font-weight: 600;">Vincular a um Anúncio Próprio:</label>
+        <span id="listingCountBadge" class="listing-count-badge">Carregando...</span>
+      </div>
+
+      <!-- Chips de Filtro por Marketplace -->
+      <div class="platform-chips" id="platformChips">
+        <button type="button" class="platform-chip" data-platform="all">Todos</button>
+        <button type="button" class="platform-chip" data-platform="mercadolivre">Mercado Livre</button>
+        <button type="button" class="platform-chip" data-platform="shopee">Shopee</button>
+      </div>
+
+      <!-- Card Visual do Anúncio Selecionado -->
+      <div id="selectedListingCard" class="selected-listing-card radar-mode">
+        <div class="selected-card-top">
+          <span class="selected-sku-tag" id="selectedSkuTag">📡 MODO RADAR</span>
+          <span class="selected-price-tag" id="selectedPriceTag">Sem vínculo direto</span>
+        </div>
+        <div class="selected-title" id="selectedTitleText">Radar de Mercado (Monitorar sem anúncio próprio)</div>
+        <div class="selected-card-actions">
+          <button type="button" class="btn-link-action" id="btnToggleDropdown">
+            🔍 Buscar / Trocar Anúncio
+          </button>
+          <button type="button" class="btn-link-action danger" id="btnResetToRadar" style="display: none;">
+            ✕ Voltar para Radar
+          </button>
+        </div>
+      </div>
+
+      <!-- Barra de Produto (Busca Rápida) -->
+      <div class="search-box-wrapper" id="searchBoxWrapper" style="display: none;">
+        <svg class="search-icon-svg" viewBox="0 0 20 20" fill="currentColor">
+          <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
+        </svg>
+        <input type="text" id="listingSearchInput" class="search-input-field" placeholder="Buscar por título, SKU ou ID..." autocomplete="off">
+        <button type="button" id="listingSearchClear" class="search-clear-btn" title="Limpar busca">✕</button>
+      </div>
+
+      <!-- Lista Suspensa de Resultados Filtrados -->
+      <div id="listingDropdownList" class="listing-dropdown-list" style="display: none;"></div>
+
+      <!-- Select oculto nativo mantido para compatibilidade total com scripts existentes -->
+      <select id="myListingSelect" style="display: none;">
         <option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>
       </select>
+
       <div id="listingHint" style="font-size: 10px; color: #64748B; margin-top: 4px; line-height: 1.3;"></div>
     </div>
 
