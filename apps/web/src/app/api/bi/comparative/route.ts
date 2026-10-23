@@ -186,7 +186,9 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    if (statusFilter !== "all") {
+    if (statusFilter === "MONITORED" || statusFilter === "PAIRED") {
+      filtered = filtered.filter((g) => g.competitors.length > 0 && g.my_listing.listing_type !== "radar");
+    } else if (statusFilter !== "all") {
       filtered =
         statusFilter === "RADAR"
           ? filtered.filter((g) => g.my_listing.listing_type === "radar")
@@ -196,10 +198,11 @@ export async function GET(req: NextRequest) {
     const isOwn = (g: ComparativeListingGroup) => g.my_listing.listing_type !== "radar";
     const summary = {
       total_listings: groups.length,
+      monitored_count: groups.filter((g) => isOwn(g) && g.competitors.length > 0).length,
       winning_count: groups.filter((g) => isOwn(g) && g.status === "WINNING").length,
       tied_count: groups.filter((g) => isOwn(g) && g.status === "TIED").length,
       losing_count: groups.filter((g) => isOwn(g) && g.status === "LOSING").length,
-      unmatched_count: groups.filter((g) => g.status === "UNMATCHED").length,
+      unmatched_count: groups.filter((g) => isOwn(g) && g.status === "UNMATCHED").length,
       radar_count: radarGroups.length,
     };
 

@@ -146,6 +146,7 @@ export interface BiComparativeResponse {
     tied_count: number;
     losing_count: number;
     unmatched_count: number;
+    monitored_count?: number;
     radar_count?: number;
   };
   items: ComparativeListingGroup[];

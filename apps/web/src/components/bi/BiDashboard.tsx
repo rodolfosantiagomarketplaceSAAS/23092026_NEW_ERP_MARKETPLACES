@@ -11,6 +11,8 @@ import {
   Sliders,
   Sparkles,
   Radio,
+  Target,
+  Trash2,
 } from "lucide-react";
 import type {
   BiComparativeResponse,
@@ -26,8 +28,9 @@ export function BiDashboard() {
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>("");
   const [debouncedSearch, setDebouncedSearch] = useState<string>("");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [statusFilter, setStatusFilter] = useState<string>("MONITORED");
   const [syncingBatch, setSyncingBatch] = useState<boolean>(false);
+  const [purgingUnlinked, setPurgingUnlinked] = useState<boolean>(false);
   const [syncSuccessMsg, setSyncSuccessMsg] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -316,12 +319,40 @@ export function BiDashboard() {
     }, 100);
   };
 
+  // Limpeza em lote de anúncios avulsos do radar (não vinculados a anúncios próprios)
+  const handlePurgeUnlinked = async () => {
+    if (!confirm("Deseja limpar todos os anúncios avulsos do radar de mercado que NÃO estão vinculados a nenhum anúncio seu?")) {
+      return;
+    }
+    setPurgingUnlinked(true);
+    try {
+      const res = await fetch("/api/competitors/matches?purge_unlinked=true", {
+        method: "DELETE",
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setSyncSuccessMsg(json.message || "Anúncios avulsos do radar removidos com sucesso!");
+        await fetchData();
+        setTimeout(() => setSyncSuccessMsg(null), 5000);
+      } else {
+        alert(json.error || "Não foi possível limpar os anúncios avulsos.");
+      }
+    } catch (err) {
+      console.error("Erro ao limpar avulsos:", err);
+      alert("Falha de conexão ao tentar limpar os anúncios avulsos.");
+    } finally {
+      setPurgingUnlinked(false);
+    }
+  };
+
   const summary = data?.summary || {
     total_listings: 0,
+    monitored_count: 0,
     winning_count: 0,
     tied_count: 0,
     losing_count: 0,
     unmatched_count: 0,
+    radar_count: 0,
   };
 
   return (
@@ -403,50 +434,146 @@ export function BiDashboard() {
 
       {/* Cards de Métricas e KPIs de Competitividade Estilo Tiny ERP */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <div className="bg-white border border-[#E2E8F0] p-3 rounded shadow-xs">
-          <div className="text-[11px] font-medium text-slate-500">Catálogo Monitorado</div>
-          <div className="text-xl font-bold text-slate-900 mt-1">{summary.total_listings}</div>
-          <div className="text-[10px] text-slate-400 mt-0.5">Anúncios ativos no canal</div>
+        {/* 1. MONITORANDO ATIVAMENTE (Destaque Principal) */}
+        <div
+          onClick={() => setStatusFilter("MONITORED")}
+          className={`p-3 rounded shadow-xs border transition-all cursor-pointer ${
+            statusFilter === "MONITORED"
+              ? "bg-indigo-50 border-indigo-500 ring-2 ring-indigo-500/20"
+              : "bg-white border-indigo-200 hover:border-indigo-400"
+          }`}
+          title="Clique para filtrar apenas os anúncios vinculados e sob comparação ativa"
+        >
+          <div className="text-[11px] font-bold text-indigo-700 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <Target className="w-3.5 h-3.5 text-indigo-600" /> Monitorando Ativo
+            </span>
+            {statusFilter === "MONITORED" && (
+              <span className="text-[9px] bg-indigo-600 text-white px-1.5 py-0.2 rounded-full font-bold">
+                Ativo
+              </span>
+            )}
+          </div>
+          <div className="text-xl font-bold text-indigo-950 mt-1">{summary.monitored_count || 0}</div>
+          <div className="text-[10px] text-indigo-600/80 mt-0.5">Anúncios sob comparação</div>
         </div>
 
-        <div className="bg-white border border-emerald-200 bg-emerald-50/20 p-3 rounded shadow-xs">
-          <div className="text-[11px] font-semibold text-emerald-700 flex items-center gap-1">
-            <TrendingDown className="w-3.5 h-3.5" /> Ganhando Buybox
+        {/* 2. GANHANDO BUYBOX */}
+        <div
+          onClick={() => setStatusFilter("WINNING")}
+          className={`p-3 rounded shadow-xs border transition-all cursor-pointer ${
+            statusFilter === "WINNING"
+              ? "bg-emerald-100/60 border-emerald-500 ring-2 ring-emerald-500/20"
+              : "bg-white border-emerald-200 bg-emerald-50/20 hover:border-emerald-400"
+          }`}
+          title="Clique para ver anúncios onde seu preço é menor que o do concorrente"
+        >
+          <div className="text-[11px] font-semibold text-emerald-700 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <TrendingDown className="w-3.5 h-3.5" /> Ganhando Buybox
+            </span>
+            {statusFilter === "WINNING" && (
+              <span className="text-[9px] bg-emerald-700 text-white px-1.5 py-0.2 rounded-full font-bold">
+                Ativo
+              </span>
+            )}
           </div>
           <div className="text-xl font-bold text-emerald-800 mt-1">{summary.winning_count}</div>
-          <div className="text-[10px] text-emerald-600 mt-0.5">Preço menor que concorrentes</div>
+          <div className="text-[10px] text-emerald-600 mt-0.5">Preço menor que concorrente</div>
         </div>
 
-        <div className="bg-white border border-amber-200 bg-amber-50/20 p-3 rounded shadow-xs">
-          <div className="text-[11px] font-semibold text-amber-700 flex items-center gap-1">
-            <MinusCircle className="w-3.5 h-3.5" /> Empatados no Menor Preço
+        {/* 3. EMPATADOS NO MENOR PREÇO */}
+        <div
+          onClick={() => setStatusFilter("TIED")}
+          className={`p-3 rounded shadow-xs border transition-all cursor-pointer ${
+            statusFilter === "TIED"
+              ? "bg-amber-100/60 border-amber-500 ring-2 ring-amber-500/20"
+              : "bg-white border-amber-200 bg-amber-50/20 hover:border-amber-400"
+          }`}
+          title="Clique para ver anúncios com preço rigorosamente empatado"
+        >
+          <div className="text-[11px] font-semibold text-amber-700 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <MinusCircle className="w-3.5 h-3.5" /> Empatados
+            </span>
+            {statusFilter === "TIED" && (
+              <span className="text-[9px] bg-amber-700 text-white px-1.5 py-0.2 rounded-full font-bold">
+                Ativo
+              </span>
+            )}
           </div>
           <div className="text-xl font-bold text-amber-800 mt-1">{summary.tied_count}</div>
           <div className="text-[10px] text-amber-600 mt-0.5">Mesmo valor de mercado</div>
         </div>
 
-        <div className="bg-white border border-red-200 bg-red-50/20 p-3 rounded shadow-xs">
-          <div className="text-[11px] font-semibold text-red-700 flex items-center gap-1">
-            <TrendingUp className="w-3.5 h-3.5" /> Perdendo Buybox
+        {/* 4. PERDENDO BUYBOX */}
+        <div
+          onClick={() => setStatusFilter("LOSING")}
+          className={`p-3 rounded shadow-xs border transition-all cursor-pointer ${
+            statusFilter === "LOSING"
+              ? "bg-red-100/60 border-red-500 ring-2 ring-red-500/20"
+              : "bg-white border-red-200 bg-red-50/20 hover:border-red-400"
+          }`}
+          title="Clique para ver anúncios onde o concorrente está vendendo mais barato"
+        >
+          <div className="text-[11px] font-semibold text-red-700 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <TrendingUp className="w-3.5 h-3.5" /> Perdendo Buybox
+            </span>
+            {statusFilter === "LOSING" && (
+              <span className="text-[9px] bg-red-700 text-white px-1.5 py-0.2 rounded-full font-bold">
+                Ativo
+              </span>
+            )}
           </div>
           <div className="text-xl font-bold text-red-800 mt-1">{summary.losing_count}</div>
           <div className="text-[10px] text-red-600 mt-0.5">Atenção: Concorrente mais barato</div>
         </div>
 
-        <div className="bg-white border border-slate-200 p-3 rounded shadow-xs">
-          <div className="text-[11px] font-medium text-slate-500 flex items-center gap-1">
-            <AlertCircle className="w-3.5 h-3.5" /> Sem Concorrentes
+        {/* 5. CATÁLOGO COMPLETO */}
+        <div
+          onClick={() => setStatusFilter("all")}
+          className={`p-3 rounded shadow-xs border transition-all cursor-pointer ${
+            statusFilter === "all"
+              ? "bg-slate-100 border-slate-500 ring-2 ring-slate-500/20"
+              : "bg-white border-[#E2E8F0] hover:border-slate-400"
+          }`}
+          title="Clique para ver todos os anúncios do catálogo"
+        >
+          <div className="text-[11px] font-medium text-slate-600 flex items-center justify-between">
+            <span>Catálogo Completo</span>
+            {statusFilter === "all" && (
+              <span className="text-[9px] bg-slate-700 text-white px-1.5 py-0.2 rounded-full font-bold">
+                Ativo
+              </span>
+            )}
           </div>
-          <div className="text-xl font-bold text-slate-700 mt-1">{summary.unmatched_count}</div>
-          <div className="text-[10px] text-slate-400 mt-0.5">Parear via extensão ou ID</div>
+          <div className="text-xl font-bold text-slate-900 mt-1">{summary.total_listings}</div>
+          <div className="text-[10px] text-slate-400 mt-0.5">Total de produtos no canal</div>
         </div>
 
-        <div className="bg-white border border-sky-200 bg-sky-50/30 p-3 rounded shadow-xs">
-          <div className="text-[11px] font-semibold text-sky-700 flex items-center gap-1">
-            <Radio className="w-3.5 h-3.5 text-sky-600" /> Radar de Mercado
+        {/* 6. RADAR AVULSO */}
+        <div
+          onClick={() => setStatusFilter("RADAR")}
+          className={`p-3 rounded shadow-xs border transition-all cursor-pointer ${
+            statusFilter === "RADAR"
+              ? "bg-sky-100/60 border-sky-500 ring-2 ring-sky-500/20"
+              : "bg-white border-sky-200 bg-sky-50/30 hover:border-sky-400"
+          }`}
+          title="Clique para ver itens avulsos do radar sem vinculação direta"
+        >
+          <div className="text-[11px] font-semibold text-sky-700 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <Radio className="w-3.5 h-3.5 text-sky-600" /> Radar Avulso
+            </span>
+            {statusFilter === "RADAR" && (
+              <span className="text-[9px] bg-sky-700 text-white px-1.5 py-0.2 rounded-full font-bold">
+                Ativo
+              </span>
+            )}
           </div>
           <div className="text-xl font-bold text-sky-800 mt-1">{summary.radar_count || 0}</div>
-          <div className="text-[10px] text-sky-600 mt-0.5">Espionando via Extensão</div>
+          <div className="text-[10px] text-sky-600 mt-0.5">Espionados sem vínculo</div>
         </div>
       </div>
 
@@ -466,18 +593,32 @@ export function BiDashboard() {
         </div>
 
         <div className="flex items-center space-x-2">
-          <span className="text-[11px] font-semibold text-slate-600">Filtrar Status:</span>
+          {/* Botão de Limpeza de Avulsos / Testes */}
+          {summary.radar_count !== undefined && summary.radar_count > 0 && (
+            <button
+              onClick={handlePurgeUnlinked}
+              disabled={purgingUnlinked}
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-bold text-red-700 bg-red-50 hover:bg-red-100 border border-red-300 rounded shadow-2xs transition-colors disabled:opacity-50"
+              title="Remove do banco todos os anúncios do radar de mercado que não possuem vínculo próprio"
+            >
+              <Trash2 className="w-3 h-3 text-red-600" />
+              {purgingUnlinked ? "Limpando..." : `Limpar Avulsos (${summary.radar_count})`}
+            </button>
+          )}
+
+          <span className="text-[11px] font-semibold text-slate-600">Filtrar:</span>
           <select
             value={statusFilter}
             onChange={(e) => setStatusFilter(e.target.value)}
-            className="border border-[#CBD5E1] rounded py-1 px-2 text-xs bg-white text-slate-800 outline-none focus:border-sky-600"
+            className="border border-[#CBD5E1] rounded py-1 px-2 text-xs bg-white text-slate-800 outline-none focus:border-sky-600 font-medium"
           >
-            <option value="all">Todos os Anúncios ({summary.total_listings})</option>
-            <option value="RADAR">📡 Radar de Mercado ({summary.radar_count || 0})</option>
+            <option value="MONITORED">🎯 Monitorando Ativo ({summary.monitored_count || 0})</option>
+            <option value="all">Catálogo Completo ({summary.total_listings})</option>
             <option value="LOSING">Perdendo Buybox ({summary.losing_count})</option>
             <option value="WINNING">Ganhando Buybox ({summary.winning_count})</option>
             <option value="TIED">Empatado no menor preço ({summary.tied_count})</option>
             <option value="UNMATCHED">Sem Concorrentes ({summary.unmatched_count})</option>
+            <option value="RADAR">📡 Radar Avulso ({summary.radar_count || 0})</option>
           </select>
 
           <button

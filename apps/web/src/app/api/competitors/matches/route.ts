@@ -60,8 +60,41 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
+    const purgeUnlinked = searchParams.get("purge_unlinked") === "true";
     const competitorId = searchParams.get("competitor_id");
     const myListingId = searchParams.get("my_listing_id");
+
+    const supabase = createSupabaseAdminClient();
+
+    if (purgeUnlinked) {
+      // Busca todos os IDs vinculados em listing_matches
+      const { data: matches } = await supabase
+        .from("listing_matches")
+        .select("competitor_listing_id");
+
+      const linkedIds = (matches || [])
+        .map((m: any) => m.competitor_listing_id)
+        .filter(Boolean);
+
+      // Exclui todos os competitor_listings não vinculados
+      let query = supabase.from("competitor_listings").delete();
+      if (linkedIds.length > 0) {
+        query = query.not("id", "in", `(${linkedIds.join(",")})`);
+      }
+      const { error: purgeError } = await query;
+      if (purgeError) {
+        console.error("[DELETE /api/competitors/matches purge] Erro:", purgeError);
+        return NextResponse.json(
+          { error: "Falha ao limpar anúncios avulsos do radar.", details: purgeError.message },
+          { status: 500 }
+        );
+      }
+
+      return NextResponse.json({
+        success: true,
+        message: "Anúncios avulsos e testes do radar foram limpos com sucesso!",
+      });
+    }
 
     if (!competitorId && !myListingId) {
       return NextResponse.json(

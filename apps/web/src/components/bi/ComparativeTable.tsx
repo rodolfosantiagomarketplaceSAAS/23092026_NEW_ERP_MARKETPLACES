@@ -191,13 +191,13 @@ export function ComparativeTable({
             {/* Linha 2 de Cabeçalho: Colunas Específicas */}
             <tr className="bg-[#F8FAFC] border-b border-[#E2E8F0] text-[#475569] font-bold text-[11px] uppercase tracking-wider">
               <th className="py-2 px-3 w-8 text-center"></th>
-              <th className="py-2.5 px-3 min-w-[280px]">Produto / SKU / Anúncio Próprio</th>
+              <th className="py-2.5 px-3 min-w-[260px]">Produto / SKU / Anúncio Próprio</th>
               <th className="py-2.5 px-3 text-right">Meu Preço</th>
               <th className="py-2.5 px-3 border-r border-slate-200">Logística Própria</th>
-              <th className="py-2.5 px-3 text-right bg-amber-50/30">Menor Concorrente</th>
+              <th className="py-2.5 px-3 text-left bg-amber-50/30 min-w-[280px]">Concorrente Vinculado (Produto / Vendedor)</th>
+              <th className="py-2.5 px-3 text-right bg-amber-50/30">Preço Concorrente</th>
               <th className="py-2.5 px-3 text-center bg-amber-50/30">Discrepância</th>
-              <th className="py-2.5 px-3 bg-amber-50/30">Logística / Tipo Concorrente</th>
-              <th className="py-2.5 px-3 border-r border-slate-200 bg-amber-50/30">Promoções</th>
+              <th className="py-2.5 px-3 border-r border-slate-200 bg-amber-50/30">Logística / Selo</th>
               <th className="py-2.5 px-3 text-center">Ações Rápidas</th>
             </tr>
           </thead>
@@ -210,10 +210,10 @@ export function ComparativeTable({
                       <Radio className="w-5 h-5 text-slate-400" />
                     </div>
                     <p className="text-xs font-semibold text-slate-700">
-                      Nenhum anúncio monitorado no Radar de Mercado
+                      Nenhum anúncio monitorado nesta visualização
                     </p>
                     <p className="text-[11px] text-slate-500 text-center leading-relaxed">
-                      Utilize a extensão web diretamente no anúncio do concorrente para vinculá-lo ao seu anúncio ou adicionar novos concorrentes ao monitoramento.
+                      Utilize a extensão web diretamente no anúncio do concorrente para vinculá-lo ao seu anúncio ou clique em "+ Vincular Concorrente" na tabela.
                     </p>
                   </div>
                 </td>
@@ -223,18 +223,22 @@ export function ComparativeTable({
                 const isExpanded = expandedRows[group.my_listing.id] !== false; // Padrão aberto se tiver concorrentes
                 const hasCompetitors = group.competitors.length > 0;
                 const isRadar = group.my_listing.listing_type === "radar";
+                const topComp = hasCompetitors ? group.competitors[0] : null;
+                const compUrl = topComp
+                  ? topComp.permalink || `https://www.mercadolivre.com.br/p/${topComp.external_id}`
+                  : null;
 
                 return (
                   <React.Fragment key={group.my_listing.id}>
-                    {/* Linha Principal: Anúncio Próprio ou Radar */}
+                    {/* Linha Principal: Anúncio Próprio e Concorrente lado a lado */}
                     <tr className={`hover:bg-[#F8FAFC]/80 transition-colors group ${isRadar ? "bg-sky-50/20" : ""}`}>
                       {/* Accordion Toggle */}
                       <td className="py-2 px-3 text-center">
-                        {hasCompetitors ? (
+                        {group.competitors.length > 1 ? (
                           <button
                             onClick={() => toggleRow(group.my_listing.id)}
                             className="p-1 rounded hover:bg-slate-200 text-slate-500 transition-colors"
-                            title={isExpanded ? "Recolher Sublinhas de Concorrentes" : "Expandir Concorrentes Pareados"}
+                            title={isExpanded ? "Recolher Sublinhas de Concorrentes Adicionais" : "Expandir Todos os Concorrentes Vinculados (1:N)"}
                           >
                             {isExpanded ? (
                               <ChevronDown className="w-3.5 h-3.5 text-indigo-600 font-bold" />
@@ -261,14 +265,14 @@ export function ComparativeTable({
                               <Tag className="w-5 h-5 text-slate-400" />
                             )}
                           </div>
-                          <div className="flex flex-col">
+                          <div className="flex flex-col min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               {isRadar && (
                                 <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-bold bg-sky-100 text-sky-800 border border-sky-300">
                                   <Radio className="w-2.5 h-2.5 text-sky-600 animate-pulse" /> Radar Concorrente
                                 </span>
                               )}
-                              {/* TÍTULO CLICÁVEL: DIRECIONA AO ANÚNCIO */}
+                              {/* TÍTULO CLICÁVEL: DIRECIONA AO ANÚNCIO PRÓPRIO */}
                               <a
                                 href={group.my_listing.permalink}
                                 target="_blank"
@@ -276,7 +280,7 @@ export function ComparativeTable({
                                 className="font-semibold text-slate-900 hover:text-indigo-600 line-clamp-1 leading-snug transition-colors hover:underline inline-flex items-center gap-1 group/title"
                                 title="Clique para abrir seu anúncio no marketplace"
                               >
-                                <span>{group.my_listing.title}</span>
+                                <span className="truncate">{group.my_listing.title}</span>
                                 <ExternalLink className="w-3 h-3 text-slate-400 group-hover/title:text-indigo-600 shrink-0 opacity-70 group-hover/title:opacity-100 transition-opacity" />
                               </a>
                             </div>
@@ -345,37 +349,118 @@ export function ComparativeTable({
                         {renderShippingBadge(group.my_listing.shipping_type)}
                       </td>
 
-                      {/* 4. Menor Concorrente */}
-                      <td className="py-2.5 px-3 text-right bg-amber-50/20">
-                        {group.lowest_competitor_price !== null ? (
-                          <div>
-                            <MarketplacePrice
-                              currentPrice={group.lowest_competitor_price}
-                              originalPrice={
-                                group.competitors.find(
-                                  (c) => c.current_price === group.lowest_competitor_price
-                                )?.original_price
-                              }
-                              align="right"
-                            />
-                            <div className="text-[10px] text-slate-500 mt-0.5">
-                              {group.competitors.length} concorrente(s) vinculado(s)
+                      {/* 4. Concorrente Vinculado: FOTO + TÍTULO COM LINK CLICÁVEL + VENDEDOR */}
+                      <td className="py-2.5 px-3 bg-amber-50/20">
+                        {topComp && compUrl ? (
+                          <div className="flex items-start space-x-3">
+                            {/* Foto do Anúncio do Concorrente */}
+                            <a
+                              href={compUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="w-14 h-14 rounded-lg border border-slate-200 bg-white shrink-0 flex items-center justify-center overflow-hidden p-0.5 shadow-xs hover:border-indigo-400 transition-all hover:scale-105 group/pic"
+                              title="Clique para abrir o anúncio do concorrente no marketplace"
+                            >
+                              {topComp.thumbnail_url ? (
+                                <img
+                                  src={topComp.thumbnail_url}
+                                  alt={topComp.title}
+                                  className="w-full h-full object-contain"
+                                  onError={(e) => {
+                                    (e.target as HTMLElement).style.display = "none";
+                                  }}
+                                />
+                              ) : (
+                                <Tag className="w-5 h-5 text-slate-400" />
+                              )}
+                            </a>
+
+                            {/* Título Clicável e Dados do Concorrente */}
+                            <div className="flex flex-col min-w-0 flex-1">
+                              {/* TÍTULO CLICÁVEL: DIRECIONA AO ANÚNCIO DO CONCORRENTE */}
+                              <a
+                                href={compUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="font-semibold text-slate-900 hover:text-indigo-600 line-clamp-1 leading-snug transition-colors hover:underline inline-flex items-center gap-1 group/comptitle"
+                                title={`Abrir anúncio concorrente no marketplace: ${topComp.title}`}
+                              >
+                                <span className="truncate">{topComp.title}</span>
+                                <ExternalLink className="w-3 h-3 text-slate-400 group-hover/comptitle:text-indigo-600 shrink-0 opacity-70 group-hover/comptitle:opacity-100 transition-opacity" />
+                              </a>
+
+                              {/* Vendedor e ID */}
+                              <div className="flex items-center gap-2 mt-0.5 text-[11px] text-slate-500">
+                                <span className="flex items-center gap-1 font-medium text-slate-700">
+                                  <Store className="w-3 h-3 text-slate-400" />
+                                  Loja: <strong className="text-slate-800">{topComp.seller_name || "Concorrente"}</strong>
+                                </span>
+                                <span>•</span>
+                                <span className="font-mono text-slate-500">ID: <code>{topComp.external_id}</code></span>
+                              </div>
+
+                              {/* Data de Criação e Vendas Estimadas */}
+                              {(formatDate(topComp.listing_created_at || topComp.created_at) ||
+                                (topComp.sales_count_approx !== undefined && topComp.sales_count_approx > 0)) && (
+                                <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                  {formatDate(topComp.listing_created_at || topComp.created_at) && (
+                                    <span className="inline-flex items-center gap-1 text-slate-600 bg-white/90 border border-slate-200 px-1.5 py-0.5 rounded text-[10px] font-medium" title="Data de criação do anúncio concorrente">
+                                      <Calendar className="w-2.5 h-2.5 text-slate-400" />
+                                      Criado: <strong>{formatDate(topComp.listing_created_at || topComp.created_at)}</strong>
+                                    </span>
+                                  )}
+                                  {topComp.sales_count_approx !== undefined && topComp.sales_count_approx > 0 && (
+                                    <span className="inline-flex items-center gap-1 text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200 text-[10px] font-semibold" title="Quantidade de vendas do concorrente">
+                                      <ShoppingBag className="w-2.5 h-2.5 text-emerald-600" />
+                                      {formatSales(topComp.sales_count_approx)}
+                                    </span>
+                                  )}
+                                </div>
+                              )}
                             </div>
                           </div>
                         ) : (
-                          <div className="flex flex-col items-end">
-                            <span className="text-slate-400 italic text-[11px]">Nenhum pareado</span>
+                          <div className="flex items-center justify-between p-2 rounded border border-dashed border-slate-300 bg-white/70">
+                            <span className="text-[11px] text-slate-400 italic">Nenhum concorrente vinculado</span>
                             <button
                               onClick={() => setSelectedGroupForAdd(group)}
-                              className="text-[10.5px] font-bold text-indigo-600 hover:text-indigo-800 underline mt-0.5 inline-flex items-center gap-1"
+                              className="px-2 py-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[10.5px] font-bold inline-flex items-center gap-1 transition-colors"
                             >
-                              <PlusCircle className="w-3 h-3" /> Adicionar Concorrente
+                              <PlusCircle className="w-3 h-3" /> Vincular
                             </button>
                           </div>
                         )}
                       </td>
 
-                      {/* 5. Discrepância / Buybox Status */}
+                      {/* 5. Preço Concorrente */}
+                      <td className="py-2.5 px-3 text-right bg-amber-50/20">
+                        {topComp ? (
+                          <div>
+                            <MarketplacePrice
+                              currentPrice={group.lowest_competitor_price ?? topComp.current_price}
+                              originalPrice={topComp.original_price}
+                              align="right"
+                            />
+                            {group.competitors.length > 1 ? (
+                              <button
+                                onClick={() => toggleRow(group.my_listing.id)}
+                                className="text-[10px] font-bold text-indigo-600 hover:text-indigo-800 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded mt-1 inline-flex items-center gap-1"
+                                title="Ver sublinhas com todos os concorrentes vinculados"
+                              >
+                                +{group.competitors.length - 1} outro(s) (1:N)
+                              </button>
+                            ) : (
+                              <div className="text-[10px] text-slate-500 mt-0.5">
+                                1 concorrente vinculado
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <span className="text-slate-400 italic text-[11px]">—</span>
+                        )}
+                      </td>
+
+                      {/* 6. Discrepância / Buybox Status */}
                       <td className="py-2.5 px-3 text-center bg-amber-50/20">
                         {isRadar ? (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
@@ -410,33 +495,27 @@ export function ComparativeTable({
                         )}
                       </td>
 
-                      {/* 6. Logística / Tipo Concorrente */}
-                      <td className="py-2.5 px-3 bg-amber-50/20">
-                        {group.competitors.length > 0 ? (
-                          <div className="flex flex-col gap-1">
-                            {renderShippingBadge(group.competitors[0].shipping_type)}
-                            {renderReputationBadge(group.competitors[0].seller_reputation)}
+                      {/* 7. Logística / Selo Concorrente */}
+                      <td className="py-2.5 px-3 border-r border-slate-200 bg-amber-50/20">
+                        {topComp ? (
+                          <div className="flex flex-col gap-1 items-start">
+                            {renderShippingBadge(topComp.shipping_type)}
+                            {renderReputationBadge(topComp.seller_reputation)}
+                            {topComp.promo_badge && (
+                              <span className="px-1.5 py-0.2 rounded text-[9.5px] font-bold bg-amber-100 text-amber-800 border border-amber-200 line-clamp-1">
+                                {topComp.promo_badge}
+                              </span>
+                            )}
                           </div>
                         ) : (
                           <span className="text-slate-400 text-[10px]">—</span>
                         )}
                       </td>
 
-                      {/* 7. Promoções */}
-                      <td className="py-2.5 px-3 border-r border-slate-200 bg-amber-50/20">
-                        {group.competitors.length > 0 && group.competitors[0].promo_badge ? (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
-                            {group.competitors[0].promo_badge}
-                          </span>
-                        ) : (
-                          <span className="text-slate-400 text-[11px]">—</span>
-                        )}
-                      </td>
-
                       {/* 8. Ações Rápidas */}
                       <td className="py-2.5 px-3 text-center">
                         <div className="flex items-center justify-center space-x-1">
-                          {/* Adicionar Concorrente ao Meu Anúncio (1:N) */}
+                          {/* Adicionar Mais Concorrente ao Meu Anúncio (1:N) */}
                           <button
                             onClick={() => setSelectedGroupForAdd(group)}
                             className="p-1.5 rounded hover:bg-indigo-50 text-indigo-600 border border-transparent hover:border-indigo-200 transition-colors"
@@ -454,29 +533,32 @@ export function ComparativeTable({
                             <SlidersHorizontal className="w-3.5 h-3.5" />
                           </button>
 
-                          {/* Link Externo */}
+                          {/* Link Externo: se tiver concorrente, abre direto o concorrente, senão meu anúncio */}
                           <a
-                            href={group.my_listing.permalink}
+                            href={compUrl || group.my_listing.permalink}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="p-1.5 rounded hover:bg-slate-100 text-slate-600 border border-transparent hover:border-slate-200 transition-colors"
-                            title={isRadar ? "Abrir anúncio concorrente no Marketplace" : "Ver meu anúncio no Marketplace"}
+                            title={compUrl ? "Abrir anúncio concorrente no Marketplace" : "Ver meu anúncio no Marketplace"}
                           >
                             <ExternalLink className="w-3.5 h-3.5" />
                           </a>
 
-                          {/* Remover */}
+                          {/* Remover / Desvincular */}
                           <button
                             onClick={() => {
-                              const msg = isRadar
-                                ? `Deseja remover o anúncio "${group.my_listing.title.slice(0, 35)}..." do radar de monitoramento?`
-                                : `Deseja remover o anúncio "${group.my_listing.title.slice(0, 35)}..." do catálogo de monitoramento?`;
-                              if (confirm(msg)) {
-                                onDeleteMyListing && onDeleteMyListing(group.my_listing.id, group.my_listing.title);
+                              if (topComp) {
+                                if (confirm(`Deseja desvincular o concorrente "${topComp.title.slice(0, 35)}..." deste anúncio?`)) {
+                                  onDeleteCompetitor && onDeleteCompetitor(group.my_listing.id, topComp.id);
+                                }
+                              } else {
+                                if (confirm(`Deseja remover este anúncio do catálogo de monitoramento?`)) {
+                                  onDeleteMyListing && onDeleteMyListing(group.my_listing.id, group.my_listing.title);
+                                }
                               }
                             }}
                             className="p-1.5 rounded hover:bg-red-50 text-slate-400 hover:text-red-600 border border-transparent hover:border-red-200 transition-colors"
-                            title={isRadar ? "Remover do radar de monitoramento" : "Excluir este anúncio do monitoramento"}
+                            title={topComp ? "Desvincular concorrente deste produto" : "Remover do catálogo"}
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
