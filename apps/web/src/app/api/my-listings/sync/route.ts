@@ -93,6 +93,63 @@ export async function POST(req: NextRequest) {
       chunks.push(allItemIds.slice(i, i + 20));
     }
 
+    // 4.1 Buscar promoções ativas da Central de Promoções do Mercado Livre (seller-promotions)
+    // Campanhas como Black Friday, Ofertas Tradicionais e Smart Deals ficam nesta API
+    const promoMap = new Map<string, { price: number; original_price: number; name: string }>();
+    try {
+      const userPromosUrl = `https://api.mercadolibre.com/seller-promotions/users/${mlAccount.seller_id}?app_version=v2`;
+      const userPromosRes = await fetch(userPromosUrl, {
+        headers: { Authorization: `Bearer ${accessToken}` },
+        cache: "no-store",
+      });
+
+      if (userPromosRes.ok) {
+        const userPromosData = await userPromosRes.json();
+        const activePromos = (userPromosData.results || []).filter(
+          (p: any) => p.status === "started" || p.status === "active"
+        );
+
+        for (const promo of activePromos) {
+          let searchAfter: string | null = null;
+          let page = 0;
+          const maxPages = 15; // Suporta até 750 itens por campanha
+
+          while (page < maxPages) {
+            page++;
+            let pUrl = `https://api.mercadolibre.com/seller-promotions/promotions/${promo.id}/items?promotion_type=${promo.type || "DEAL"}&app_version=v2`;
+            if (searchAfter) {
+              pUrl += `&search_after=${encodeURIComponent(searchAfter)}`;
+            }
+
+            const pRes = await fetch(pUrl, {
+              headers: { Authorization: `Bearer ${accessToken}` },
+              cache: "no-store",
+            });
+
+            if (!pRes.ok) break;
+            const pData = await pRes.json();
+            const results: any[] = pData.results || [];
+            if (results.length === 0) break;
+
+            for (const pItem of results) {
+              if (pItem.id && Number(pItem.price) > 0 && pItem.status !== "candidate") {
+                promoMap.set(pItem.id, {
+                  price: Number(pItem.price),
+                  original_price: Number(pItem.original_price) || 0,
+                  name: promo.name || "Promoção Ativa",
+                });
+              }
+            }
+
+            searchAfter = pData.paging?.searchAfter;
+            if (!searchAfter) break;
+          }
+        }
+      }
+    } catch (promoErr) {
+      console.warn("[my-listings/sync] Falha ao carregar promoções do vendedor:", promoErr);
+    }
+
     const supabase = createSupabaseAdminClient();
     let syncedCount = 0;
 
@@ -167,8 +224,21 @@ export async function POST(req: NextRequest) {
             })
           : [];
 
-        const currentPrice = Number(item.price || 0);
-        const originalPrice = item.original_price ? Number(item.original_price) : null;
+        // Preços: verifica se o anúncio participa de promoção ativa do vendedor
+        let currentPrice = Number(item.price || 0);
+        let originalPrice: number | null = null;
+
+        const activePromo = promoMap.get(item.id);
+        if (activePromo && activePromo.price > 0) {
+          currentPrice = activePromo.price;
+          originalPrice = activePromo.original_price > activePromo.price
+            ? activePromo.original_price
+            : Number(item.price || item.base_price || 0);
+        } else if (item.original_price && Number(item.original_price) > currentPrice) {
+          originalPrice = Number(item.original_price);
+        } else if (item.base_price && Number(item.base_price) > currentPrice) {
+          originalPrice = Number(item.base_price);
+        }
         const soldQty = Number(item.sold_quantity || 0);
         const availableQty = Number(item.available_quantity || 0);
 

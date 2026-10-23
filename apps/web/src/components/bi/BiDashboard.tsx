@@ -65,11 +65,19 @@ export function BiDashboard() {
     }
   }, [activePlatform, debouncedSearch, statusFilter]);
 
-  // Dispara sincronização e varredura em lote
+  // Dispara sincronização e varredura em lote (anúncios próprios com promoções + concorrentes)
   const handleSyncBatch = async () => {
     setSyncingBatch(true);
     setSyncSuccessMsg(null);
     try {
+      // 1. Sincroniza catálogo próprio e promoções ativas (Central de Promoções / Black Friday)
+      try {
+        await fetch("/api/my-listings/sync", { method: "POST" });
+      } catch (errSync) {
+        console.warn("Aviso ao sincronizar catálogo próprio:", errSync);
+      }
+
+      // 2. Sincroniza histórico e varredura dos concorrentes
       const res = await fetch("/api/bi/sync-batch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -77,7 +85,7 @@ export function BiDashboard() {
       });
       const json = await res.json();
       if (res.ok && json.success) {
-        setSyncSuccessMsg(json.message || "Sincronização concluída com sucesso!");
+        setSyncSuccessMsg("Anúncios próprios (com promoções ativas) e concorrentes sincronizados com sucesso!");
         await fetchData();
         setTimeout(() => setSyncSuccessMsg(null), 5000);
       } else {
