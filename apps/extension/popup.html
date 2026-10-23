@@ -190,6 +190,29 @@
       color: #991B1B;
       border: 1px solid #FECACA;
     }
+    .connect-banner {
+      display: none;
+      background-color: #FFFBEB;
+      border: 1px solid #FCD34D;
+      color: #92400E;
+      border-radius: 6px;
+      padding: 10px;
+      margin-bottom: 10px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .connect-banner .btn { margin-top: 8px; }
+    .user-line {
+      font-size: 10px;
+      color: #64748B;
+      margin: -6px 0 10px;
+    }
+    details.card summary {
+      cursor: pointer;
+      list-style: none;
+    }
+    details.card summary::-webkit-details-marker { display: none; }
+    details.card[open] summary { margin-bottom: 8px; }
   </style>
 </head>
 <body>
@@ -200,8 +223,16 @@
     </div>
     <div id="statusBadge" class="status-badge offline">
       <span class="status-dot"></span>
-      <span id="statusText">Offline</span>
+      <span id="statusText">Verificando...</span>
     </div>
+  </div>
+  <div id="userLine" class="user-line"></div>
+
+  <!-- Aviso de conexão automática -->
+  <div id="connectBanner" class="connect-banner">
+    <strong>Extensão desconectada.</strong><br>
+    <span id="connectReason">Abra o ERP logado e a conexão é feita automaticamente.</span>
+    <button id="connectBtn" class="btn btn-primary">🔗 Conectar ao ERP automaticamente</button>
   </div>
 
   <!-- Cartão: Pareamento no Anúncio Atual -->
@@ -232,9 +263,9 @@
     </button>
   </div>
 
-  <!-- Cartão: Configurações de Conexão -->
-  <div class="card">
-    <div class="card-title">Configurações do ERP</div>
+  <!-- Cartão: Configurações avançadas (opcional) -->
+  <details class="card" id="advancedConfig">
+    <summary class="card-title">⚙️ Configurações avançadas</summary>
     <div class="form-group">
       <label for="erpUrl">URL da API / SaaS:</label>
       <input type="text" id="erpUrl" placeholder="http://localhost:3000">
@@ -248,17 +279,17 @@
       </div>
     </div>
     <div class="form-group">
-      <label for="apiToken">Bearer Token / Chave de Acesso:</label>
-      <input type="password" id="apiToken" placeholder="eyJhbGciOiJIUzI1Ni...">
+      <label for="apiToken">Token de acesso (preenchido automaticamente):</label>
+      <input type="password" id="apiToken" placeholder="Gerado ao abrir o ERP logado">
     </div>
 
     <div class="actions-grid">
       <button id="testBtn" class="btn btn-secondary">Testar Conexão</button>
       <button id="saveBtn" class="btn btn-primary">Salvar</button>
     </div>
+  </details>
 
-    <div id="feedbackMsg" class="feedback-msg"></div>
-  </div>
+  <div id="feedbackMsg" class="feedback-msg"></div>
 
   <script src="popup.js"></script>
 </body>

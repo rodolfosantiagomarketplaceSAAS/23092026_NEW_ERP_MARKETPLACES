@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { MOCK_COMPARATIVE_DATA } from "@/lib/data/comparativeStore";
 import type {
   BiComparativeResponse,
   ComparativeListingGroup,
@@ -12,6 +11,122 @@ import type {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+type Row = Record<string, any>;
+
+// Display priority: actionable groups first, then radar, then listings without competitors
+const STATUS_ORDER: Record<CompetitivenessStatus, number> = {
+  LOSING: 0,
+  TIED: 1,
+  WINNING: 2,
+  UNMATCHED: 4,
+};
+
+function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparisonItem {
+  const compPrice = Number(comp.current_price);
+  const diffBrl = referencePrice - compPrice;
+  const diffPct = compPrice > 0 ? (diffBrl / compPrice) * 100 : 0;
+
+  return {
+    id: comp.id,
+    external_id: comp.external_id,
+    seller_name: comp.seller_name,
+    seller_reputation: comp.seller_reputation,
+    title: comp.title,
+    current_price: compPrice,
+    original_price: comp.original_price ? Number(comp.original_price) : null,
+    shipping_type: comp.shipping_type,
+    promo_badge: comp.promo_badge,
+    permalink: comp.permalink,
+    thumbnail_url: comp.thumbnail_url,
+    price_difference_brl: Number(diffBrl.toFixed(2)),
+    price_difference_pct: Number(diffPct.toFixed(2)),
+    last_scraped_at: comp.last_scraped_at,
+    sales_count_approx: comp.sales_count_approx ?? 0,
+    listing_created_at: comp.listing_created_at || comp.created_at || null,
+    created_at: comp.created_at,
+  };
+}
+
+function buildMyListingGroup(item: Row, matchedIds: Set<string>): ComparativeListingGroup {
+  const myPrice = Number(item.current_price);
+  const activeComps: Row[] = (item.listing_matches || [])
+    .filter((m: Row) => m.is_active && m.competitor_listings)
+    .map((m: Row) => m.competitor_listings);
+
+  activeComps.forEach((c) => matchedIds.add(c.id));
+  const competitors = activeComps.map((c) => toCompetitorItem(c, myPrice));
+
+  const lowestPrice = competitors.length ? Math.min(...competitors.map((c) => c.current_price)) : null;
+  let status: CompetitivenessStatus = "UNMATCHED";
+  let diffBrl: number | null = null;
+  let diffPct: number | null = null;
+
+  if (lowestPrice !== null) {
+    diffBrl = Number((myPrice - lowestPrice).toFixed(2));
+    diffPct = lowestPrice > 0 ? Number(((diffBrl / lowestPrice) * 100).toFixed(2)) : 0;
+    status = diffBrl < 0 ? "WINNING" : diffBrl === 0 ? "TIED" : "LOSING";
+  }
+
+  const product = Array.isArray(item.products) ? item.products[0] : item.products;
+  const { listing_matches: _matches, products: _products, ...listing } = item;
+
+  return {
+    my_listing: {
+      ...(listing as any),
+      current_price: myPrice,
+      original_price: item.original_price ? Number(item.original_price) : null,
+      product_sku: product?.sku || null,
+      product_cost_price: product?.cost_price ? Number(product.cost_price) : null,
+      sales_count_approx: item.sales_count_approx ?? 0,
+      listing_created_at: item.listing_created_at || item.created_at || null,
+    },
+    competitors,
+    lowest_competitor_price: lowestPrice,
+    diff_brl: diffBrl,
+    diff_pct: diffPct,
+    status,
+  };
+}
+
+function buildRadarGroup(comp: Row): ComparativeListingGroup {
+  const compPrice = Number(comp.current_price);
+  const cleanExt = (comp.external_id || "PROD").replace(/[^A-Z0-9]/gi, "").slice(-8);
+
+  return {
+    my_listing: {
+      id: `radar-${comp.id}`,
+      user_id: comp.user_id,
+      product_id: null,
+      platform: comp.platform,
+      external_id: comp.external_id,
+      title: `[Radar de Mercado] ${comp.title}`,
+      current_price: compPrice,
+      original_price: comp.original_price ? Number(comp.original_price) : null,
+      permalink: comp.permalink,
+      thumbnail_url: comp.thumbnail_url || null,
+      shipping_type: comp.shipping_type || "padrao",
+      listing_type: "radar",
+      status: "active",
+      created_at: comp.listing_created_at || comp.created_at,
+      updated_at: comp.updated_at,
+      product_sku: `RADAR-${cleanExt}`,
+      product_cost_price: null,
+      sales_count_approx: comp.sales_count_approx ?? 0,
+      listing_created_at: comp.listing_created_at || comp.created_at || null,
+    } as any,
+    competitors: [toCompetitorItem(comp, compPrice)],
+    lowest_competitor_price: compPrice,
+    diff_brl: 0,
+    diff_pct: 0,
+    status: "TIED",
+  };
+}
+
+function sortRank(g: ComparativeListingGroup): number {
+  if (g.my_listing.listing_type === "radar") return 3;
+  return STATUS_ORDER[g.status] ?? 5;
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -21,252 +136,82 @@ export async function GET(req: NextRequest) {
 
     const supabase = createSupabaseAdminClient();
 
-    // Consulta de anúncios próprios com produto vinculado
-    const { data: myListings, error: myListingsError } = await supabase
-      .from("my_listings")
-      .select(`
-        id,
-        user_id,
-        product_id,
-        platform,
-        external_id,
-        title,
-        current_price,
-        permalink,
-        thumbnail_url,
-        shipping_type,
-        listing_type,
-        status,
-        created_at,
-        updated_at,
-        products (
-          sku,
-          cost_price
-        )
-      `)
-      .eq("platform", platform)
-      .order("created_at", { ascending: false });
-
-    // Se falhar ou não houver dados no banco, usa os dados do comparativeStore
-    let groups: ComparativeListingGroup[] = [];
-    const matchedCompetitorIds = new Set<string>();
-
-    if (!myListingsError) {
-      if (myListings && myListings.length > 0) {
-        // Para cada anúncio próprio, busca os concorrentes pareados via listing_matches
-        for (const item of myListings) {
-          const { data: matches } = await supabase
-            .from("listing_matches")
-            .select(`
-              competitor_listing_id,
-              competitor_listings (*)
-            `)
-            .eq("my_listing_id", item.id)
-            .eq("is_active", true);
-
-          const myPrice = Number(item.current_price);
-          const competitors: CompetitorComparisonItem[] = [];
-          let lowestPrice: number | null = null;
-
-          if (matches && matches.length > 0) {
-            for (const m of matches) {
-              const comp = m.competitor_listings as any;
-              if (!comp) continue;
-
-              matchedCompetitorIds.add(comp.id);
-              const compPrice = Number(comp.current_price);
-              if (lowestPrice === null || compPrice < lowestPrice) {
-                lowestPrice = compPrice;
-              }
-
-              const diffBrl = myPrice - compPrice;
-              const diffPct = compPrice > 0 ? (diffBrl / compPrice) * 100 : 0;
-
-              competitors.push({
-                id: comp.id,
-                external_id: comp.external_id,
-                seller_name: comp.seller_name,
-                seller_reputation: comp.seller_reputation,
-                title: comp.title,
-                current_price: compPrice,
-                original_price: comp.original_price ? Number(comp.original_price) : null,
-                shipping_type: comp.shipping_type,
-                promo_badge: comp.promo_badge,
-                permalink: comp.permalink,
-                thumbnail_url: comp.thumbnail_url,
-                price_difference_brl: Number(diffBrl.toFixed(2)),
-                price_difference_pct: Number(diffPct.toFixed(2)),
-                last_scraped_at: comp.last_scraped_at,
-                sales_count_approx: comp.sales_count_approx ?? 0,
-                listing_created_at: comp.listing_created_at || comp.created_at || null,
-                created_at: comp.created_at,
-              });
-            }
-          }
-
-          let status: CompetitivenessStatus = "UNMATCHED";
-          let diffBrl: number | null = null;
-          let diffPct: number | null = null;
-
-          if (lowestPrice !== null) {
-            diffBrl = Number((myPrice - lowestPrice).toFixed(2));
-            diffPct = Number(((diffBrl / lowestPrice) * 100).toFixed(2));
-
-            if (diffBrl < 0) {
-              status = "WINNING"; // Nosso preço é mais baixo
-            } else if (diffBrl === 0) {
-              status = "TIED";
-            } else {
-              status = "LOSING"; // Concorrente tem preço menor
-            }
-          }
-
-          const productData = Array.isArray(item.products) ? item.products[0] : item.products;
-
-          groups.push({
-            my_listing: {
-              ...item,
-              current_price: myPrice,
-              original_price: (item as any).original_price ? Number((item as any).original_price) : null,
-              product_sku: productData?.sku || null,
-              product_cost_price: productData?.cost_price ? Number(productData.cost_price) : null,
-              sales_count_approx: (item as any).sales_count_approx ?? 0,
-              listing_created_at: (item as any).listing_created_at || item.created_at || null,
-            },
-            competitors,
-            lowest_competitor_price: lowestPrice,
-            diff_brl: diffBrl,
-            diff_pct: diffPct,
-            status,
-          });
-        }
-      }
-
-      // Adiciona concorrentes do banco que estão sem vínculo direto (Modo Radar de Mercado)
-      const { data: unmatchedComps } = await supabase
+    // 2 queries in parallel (was 1 + N sequential queries → timeouts on Vercel)
+    const [myListingsRes, competitorsRes] = await Promise.all([
+      supabase
+        .from("my_listings")
+        .select("*, products ( sku, cost_price ), listing_matches ( is_active, competitor_listings ( * ) )")
+        .eq("platform", platform)
+        .order("created_at", { ascending: false }),
+      supabase
         .from("competitor_listings")
         .select("*")
         .eq("platform", platform)
-        .order("created_at", { ascending: false });
+        .order("last_scraped_at", { ascending: false }),
+    ]);
 
-      if (unmatchedComps && unmatchedComps.length > 0) {
-        for (const comp of unmatchedComps) {
-          if (!matchedCompetitorIds.has(comp.id)) {
-            const compPrice = Number(comp.current_price);
-            const cleanExt = (comp.external_id || "PROD").replace(/[^A-Z0-9]/gi, "").slice(-8);
-            groups.unshift({
-              my_listing: {
-                id: `radar-${comp.id}`,
-                user_id: comp.user_id,
-                product_id: null,
-                platform: comp.platform,
-                external_id: comp.external_id,
-                title: `[Radar de Mercado] ${comp.title}`,
-                current_price: compPrice,
-                original_price: comp.original_price ? Number(comp.original_price) : null,
-                permalink: comp.permalink,
-                thumbnail_url: comp.thumbnail_url || null,
-                shipping_type: comp.shipping_type || "padrao",
-                listing_type: "radar",
-                status: "active",
-                created_at: comp.listing_created_at || comp.created_at,
-                updated_at: comp.updated_at,
-                product_sku: `RADAR-${cleanExt}`,
-                product_cost_price: null,
-                sales_count_approx: comp.sales_count_approx ?? 0,
-                listing_created_at: comp.listing_created_at || comp.created_at || null,
-              },
-              competitors: [
-                {
-                  id: comp.id,
-                  external_id: comp.external_id,
-                  seller_name: comp.seller_name,
-                  seller_reputation: comp.seller_reputation,
-                  title: comp.title,
-                  current_price: compPrice,
-                  original_price: comp.original_price ? Number(comp.original_price) : null,
-                  shipping_type: comp.shipping_type,
-                  promo_badge: comp.promo_badge,
-                  permalink: comp.permalink,
-                  thumbnail_url: comp.thumbnail_url,
-                  price_difference_brl: 0,
-                  price_difference_pct: 0,
-                  last_scraped_at: comp.last_scraped_at,
-                  sales_count_approx: comp.sales_count_approx ?? 0,
-                  listing_created_at: comp.listing_created_at || comp.created_at || null,
-                  created_at: comp.created_at,
-                },
-              ],
-              lowest_competitor_price: compPrice,
-              diff_brl: 0,
-              diff_pct: 0,
-              status: "TIED",
-            });
-          }
-        }
-      }
-
-      // Se o banco foi consultado com sucesso e não há registros, mantém vazio (não ressuscita mocks)
-      // O mock em memória só é usado caso ocorra erro real de conexão com o banco
-    } else {
-      console.warn("[API BI Comparative] Erro ao consultar Supabase, utilizando fallback de demonstração:", myListingsError.message);
-      groups = MOCK_COMPARATIVE_DATA[platform] || [];
+    if (myListingsRes.error || competitorsRes.error) {
+      const dbError = myListingsRes.error || competitorsRes.error;
+      console.error("[API BI Comparative] Erro Supabase:", dbError);
+      return NextResponse.json(
+        { error: "Falha ao consultar o banco de dados", details: dbError?.message },
+        { status: 500 }
+      );
     }
 
-    // Aplicação de Filtros em memória
+    const matchedIds = new Set<string>();
+    const listingGroups = (myListingsRes.data || []).map((item) => buildMyListingGroup(item, matchedIds));
+    const radarGroups = (competitorsRes.data || [])
+      .filter((comp) => !matchedIds.has(comp.id))
+      .map(buildRadarGroup);
+
+    const groups = [...listingGroups, ...radarGroups].sort((a, b) => sortRank(a) - sortRank(b));
+
     let filtered = groups;
 
     if (search) {
       filtered = filtered.filter((g) => {
-        const titleMatch = g.my_listing.title.toLowerCase().includes(search);
-        const skuMatch = g.my_listing.product_sku?.toLowerCase().includes(search) || false;
-        const extMatch = g.my_listing.external_id.toLowerCase().includes(search);
-        const compMatch = g.competitors.some(
-          (c) =>
-            c.title.toLowerCase().includes(search) ||
-            c.seller_name.toLowerCase().includes(search) ||
-            c.external_id.toLowerCase().includes(search)
+        const l = g.my_listing;
+        return (
+          l.title.toLowerCase().includes(search) ||
+          (l.product_sku?.toLowerCase().includes(search) ?? false) ||
+          l.external_id.toLowerCase().includes(search) ||
+          g.competitors.some(
+            (c) =>
+              c.title.toLowerCase().includes(search) ||
+              (c.seller_name || "").toLowerCase().includes(search) ||
+              c.external_id.toLowerCase().includes(search)
+          )
         );
-        return titleMatch || skuMatch || extMatch || compMatch;
       });
     }
 
-    if (statusFilter && statusFilter !== "all") {
-      if (statusFilter === "RADAR") {
-        filtered = filtered.filter((g) => g.my_listing.listing_type === "radar");
-      } else {
-        filtered = filtered.filter((g) => g.status === statusFilter);
-      }
+    if (statusFilter !== "all") {
+      filtered =
+        statusFilter === "RADAR"
+          ? filtered.filter((g) => g.my_listing.listing_type === "radar")
+          : filtered.filter((g) => g.status === statusFilter && g.my_listing.listing_type !== "radar");
     }
 
-    // Sumário consolidado de KPIs
+    const isOwn = (g: ComparativeListingGroup) => g.my_listing.listing_type !== "radar";
     const summary = {
       total_listings: groups.length,
-      winning_count: groups.filter((g) => g.status === "WINNING" && g.my_listing.listing_type !== "radar").length,
-      tied_count: groups.filter((g) => g.status === "TIED" && g.my_listing.listing_type !== "radar").length,
-      losing_count: groups.filter((g) => g.status === "LOSING" && g.my_listing.listing_type !== "radar").length,
+      winning_count: groups.filter((g) => isOwn(g) && g.status === "WINNING").length,
+      tied_count: groups.filter((g) => isOwn(g) && g.status === "TIED").length,
+      losing_count: groups.filter((g) => isOwn(g) && g.status === "LOSING").length,
       unmatched_count: groups.filter((g) => g.status === "UNMATCHED").length,
-      radar_count: groups.filter((g) => g.my_listing.listing_type === "radar").length,
+      radar_count: radarGroups.length,
     };
 
-    const responseData: BiComparativeResponse = {
-      platform,
-      summary,
-      items: filtered,
-    };
+    const responseData: BiComparativeResponse = { platform, summary, items: filtered };
 
     return NextResponse.json(responseData, {
       status: 200,
-      headers: {
-        "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate",
-      },
+      headers: { "Cache-Control": "no-store, no-cache, must-revalidate, proxy-revalidate" },
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro desconhecido";
     console.error("[API BI Comparative] Erro:", message);
-    return NextResponse.json(
-      { error: "Erro ao gerar comparativo de BI", details: message },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Erro ao gerar comparativo de BI", details: message }, { status: 500 });
   }
 }

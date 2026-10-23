@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "ERP Marketplaces - Coleta de Concorrentes",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Extensão assistida para captura de anúncios concorrentes no Mercado Livre e Shopee com pareamento direto no seu ERP.",
   "permissions": [
     "storage",
     "activeTab",
+    "alarms",
     "declarativeNetRequest",
     "scripting"
   ],

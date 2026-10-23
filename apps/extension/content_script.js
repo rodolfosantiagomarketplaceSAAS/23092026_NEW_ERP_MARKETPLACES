@@ -20,10 +20,36 @@
 
   if (isErpPage) {
     const currentErpUrl = window.location.origin;
-    try {
-      chrome.storage?.local?.set({ erpUrl: currentErpUrl });
-      chrome.storage?.sync?.set({ erpUrl: currentErpUrl });
-    } catch {}
+
+    // Pareamento automático: se o usuário estiver logado neste ERP, obtém o token
+    // de longa duração e repassa ao service worker (sem copiar/colar token).
+    const pairWithErp = async () => {
+      try {
+        const res = await fetch(`${currentErpUrl}/api/extension/token`, { credentials: "include", cache: "no-store" });
+        if (!res.ok) return;
+        const session = await res.json();
+        if (!session?.token) return;
+
+        chrome.runtime.sendMessage(
+          { action: "ERP_SESSION", erpUrl: currentErpUrl, token: session.token, user: session.user },
+          (status) => {
+            if (chrome.runtime.lastError) return;
+            window.dispatchEvent(
+              new CustomEvent("CRM_EXTENSION_CONNECTED", {
+                detail: { online: !!status?.online, user: session.user, origin: currentErpUrl },
+              })
+            );
+          }
+        );
+      } catch {
+        // Não é o ERP ou servidor indisponível: mantém a configuração atual
+      }
+    };
+
+    pairWithErp();
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") pairWithErp();
+    });
 
     window.__CRM_MARKETPLACES_EXTENSION_ACTIVE__ = true;
     document.documentElement.setAttribute("data-crm-extension-installed", "true");

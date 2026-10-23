@@ -1,212 +1,193 @@
 /**
  * BACKGROUND SERVICE WORKER - ERP MARKETPLACES INTELIGÊNCIA COMPETITIVA
- * Gerencia a comunicação segura com o endpoint /api/competitors/sync do Next.js
+ * - Conexão automática: recebe o token do ERP (content script na aba do ERP logado)
+ * - Heartbeat periódico (chrome.alarms) + badge no ícone indicando status
+ * - Proxy de todas as chamadas à API do ERP (imune a CORS das páginas)
  */
 
-/**
- * Normaliza a URL do ERP:
- * - Garante protocolo (http:// ou https://)
- * - Remove barras finais
- * - Converte domínios Vercel para HTTPS obrigatoriamente
- */
+const DEFAULT_ERP_URL = "http://localhost:3000";
+const HEARTBEAT_ALARM = "erp-heartbeat";
+const HEARTBEAT_MINUTES = 5;
+
 function normalizeErpUrl(rawUrl) {
   let url = (rawUrl || "").trim().replace(/\/+$/, "");
-  if (!url) return "http://localhost:3000";
-
-  // Se o usuário digitou sem protocolo (ex: meu-erp.vercel.app)
-  if (!url.startsWith("http://") && !url.startsWith("https://")) {
-    url = `https://${url}`;
-  }
-
-  // Se for endereço Vercel, força https
-  if (url.includes(".vercel.app") && url.startsWith("http://")) {
-    url = url.replace("http://", "https://");
-  }
-
+  if (!url) return DEFAULT_ERP_URL;
+  if (!url.startsWith("http://") && !url.startsWith("https://")) url = `https://${url}`;
+  if (url.includes(".vercel.app") && url.startsWith("http://")) url = url.replace("http://", "https://");
   return url;
 }
 
-/**
- * Recupera configurações mesclando local storage e sync storage
- */
 async function getStoredConfig() {
-  return new Promise((resolve) => {
-    chrome.storage.local.get(["erpUrl", "apiToken"], (localRes) => {
-      chrome.storage.sync.get(["erpUrl", "apiToken"], (syncRes) => {
-        const erpUrl = localRes?.erpUrl || syncRes?.erpUrl || "";
-        const apiToken = localRes?.apiToken || syncRes?.apiToken || "";
-        resolve({ erpUrl, apiToken });
-      });
-    });
+  const [local, sync] = await Promise.all([
+    chrome.storage.local.get(["erpUrl", "apiToken", "connectedUser"]),
+    chrome.storage.sync.get(["erpUrl", "apiToken"]).catch(() => ({})),
+  ]);
+  return {
+    erpUrl: normalizeErpUrl(local.erpUrl || sync.erpUrl),
+    apiToken: (local.apiToken || sync.apiToken || "").trim(),
+    connectedUser: local.connectedUser || null,
+  };
+}
+
+function authHeaders(apiToken, extra = {}) {
+  return apiToken ? { ...extra, Authorization: `Bearer ${apiToken}` } : extra;
+}
+
+function setBadge(online) {
+  chrome.action.setBadgeText({ text: online ? "ON" : "!" });
+  chrome.action.setBadgeBackgroundColor({ color: online ? "#10B981" : "#EF4444" });
+  chrome.action.setTitle({
+    title: online ? "ERP Marketplaces - Conectado" : "ERP Marketplaces - Desconectado (abra o ERP logado)",
   });
 }
 
-chrome.runtime.onInstalled.addListener(async () => {
-  console.log("[ERP Background Worker] Extensão inicializada.");
-  // Não sobrescreve configurações se já existirem
-  const current = await getStoredConfig();
-  if (!current.erpUrl) {
-    chrome.storage.local.set({ erpUrl: "http://localhost:3000" });
-    try {
-      chrome.storage.sync.set({ erpUrl: "http://localhost:3000" });
-    } catch {}
-  }
-});
-
-/**
- * Listener de Mensagens Internas da Extensão
- */
-chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
-  if (request.action === "SYNC_COMPETITOR") {
-    handleSyncCompetitor(request.payload)
-      .then((res) => sendResponse(res))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true; // Mantém o canal aberto para resposta assíncrona
-  }
-
-  if (request.action === "SYNC_SEARCH_ITEMS") {
-    handleSyncSearchItems(request.erpUrl, request.payload)
-      .then((res) => sendResponse(res))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-
-  if (request.action === "TEST_CONNECTION") {
-    handleTestConnection(request.erpUrl, request.apiToken)
-      .then((res) => sendResponse(res))
-      .catch((err) => sendResponse({ success: false, error: err.message }));
-    return true;
-  }
-});
-
-/**
- * Despacha o POST para a API do ERP
- */
-async function handleSyncCompetitor(payload) {
-  const config = await getStoredConfig();
-  const erpUrl = normalizeErpUrl(config.erpUrl);
-  const apiToken = config.apiToken?.trim() || "";
-
-  const endpoint = `${erpUrl}/api/competitors/sync`;
-
-  const headers = {
-    "Content-Type": "application/json",
-  };
-
-  if (apiToken) {
-    headers["Authorization"] = `Bearer ${apiToken}`;
-  }
-
-  try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      const errDetails = data.details
-        ? typeof data.details === "object"
-          ? JSON.stringify(data.details)
-          : data.details
-        : "";
-      throw new Error(data.error || `Erro HTTP ${response.status}: ${response.statusText} ${errDetails}`);
-    }
-
-    return { success: true, data };
-  } catch (error) {
-    console.error("[ERP Background Worker] Erro no fetch de sync:", error);
-    if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
-      throw new Error(`Não foi possível conectar ao ERP em ${erpUrl}. Verifique se a URL está correta e com HTTPS (caso online na Vercel).`);
-    }
-    throw error;
-  }
+async function saveStatus(status) {
+  await chrome.storage.local.set({ connectionStatus: { ...status, checkedAt: new Date().toISOString() } });
+  setBadge(status.online);
+  return status;
 }
 
-/**
- * Valida a conexão com o ERP
- */
-async function handleTestConnection(erpUrl, apiToken) {
-  const url = normalizeErpUrl(erpUrl);
-  const token = apiToken?.trim() || "";
-
-  const headers = {};
-  if (token) {
-    headers["Authorization"] = `Bearer ${token}`;
-  }
-
-  try {
-    const response = await fetch(`${url}/api/my-listings?platform=mercadolivre&limit=1`, {
-      method: "GET",
-      headers,
-    });
-
-    if (response.ok) {
-      return {
-        success: true,
-        message: token
-          ? `Conexão com o ERP (${url}) autenticada com sucesso!`
-          : `Conexão com o ERP (${url}) estabelecida com sucesso!`,
-      };
-    } else {
-      const errData = await response.json().catch(() => ({}));
-      throw new Error(errData.error || `Erro HTTP ${response.status}: ${response.statusText}`);
-    }
-  } catch (err) {
-    console.error("[ERP Background Worker] Erro no teste de conexão:", err);
-    if (err.message.includes("Failed to fetch") || err.message.includes("NetworkError")) {
-      throw new Error(`Falha de conexão em ${url}. Verifique se a URL está acessível e possui HTTPS válido.`);
-    }
-    throw new Error(`Falha ao conectar no ERP: ${err.message}`);
-  }
-}
-
-/**
- * Despacha o bulk-sync de busca diretamente a partir do service worker (imune a CORS e bloqueios de página)
- */
-async function handleSyncSearchItems(rawErpUrl, payload) {
+/** Valida o token no ERP. Não depende de banco para tokens da extensão (rápido). */
+async function heartbeat(override = {}) {
   const config = await getStoredConfig();
-  const erpUrl = normalizeErpUrl(rawErpUrl || config.erpUrl);
-  const endpoint = `${erpUrl}/api/bi/market-search/bulk-sync`;
+  const erpUrl = normalizeErpUrl(override.erpUrl || config.erpUrl);
+  const apiToken = (override.apiToken ?? config.apiToken).trim();
 
-  const headers = {
-    "Content-Type": "application/json",
-  };
-
-  if (config.apiToken?.trim()) {
-    headers["Authorization"] = `Bearer ${config.apiToken.trim()}`;
+  if (!apiToken) {
+    return saveStatus({ online: false, erpUrl, reason: "no_token", error: "Abra o ERP logado para conectar." });
   }
 
   try {
-    const response = await fetch(endpoint, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(payload),
-    });
-
-    const data = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      throw new Error(data.error || `Erro HTTP ${response.status}: ${response.statusText}`);
+    const res = await fetch(`${erpUrl}/api/extension/ping`, { headers: authHeaders(apiToken) });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.ok) {
+      return saveStatus({ online: true, erpUrl, user: data.user, auth: data.auth });
     }
-
-    return {
-      success: true,
-      count: payload.items?.length || 0,
-      query: payload.query,
+    return saveStatus({
+      online: false,
       erpUrl,
-      redirectUrl:
-        data.redirectUrl ||
-        `/inteligencia?q=${encodeURIComponent(payload.query)}&platform=${payload.platform || "mercadolivre"}`,
-      ...data,
-    };
-  } catch (error) {
-    console.error("[ERP Background Worker] Erro no bulk-sync:", error);
-    if (error.message.includes("Failed to fetch") || error.message.includes("NetworkError")) {
-      throw new Error(`Não foi possível conectar ao ERP em ${erpUrl}. Verifique se o servidor está online e permite conexões.`);
-    }
-    throw error;
+      reason: res.status === 401 ? "unauthorized" : "http_error",
+      error: res.status === 401 ? "Sessão expirada. Abra o ERP logado para reconectar." : `Erro HTTP ${res.status}`,
+    });
+  } catch {
+    return saveStatus({ online: false, erpUrl, reason: "network", error: `ERP inacessível em ${erpUrl}` });
   }
 }
+
+function ensureHeartbeatAlarm() {
+  chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: HEARTBEAT_MINUTES });
+}
+
+chrome.runtime.onInstalled.addListener(async () => {
+  const { erpUrl } = await chrome.storage.local.get(["erpUrl"]);
+  if (!erpUrl) await chrome.storage.local.set({ erpUrl: DEFAULT_ERP_URL });
+  ensureHeartbeatAlarm();
+  heartbeat();
+});
+
+chrome.runtime.onStartup.addListener(() => {
+  ensureHeartbeatAlarm();
+  heartbeat();
+});
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === HEARTBEAT_ALARM) heartbeat();
+});
+
+/** Pareamento automático: o content script do ERP envia o token emitido para o usuário logado. */
+async function handleErpSession({ erpUrl, token, user }) {
+  const normalized = normalizeErpUrl(erpUrl);
+  await chrome.storage.local.set({
+    erpUrl: normalized,
+    apiToken: token,
+    connectedUser: user || null,
+    connectedAt: new Date().toISOString(),
+  });
+  return heartbeat({ erpUrl: normalized, apiToken: token });
+}
+
+async function postToErp(path, payload, override = {}) {
+  const config = await getStoredConfig();
+  const erpUrl = normalizeErpUrl(override.erpUrl || config.erpUrl);
+
+  let response;
+  try {
+    response = await fetch(`${erpUrl}${path}`, {
+      method: "POST",
+      headers: authHeaders(config.apiToken, { "Content-Type": "application/json" }),
+      body: JSON.stringify(payload),
+    });
+  } catch {
+    throw new Error(`Não foi possível conectar ao ERP em ${erpUrl}. Verifique se o servidor está online.`);
+  }
+
+  const data = await response.json().catch(() => ({}));
+  if (response.status === 401) {
+    await saveStatus({ online: false, erpUrl, reason: "unauthorized", error: data.error });
+    throw new Error(data.error || "Extensão desconectada. Abra o ERP logado para reconectar.");
+  }
+  if (!response.ok) {
+    const details = data.details ? (typeof data.details === "object" ? JSON.stringify(data.details) : data.details) : "";
+    throw new Error(data.error ? `${data.error} ${details}`.trim() : `Erro HTTP ${response.status}`);
+  }
+  return { data, erpUrl };
+}
+
+async function handleSyncCompetitor(payload) {
+  const { data } = await postToErp("/api/competitors/sync", payload);
+  return { success: true, data };
+}
+
+async function handleSyncSearchItems(rawErpUrl, payload) {
+  const { data, erpUrl } = await postToErp("/api/bi/market-search/bulk-sync", payload, { erpUrl: rawErpUrl });
+  return {
+    success: true,
+    count: payload.items?.length || 0,
+    query: payload.query,
+    erpUrl,
+    redirectUrl:
+      data.redirectUrl ||
+      `/inteligencia?q=${encodeURIComponent(payload.query)}&platform=${payload.platform || "mercadolivre"}`,
+    ...data,
+  };
+}
+
+async function handleGetMyListings(platform) {
+  const config = await getStoredConfig();
+  const res = await fetch(`${config.erpUrl}/api/my-listings?platform=${encodeURIComponent(platform)}`, {
+    headers: authHeaders(config.apiToken),
+  });
+  if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
+  const data = await res.json();
+  return { success: true, items: Array.isArray(data.items) ? data.items : [] };
+}
+
+const handlers = {
+  ERP_SESSION: (req) => handleErpSession(req),
+  SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
+  SYNC_SEARCH_ITEMS: (req) => handleSyncSearchItems(req.erpUrl, req.payload),
+  GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform),
+  GET_STATUS: async () => {
+    const [{ connectionStatus }, config] = await Promise.all([
+      chrome.storage.local.get(["connectionStatus"]),
+      getStoredConfig(),
+    ]);
+    return { ...config, apiToken: undefined, hasToken: !!config.apiToken, status: connectionStatus || null };
+  },
+  TEST_CONNECTION: async (req) => {
+    const status = await heartbeat({ erpUrl: req.erpUrl, apiToken: req.apiToken });
+    return status.online
+      ? { success: true, message: `Conectado ao ERP (${status.erpUrl}) como ${status.user?.email || "usuário"}.`, status }
+      : { success: false, error: status.error, status };
+  },
+};
+
+chrome.runtime.onMessage.addListener((request, _sender, sendResponse) => {
+  const handler = handlers[request?.action];
+  if (!handler) return false;
+
+  Promise.resolve(handler(request))
+    .then((res) => sendResponse(res))
+    .catch((err) => sendResponse({ success: false, error: err.message }));
+  return true; // resposta assíncrona
+});

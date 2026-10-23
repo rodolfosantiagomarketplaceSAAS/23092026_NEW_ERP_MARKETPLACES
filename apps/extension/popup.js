@@ -1,52 +1,19 @@
 /**
  * POPUP SCRIPT - ERP MARKETPLACES INTELIGÊNCIA COMPETITIVA
- * Gerencia credenciais, teste de conectividade e pareamento assistido com anúncio próprio
+ * Conexão automática (padrão AvantPRO / Mercado Turbo) com suporte a pareamento 1:N e Radar
  */
 
-/**
- * Normaliza e sanitiza a URL do ERP
- */
 function normalizeErpUrl(rawUrl) {
   let url = (rawUrl || "").trim().replace(/\/+$/, "");
   if (!url) return "http://localhost:3000";
-
-  // Se o usuário digitou sem protocolo (ex: crm-marketplaces.vercel.app)
   if (!url.startsWith("http://") && !url.startsWith("https://")) {
     url = `https://${url}`;
   }
-
-  // Se for endereço da Vercel, força HTTPS
   if (url.includes(".vercel.app") && url.startsWith("http://")) {
     url = url.replace("http://", "https://");
   }
-
   return url;
 }
-
-/**
- * Helper de armazenamento confiável (combina local com sync)
- */
-const extensionStorage = {
-  get: (keys, callback) => {
-    chrome.storage.local.get(keys, (localData) => {
-      chrome.storage.sync.get(keys, (syncData) => {
-        const merged = { ...(syncData || {}), ...(localData || {}) };
-        callback(merged);
-      });
-    });
-  },
-  set: (data, callback) => {
-    chrome.storage.local.set(data, () => {
-      try {
-        chrome.storage.sync.set(data, () => {
-          if (callback) callback();
-        });
-      } catch {
-        if (callback) callback();
-      }
-    });
-  },
-};
 
 document.addEventListener("DOMContentLoaded", async () => {
   const erpUrlInput = document.getElementById("erpUrl");
@@ -59,6 +26,10 @@ document.addEventListener("DOMContentLoaded", async () => {
   const feedbackMsg = document.getElementById("feedbackMsg");
   const statusBadge = document.getElementById("statusBadge");
   const statusText = document.getElementById("statusText");
+  const userLine = document.getElementById("userLine");
+  const connectBanner = document.getElementById("connectBanner");
+  const connectBtn = document.getElementById("connectBtn");
+  const connectReason = document.getElementById("connectReason");
   const pageInfoBox = document.getElementById("pageInfoBox");
   const cardSectionTitle = document.getElementById("cardSectionTitle");
   const listingSelectContainer = document.getElementById("listingSelectContainer");
@@ -68,7 +39,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   let currentDetectedPlatform = null;
   let currentScrapedData = null;
 
-  // 1. Detecta aba ativa primeiro
+  // 1. Detecta aba ativa
   const [activeTab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (activeTab && activeTab.url) {
     if (activeTab.url.includes("mercadolivre.com.br")) {
@@ -78,15 +49,16 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // 2. Carrega configurações salvas (Local + Sync)
-  extensionStorage.get(["erpUrl", "apiToken", "selectedMyListingId"], (res) => {
-    const savedUrl = normalizeErpUrl(res.erpUrl);
-    erpUrlInput.value = savedUrl;
-    apiTokenInput.value = res.apiToken || "";
+  // 2. Consulta estado atual junto ao Service Worker
+  chrome.runtime.sendMessage({ action: "GET_STATUS" }, async (statusRes) => {
+    const config = statusRes || {};
+    const erpUrl = normalizeErpUrl(config.erpUrl);
+    if (erpUrlInput) erpUrlInput.value = erpUrl;
+    if (apiTokenInput && config.hasToken) apiTokenInput.placeholder = "●●●●●●●●●● (Conectado via ERP)";
 
-    checkConnectionStatus(savedUrl, res.apiToken || "");
+    updateConnectionUI(config.status, config.connectedUser, erpUrl);
 
-    // 3. Se estiver em página suportada, extrai dados da página e busca anúncios próprios
+    // 3. Se estiver em página de produto/busca do marketplace, extrai dados
     if (currentDetectedPlatform && activeTab?.id) {
       chrome.tabs.sendMessage(activeTab.id, { action: "GET_PAGE_DATA" }, async (response) => {
         if (chrome.runtime.lastError || !response || (!response.data && !response.isSearch)) {
@@ -97,7 +69,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           return;
         }
 
-        // Se estiver em página de pesquisa de produtos (Mercado Livre ou Shopee)
+        // Se for página de busca/pesquisa
         if (response.isSearch) {
           if (cardSectionTitle) cardSectionTitle.innerText = "Pesquisa de Mercado (Aba Ativa)";
           if (captureNowBtn) captureNowBtn.style.display = "none";
@@ -108,18 +80,17 @@ document.addEventListener("DOMContentLoaded", async () => {
               <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"} — Pesquisa</strong>
               <span>Termo: <strong style="color:#1e293b;">&quot;${response.query || "Busca"}&quot;</strong></span>
               <span>Anúncios Detectados: <strong style="color:#4F46E5;">${response.itemsCount} anúncios</strong></span>
-              <span style="color:#64748B; font-size:10px; margin-top:2px;">Selecione seu anúncio abaixo para vincular todos os concorrentes ao Radar Comparativo (1:N), ou deixe em branco para ver na Pesquisa de Mercado.</span>
+              <span style="color:#64748B; font-size:10px; margin-top:2px;">Selecione seu anúncio abaixo para pareamento 1:N no Radar, ou mantenha como Radar de Mercado.</span>
             </div>
           `;
 
-          // Carrega anúncios próprios para permitir pareamento em lote
-          await loadMyListings(savedUrl, res.apiToken || "", currentDetectedPlatform, res.selectedMyListingId);
+          await loadMyListings(currentDetectedPlatform);
           window.__CURRENT_SEARCH_COUNT__ = response.itemsCount;
           updateButtonLabel();
           return;
         }
 
-        // Caso seja a página de um produto individual
+        // Caso seja a página de um anúncio individual
         if (cardSectionTitle) cardSectionTitle.innerText = "Anúncio Atual (Aba Ativa)";
         if (syncSearchBtn) syncSearchBtn.style.display = "none";
 
@@ -147,8 +118,7 @@ document.addEventListener("DOMContentLoaded", async () => {
           </div>
         `;
 
-        // Carrega anúncios próprios do ERP usando as credenciais já carregadas
-        await loadMyListings(savedUrl, res.apiToken || "", currentDetectedPlatform, res.selectedMyListingId);
+        await loadMyListings(currentDetectedPlatform);
         captureNowBtn.style.display = "block";
       });
     } else {
@@ -158,61 +128,93 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   });
 
-  // 4. Salvar configurações
-  saveBtn.addEventListener("click", () => {
-    const rawUrl = erpUrlInput.value;
-    const erpUrl = normalizeErpUrl(rawUrl);
-    const apiToken = apiTokenInput.value.trim();
-
-    // Atualiza campo visualmente com a URL normalizada
-    erpUrlInput.value = erpUrl;
-
-    extensionStorage.set({ erpUrl, apiToken }, () => {
-      showFeedback(`Configurações salvas: ${erpUrl}`, "success");
-      checkConnectionStatus(erpUrl, apiToken);
-      if (currentDetectedPlatform) {
-        loadMyListings(erpUrl, apiToken, currentDetectedPlatform);
+  // Atualiza estado visual de conexão
+  function updateConnectionUI(status, user, erpUrl) {
+    const isOnline = !!status?.online;
+    if (isOnline) {
+      statusBadge.className = "status-badge online";
+      statusText.innerText = "Conectado";
+      if (userLine) {
+        userLine.innerText = `Logado: ${user?.email || status?.user?.email || "Usuário ERP"} (${erpUrl})`;
       }
+      if (connectBanner) connectBanner.style.display = "none";
+    } else {
+      statusBadge.className = "status-badge offline";
+      statusText.innerText = "Desconectado";
+      if (userLine) userLine.innerText = `Alvo: ${erpUrl}`;
+      if (connectBanner) {
+        connectBanner.style.display = "block";
+        if (connectReason) {
+          connectReason.innerText = status?.error || "Abra o ERP logado no Chrome para conectar automaticamente.";
+        }
+      }
+    }
+  }
+
+  // 1-Click Conexão Automática: abre o ERP na tela de login/inteligência
+  if (connectBtn) {
+    connectBtn.addEventListener("click", () => {
+      const targetUrl = normalizeErpUrl(erpUrlInput?.value);
+      chrome.tabs.create({ url: `${targetUrl}/inteligencia` });
+      window.close();
     });
-  });
+  }
+
+  // Salvar configurações manuais (se o usuário desejar personalizar)
+  if (saveBtn) {
+    saveBtn.addEventListener("click", () => {
+      const erpUrl = normalizeErpUrl(erpUrlInput.value);
+      const apiToken = apiTokenInput.value.trim();
+      erpUrlInput.value = erpUrl;
+
+      chrome.storage.local.set({ erpUrl, ...(apiToken ? { apiToken } : {}) }, () => {
+        showFeedback(`Configurações salvas: ${erpUrl}`, "success");
+        chrome.runtime.sendMessage({ action: "TEST_CONNECTION", erpUrl, apiToken }, (res) => {
+          updateConnectionUI(res?.status, null, erpUrl);
+          if (currentDetectedPlatform) loadMyListings(currentDetectedPlatform);
+        });
+      });
+    });
+  }
 
   const btnSetLocalhost = document.getElementById("btnSetLocalhost");
   const btnSetVercel = document.getElementById("btnSetVercel");
   if (btnSetLocalhost) {
     btnSetLocalhost.addEventListener("click", () => {
       erpUrlInput.value = "http://localhost:3000";
-      saveBtn.click();
+      saveBtn?.click();
     });
   }
   if (btnSetVercel) {
     btnSetVercel.addEventListener("click", () => {
       erpUrlInput.value = "https://23092026-new-erp-marketplaces-web.vercel.app";
-      saveBtn.click();
+      saveBtn?.click();
     });
   }
 
-  // 5. Testar Conexão
-  testBtn.addEventListener("click", () => {
-    const erpUrl = normalizeErpUrl(erpUrlInput.value);
-    const apiToken = apiTokenInput.value.trim();
+  // Testar Conexão
+  if (testBtn) {
+    testBtn.addEventListener("click", () => {
+      const erpUrl = normalizeErpUrl(erpUrlInput.value);
+      const apiToken = apiTokenInput.value.trim();
 
-    erpUrlInput.value = erpUrl;
-    testBtn.disabled = true;
-    testBtn.innerText = "Testando...";
+      testBtn.disabled = true;
+      testBtn.innerText = "Testando...";
 
-    chrome.runtime.sendMessage({ action: "TEST_CONNECTION", erpUrl, apiToken }, (res) => {
-      testBtn.disabled = false;
-      testBtn.innerText = "Testar Conexão";
+      chrome.runtime.sendMessage({ action: "TEST_CONNECTION", erpUrl, apiToken }, (res) => {
+        testBtn.disabled = false;
+        testBtn.innerText = "Testar Conexão";
 
-      if (res && res.success) {
-        setOnlineStatus(true);
-        showFeedback(res.message, "success");
-      } else {
-        setOnlineStatus(false);
-        showFeedback(res?.error || "Falha na conexão com o ERP.", "error");
-      }
+        if (res && res.success) {
+          updateConnectionUI(res.status, res.status?.user, erpUrl);
+          showFeedback(res.message, "success");
+        } else {
+          updateConnectionUI(res?.status, null, erpUrl);
+          showFeedback(res?.error || "Falha na conexão com o ERP.", "error");
+        }
+      });
     });
-  });
+  }
 
   function updateButtonLabel() {
     const isSearchMode = !!window.__CURRENT_SEARCH_COUNT__;
@@ -234,92 +236,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     }
   }
 
-  // 6. Botão "Sincronizar Pesquisa com ERP" (Quando em páginas de busca)
-  if (syncSearchBtn) {
-    syncSearchBtn.addEventListener("click", () => {
-      if (!activeTab || !activeTab.id) return;
-      syncSearchBtn.disabled = true;
-      syncSearchBtn.innerText = "Extraindo e enviando ao ERP...";
-
-      chrome.tabs.sendMessage(activeTab.id, { action: "SYNC_SEARCH_FROM_POPUP" }, async (res) => {
-        if (chrome.runtime.lastError || !res || !res.items) {
-          syncSearchBtn.disabled = false;
-          syncSearchBtn.innerText = "Tentar Novamente";
-          showFeedback("Não foi possível extrair os anúncios da página de busca.", "error");
-          return;
-        }
-
-        const erpUrl = normalizeErpUrl(erpUrlInput.value);
-        const apiToken = apiTokenInput.value.trim();
-        const selectedMyListingId = myListingSelect.value || null;
-
-        try {
-          const payload = {
-            query: res.query,
-            platform: res.platform,
-            items: res.items,
-            my_listing_id: selectedMyListingId,
-          };
-
-          const headers = { "Content-Type": "application/json" };
-          if (apiToken) headers["Authorization"] = `Bearer ${apiToken}`;
-
-          const syncRes = await fetch(`${erpUrl}/api/bi/market-search/bulk-sync`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify(payload),
-          });
-
-          if (syncRes.ok) {
-            const syncJson = await syncRes.json();
-            const msg = selectedMyListingId
-              ? `✅ ${res.items.length} concorrentes vinculados com sucesso ao seu anúncio no Radar!`
-              : `✅ ${res.items.length} anúncios sincronizados na Pesquisa de Mercado!`;
-            showFeedback(msg, "success");
-            syncSearchBtn.style.backgroundColor = "#10B981";
-            syncSearchBtn.innerText = "✓ Sincronizado com Sucesso!";
-
-            try {
-              if (typeof BroadcastChannel !== "undefined") {
-                const bc = new BroadcastChannel("crm_market_search_channel");
-                bc.postMessage({
-                  type: "SYNC_COMPLETED",
-                  query: res.query,
-                  count: res.items.length,
-                  platform: res.platform,
-                  my_listing_id: selectedMyListingId,
-                });
-                setTimeout(() => bc.close(), 1000);
-              }
-            } catch (bcErr) {
-              console.warn("BroadcastChannel erro:", bcErr);
-            }
-
-            const redirectTarget = syncJson.redirectUrl || (
-              selectedMyListingId
-                ? `${erpUrl}/inteligencia?tab=radar&platform=${res.platform}`
-                : `${erpUrl}/inteligencia?tab=pesquisa&q=${encodeURIComponent(res.query)}&platform=${res.platform}`
-            );
-
-            setTimeout(() => {
-              chrome.tabs.create({
-                url: redirectTarget.startsWith("http") ? redirectTarget : `${erpUrl}${redirectTarget}`,
-              });
-            }, 600);
-          } else {
-            throw new Error(`HTTP ${syncRes.status}`);
-          }
-        } catch (err) {
-          console.error(err);
-          syncSearchBtn.disabled = false;
-          syncSearchBtn.innerText = "Tentar Novamente";
-          showFeedback(`Erro ao enviar ao ERP (${erpUrl}). Verifique se o ERP está online.`, "error");
-        }
-      });
-    });
-  }
-
-  // 6.1 Botão "Capturar / Enviar Concorrente"
+  // Disparo de captura a partir do popup
   captureNowBtn.addEventListener("click", () => {
     if (!activeTab || !activeTab.id) return;
     const selectedListingId = myListingSelect.value || null;
@@ -340,8 +257,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (res && res.success) {
           showFeedback(
             selectedListingId
-              ? "✅ Vinculado ao seu anúncio com sucesso no ERP!"
-              : "✅ Concorrente enviado ao Radar de Mercado do ERP! Clique em 'Abrir Radar no ERP' para ver.",
+              ? "✅ Vinculado ao seu anúncio com sucesso no ERP! Abra o Radar para ver."
+              : "✅ Concorrente enviado ao Radar de Mercado do ERP!",
             "success"
           );
         } else {
@@ -351,74 +268,83 @@ document.addEventListener("DOMContentLoaded", async () => {
     );
   });
 
-  // 7. Botão "Abrir Radar no ERP"
+  // Sincronização em massa de páginas de busca
+  if (syncSearchBtn) {
+    syncSearchBtn.addEventListener("click", () => {
+      if (!activeTab || !activeTab.id) return;
+      syncSearchBtn.disabled = true;
+      syncSearchBtn.innerText = "Extraindo e enviando ao ERP...";
+
+      chrome.tabs.sendMessage(activeTab.id, { action: "SYNC_SEARCH_FROM_POPUP" }, async (res) => {
+        if (chrome.runtime.lastError || !res || !res.items) {
+          syncSearchBtn.disabled = false;
+          syncSearchBtn.innerText = "Tentar Novamente";
+          showFeedback("Não foi possível extrair os anúncios da página de busca.", "error");
+          return;
+        }
+
+        const selectedMyListingId = myListingSelect.value || null;
+        const payload = {
+          query: res.query,
+          platform: res.platform,
+          items: res.items,
+          my_listing_id: selectedMyListingId,
+        };
+
+        chrome.runtime.sendMessage(
+          { action: "SYNC_SEARCH_ITEMS", payload },
+          (syncRes) => {
+            syncSearchBtn.disabled = false;
+            if (syncRes && syncRes.success) {
+              const msg = selectedMyListingId
+                ? `✅ ${res.items.length} concorrentes vinculados ao seu anúncio no Radar!`
+                : `✅ ${res.items.length} anúncios sincronizados na Pesquisa de Mercado!`;
+              showFeedback(msg, "success");
+              syncSearchBtn.style.backgroundColor = "#10B981";
+              syncSearchBtn.innerText = "✓ Sincronizado com Sucesso!";
+
+              setTimeout(() => {
+                const targetUrl = syncRes.redirectUrl?.startsWith("http")
+                  ? syncRes.redirectUrl
+                  : `${syncRes.erpUrl}${syncRes.redirectUrl}`;
+                chrome.tabs.create({ url: targetUrl });
+              }, 600);
+            } else {
+              syncSearchBtn.innerText = "Tentar Novamente";
+              showFeedback(`Erro ao enviar ao ERP: ${syncRes?.error || "Verifique conexão"}`, "error");
+            }
+          }
+        );
+      });
+    });
+  }
+
+  // Abrir Radar no ERP
   if (openErpBtn) {
     openErpBtn.addEventListener("click", () => {
-      const erpUrl = normalizeErpUrl(erpUrlInput.value);
-      chrome.tabs.create({ url: `${erpUrl}/inteligencia` });
+      chrome.runtime.sendMessage({ action: "GET_STATUS" }, (status) => {
+        const erpUrl = normalizeErpUrl(status?.erpUrl || erpUrlInput?.value);
+        chrome.tabs.create({ url: `${erpUrl}/inteligencia` });
+      });
     });
   }
 
   // Salva no storage a seleção do anúncio para sincronia
   myListingSelect.addEventListener("change", () => {
-    extensionStorage.set({ selectedMyListingId: myListingSelect.value });
+    chrome.storage.local.set({ selectedMyListingId: myListingSelect.value });
     updateButtonLabel();
   });
 
-  // Funções Utilitárias
-  function showFeedback(text, type) {
-    feedbackMsg.className = `feedback-msg ${type}`;
-    feedbackMsg.innerText = text;
-    feedbackMsg.style.display = "block";
-    setTimeout(() => {
-      feedbackMsg.style.display = "none";
-    }, 6000);
-  }
-
-  function setOnlineStatus(isOnline) {
-    if (isOnline) {
-      statusBadge.className = "status-badge online";
-      statusText.innerText = "Conectado";
-    } else {
-      statusBadge.className = "status-badge offline";
-      statusText.innerText = "Offline";
-    }
-  }
-
-  async function checkConnectionStatus(erpUrl, apiToken) {
-    chrome.runtime.sendMessage({ action: "TEST_CONNECTION", erpUrl, apiToken }, (res) => {
-      setOnlineStatus(res && res.success);
-    });
-  }
-
-  async function loadMyListings(erpUrl, apiToken, platform, preselectedId = null) {
+  // Carrega anúncios próprios do usuário autenticado no ERP
+  async function loadMyListings(platform) {
     listingSelectContainer.style.display = "block";
-    const normalized = normalizeErpUrl(erpUrl);
 
-    try {
-      const headers = {};
-      if (apiToken) {
-        headers["Authorization"] = `Bearer ${apiToken}`;
-      }
-
-      const res = await fetch(`${normalized}/api/my-listings?platform=${platform}`, {
-        headers,
-      });
-
-      if (!res.ok) {
-        myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
-        if (listingHint) {
-          listingHint.innerHTML = "💡 Concorrente será monitorado no <strong>Radar de Mercado</strong> do ERP.";
-        }
-        updateButtonLabel();
-        return;
-      }
-
-      const data = await res.json();
-      if (Array.isArray(data.items) && data.items.length > 0) {
+    chrome.runtime.sendMessage({ action: "GET_MY_LISTINGS", platform }, (res) => {
+      const items = res?.items || [];
+      if (items.length > 0) {
         let optionsHtml = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
         optionsHtml += `<optgroup label="Vincular a um Anúncio Próprio:">`;
-        data.items.forEach((item) => {
+        items.forEach((item) => {
           optionsHtml += `<option value="${item.id}">[${item.product_sku || "Sem SKU"}] ${item.title.slice(0, 32)}... (R$ ${Number(item.current_price).toFixed(2)})</option>`;
         });
         optionsHtml += `</optgroup>`;
@@ -428,32 +354,28 @@ document.addEventListener("DOMContentLoaded", async () => {
           listingHint.innerHTML = "Dica: Escolha seu anúncio para comparar Buybox ou mantenha em 'Radar' para apenas espionar preços.";
         }
 
-        // Restaura seleção anterior se existir
-        if (preselectedId) {
-          myListingSelect.value = preselectedId;
-        } else {
-          extensionStorage.get(["selectedMyListingId"], (store) => {
-            if (store.selectedMyListingId) {
-              myListingSelect.value = store.selectedMyListingId;
-            }
-          });
-        }
+        chrome.storage.local.get(["selectedMyListingId"], (store) => {
+          if (store.selectedMyListingId) {
+            myListingSelect.value = store.selectedMyListingId;
+          }
+        });
         updateButtonLabel();
       } else {
-        // Usuário sem anúncios próprios
         myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
         if (listingHint) {
-          listingHint.innerHTML = "💡 <em>Você ainda não tem anúncios cadastrados.</em> O concorrente será monitorado diretamente no <strong>Radar de Mercado</strong> do ERP.";
+          listingHint.innerHTML = "💡 Concorrentes serão monitorados diretamente no <strong>Radar de Mercado</strong> do ERP.";
         }
         updateButtonLabel();
       }
-    } catch (e) {
-      console.warn("Falha ao carregar anúncios próprios:", e);
-      myListingSelect.innerHTML = `<option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>`;
-      if (listingHint) {
-        listingHint.innerHTML = "💡 Concorrente será monitorado no <strong>Radar de Mercado</strong> do ERP.";
-      }
-      updateButtonLabel();
-    }
+    });
+  }
+
+  function showFeedback(text, type) {
+    feedbackMsg.className = `feedback-msg ${type}`;
+    feedbackMsg.innerText = text;
+    feedbackMsg.style.display = "block";
+    setTimeout(() => {
+      feedbackMsg.style.display = "none";
+    }, 6000);
   }
 });

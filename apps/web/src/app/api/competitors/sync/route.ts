@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { competitorSyncSchema } from "@/lib/validators/competitor";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { addOrUpdateMockCompetitor } from "@/lib/data/comparativeStore";
+import { resolveRequestUser } from "@/lib/extension/auth";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -18,36 +19,27 @@ export async function OPTIONS() {
 
 export async function POST(req: NextRequest) {
   try {
-    // 1. Extração do Bearer Token
-    const authHeader = req.headers.get("authorization");
-    let userId: string | null = null;
-
     const supabase = createSupabaseAdminClient();
 
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.replace("Bearer ", "").trim();
-      
-      // Validação do JWT com Supabase Auth se não for token dev
-      if (token !== "dev-local-token") {
-        try {
-          const { data: authData, error: authError } = await supabase.auth.getUser(token);
-          if (!authError && authData?.user) {
-            userId = authData.user.id;
-          }
-        } catch (e) {
-          console.warn("[API Sync] Aviso ao validar token com auth.getUser:", e);
-        }
+    // 1. Autenticação: token da extensão (preferencial) ou JWT Supabase legado
+    const authUser = await resolveRequestUser(req);
+    let userId: string | null = authUser?.id ?? null;
+
+    // Fallback apenas em desenvolvimento local (sem login na extensão)
+    if (!userId && process.env.NODE_ENV !== "production") {
+      try {
+        const { data: users } = await supabase.auth.admin.listUsers();
+        userId = users?.users?.[0]?.id ?? null;
+      } catch {
+        userId = null;
       }
     }
 
-    // Se não autenticado via token real ou em desenvolvimento, fallback para usuário padrão do banco
     if (!userId) {
-      try {
-        const { data: users } = await supabase.auth.admin.listUsers();
-        userId = users?.users?.[0]?.id || "69ee4850-318b-4d9e-83ab-6743f264b6aa";
-      } catch {
-        userId = "69ee4850-318b-4d9e-83ab-6743f264b6aa";
-      }
+      return NextResponse.json(
+        { error: "Extensão não conectada. Abra o ERP logado para conectar automaticamente." },
+        { status: 401, headers: CORS_HEADERS }
+      );
     }
 
     // 2. Parse e Validação do Body via Zod
@@ -152,7 +144,9 @@ export async function POST(req: NextRequest) {
                 { onConflict: "my_listing_id,competitor_listing_id" }
               );
 
-            if (!matchError) {
+            if (matchError) {
+              console.error("[API Sync] Falha ao vincular concorrente ao anúncio próprio:", matchError);
+            } else {
               matched = true;
             }
           } else {
@@ -183,7 +177,7 @@ export async function POST(req: NextRequest) {
           current_price: item.current_price,
           seller_name: item.seller_name,
         },
-        matched_to_my_listing: matched || !!item.my_listing_id,
+        matched_to_my_listing: matched,
         my_listing_id: item.my_listing_id || null,
       },
       { status: 200, headers: CORS_HEADERS }

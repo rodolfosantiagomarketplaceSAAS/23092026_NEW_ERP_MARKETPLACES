@@ -25,32 +25,42 @@ export function BiDashboard() {
   const [data, setData] = useState<BiComparativeResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [search, setSearch] = useState<string>("");
+  const [debouncedSearch, setDebouncedSearch] = useState<string>("");
   const [statusFilter, setStatusFilter] = useState<string>("all");
   const [syncingBatch, setSyncingBatch] = useState<boolean>(false);
   const [syncSuccessMsg, setSyncSuccessMsg] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search.trim()), 400);
+    return () => clearTimeout(t);
+  }, [search]);
 
   // Carrega dados da API comparativa
   const fetchData = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const params = new URLSearchParams();
       params.set("platform", activePlatform);
-      if (search) params.set("search", search);
+      if (debouncedSearch) params.set("search", debouncedSearch);
       if (statusFilter !== "all") params.set("status", statusFilter);
 
       const res = await fetch(`/api/bi/comparative?${params.toString()}`, {
         cache: "no-store",
       });
-      if (res.ok) {
-        const json: BiComparativeResponse = await res.json();
-        setData(json);
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json) {
+        throw new Error(json?.details || json?.error || `HTTP ${res.status}`);
       }
+      setData(json as BiComparativeResponse);
     } catch (e) {
       console.error("Falha ao carregar dados de BI:", e);
+      setLoadError(e instanceof Error ? e.message : "Erro desconhecido");
     } finally {
       setLoading(false);
     }
-  }, [activePlatform, search, statusFilter]);
+  }, [activePlatform, debouncedSearch, statusFilter]);
 
   // Dispara sincronização e varredura em lote
   const handleSyncBatch = async () => {
@@ -481,17 +491,32 @@ export function BiDashboard() {
         </div>
       </div>
 
+      {loadError && (
+        <div className="bg-red-50 border border-red-300 text-red-900 px-3.5 py-2 rounded-md text-xs flex items-center justify-between">
+          <span>⚠️ Não foi possível carregar o Radar: {loadError}</span>
+          <button onClick={fetchData} className="font-bold underline ml-2">
+            Tentar novamente
+          </button>
+        </div>
+      )}
+
       {/* Tabela de Comparação de Alta Densidade */}
-      <ComparativeTable
-        groups={data?.items || []}
-        highlightedIds={highlightedIds}
-        onPriceUpdated={handlePriceUpdated}
-        onDeleteCompetitor={handleDeleteCompetitor}
-        onDeleteMyListing={handleDeleteMyListing}
-        onOpenPairModal={(id) => {
-          alert(`Para vincular novos concorrentes ao anúncio [${id}], utilize a extensão no Chrome ou o botão 'Capturar Concorrente (ERP)' diretamente no anúncio do concorrente.`);
-        }}
-      />
+      {loading && !data ? (
+        <div className="bg-white border border-[#E2E8F0] rounded p-10 flex items-center justify-center gap-2 text-xs text-slate-500">
+          <RefreshCw className="w-4 h-4 animate-spin" /> Carregando anúncios monitorados...
+        </div>
+      ) : (
+        <ComparativeTable
+          groups={data?.items || []}
+          highlightedIds={highlightedIds}
+          onPriceUpdated={handlePriceUpdated}
+          onDeleteCompetitor={handleDeleteCompetitor}
+          onDeleteMyListing={handleDeleteMyListing}
+          onOpenPairModal={(id) => {
+            alert(`Para vincular novos concorrentes ao anúncio [${id}], utilize a extensão no Chrome ou o botão 'Capturar Concorrente (ERP)' diretamente no anúncio do concorrente.`);
+          }}
+        />
+      )}
     </div>
   );
 }
