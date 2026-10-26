@@ -182,6 +182,95 @@ export function BiDashboard() {
     });
   };
 
+  // Atualização em tempo real quando usuário clica em "Atualizar Dados" no comparativo
+  const handleComparisonRefreshed = (myListingId: string, resultData: any) => {
+    setData((prev) => {
+      if (!prev) return prev;
+      const updatedItems = prev.items.map((group) => {
+        if (group.my_listing.id === myListingId) {
+          const updatedMyListing = resultData.my_listing
+            ? {
+                ...group.my_listing,
+                current_price: resultData.my_listing.current_price,
+                original_price:
+                  resultData.my_listing.original_price !== undefined
+                    ? resultData.my_listing.original_price
+                    : group.my_listing.original_price,
+              }
+            : group.my_listing;
+
+          const updatedCompetitors = group.competitors.map((c) => {
+            if (
+              c.id === resultData.competitor?.id ||
+              c.external_id === resultData.competitor?.external_id
+            ) {
+              const diffBrl = updatedMyListing.current_price - resultData.competitor.current_price;
+              const diffPct =
+                resultData.competitor.current_price > 0
+                  ? (diffBrl / resultData.competitor.current_price) * 100
+                  : 0;
+
+              return {
+                ...c,
+                ...resultData.competitor,
+                current_price: resultData.competitor.current_price,
+                original_price: resultData.competitor.original_price,
+                price_difference_brl: Number(diffBrl.toFixed(2)),
+                price_difference_pct: Number(diffPct.toFixed(2)),
+                last_scraped_at: new Date().toISOString(),
+              };
+            }
+            return c;
+          });
+
+          const lowest =
+            updatedCompetitors.length > 0
+              ? Math.min(...updatedCompetitors.map((c) => c.current_price))
+              : null;
+          const diffBrl =
+            lowest !== null ? Number((updatedMyListing.current_price - lowest).toFixed(2)) : null;
+          const diffPct =
+            lowest !== null && lowest > 0 && diffBrl !== null
+              ? Number(((diffBrl / lowest) * 100).toFixed(2))
+              : null;
+          const status =
+            lowest === null
+              ? "UNMATCHED"
+              : (diffBrl || 0) < 0
+              ? "WINNING"
+              : diffBrl === 0
+              ? "TIED"
+              : "LOSING";
+
+          return {
+            ...group,
+            my_listing: updatedMyListing,
+            competitors: updatedCompetitors,
+            lowest_competitor_price: lowest,
+            diff_brl: diffBrl,
+            diff_pct: diffPct,
+            status: status as any,
+          };
+        }
+        return group;
+      });
+
+      const summary = {
+        total_listings: updatedItems.length,
+        winning_count: updatedItems.filter((g) => g.status === "WINNING").length,
+        tied_count: updatedItems.filter((g) => g.status === "TIED").length,
+        losing_count: updatedItems.filter((g) => g.status === "LOSING").length,
+        unmatched_count: updatedItems.filter((g) => g.status === "UNMATCHED").length,
+      };
+
+      return { ...prev, items: updatedItems, summary: { ...prev.summary, ...summary } };
+    });
+
+    if (resultData.competitor?.id) {
+      triggerHighlight(resultData.competitor.id);
+    }
+  };
+
   // Exclusão de Concorrente Pareado com Atualização Otimista
   const handleDeleteCompetitor = async (myListingId: string, competitorId: string) => {
     try {
@@ -660,6 +749,7 @@ export function BiDashboard() {
           groups={data?.items || []}
           highlightedIds={highlightedIds}
           onPriceUpdated={handlePriceUpdated}
+          onComparisonRefreshed={handleComparisonRefreshed}
           onDeleteCompetitor={handleDeleteCompetitor}
           onDeleteMyListing={handleDeleteMyListing}
           onCompetitorAdded={fetchData}

@@ -173,11 +173,84 @@ async function handleGetMyListings(platform, query = "") {
   return { success: true, items: Array.isArray(data.items) ? data.items : [], total: data.total || 0 };
 }
 
+async function handleInspectCompetitorLink(payload) {
+  const { permalink, external_id, platform = "mercadolivre", my_listing_id, competitor_id } = payload || {};
+  let extracted = null;
+
+  // 1. Tenta carregar o HTML da página do anúncio através do link do concorrente (sem bloqueio de CORS)
+  if (permalink) {
+    try {
+      const res = await fetch(permalink, {
+        headers: {
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+      });
+      if (res.ok) {
+        const html = await res.text();
+        const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/i);
+        let ldObj = null;
+        if (ldMatch) {
+          try {
+            ldObj = JSON.parse(ldMatch[1]);
+          } catch {}
+        }
+
+        const offer = ldObj?.offers ? (Array.isArray(ldObj.offers) ? ldObj.offers[0] : ldObj.offers) : null;
+        const price = offer?.price ? parseFloat(offer.price) : 0;
+
+        let shippingType = "padrao";
+        if (html.includes("Enviado pelo FULL") || html.includes("ui-pdp-icon--full")) {
+          shippingType = "ml_full";
+        } else if (html.includes("Chegará hoje") || html.includes("Flex")) {
+          shippingType = "ml_flex";
+        }
+
+        let promoBadge = null;
+        const discountMatch = html.match(/(\d+%\s*OFF)/i);
+        if (discountMatch) {
+          promoBadge = discountMatch[1];
+        } else if (html.includes("OFERTA DO DIA")) {
+          promoBadge = "Oferta do Dia";
+        }
+
+        if (price > 0 || ldObj?.name) {
+          extracted = {
+            title: ldObj?.name || null,
+            current_price: price,
+            seller_name: offer?.seller?.name || null,
+            shipping_type: shippingType,
+            promo_badge: promoBadge,
+            thumbnail_url: ldObj?.image ? (Array.isArray(ldObj.image) ? ldObj.image[0] : ldObj.image) : null,
+            permalink,
+            external_id,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn("[Background] Erro ao buscar HTML do link:", e);
+    }
+  }
+
+  // 2. Envia para o ERP verificar e sincronizar anúncio próprio e concorrente
+  const { data } = await postToErp("/api/bi/refresh-comparison", {
+    my_listing_id,
+    competitor_id,
+    competitor_permalink: permalink,
+    competitor_external_id: external_id,
+    platform,
+    verified_data: extracted,
+  });
+
+  return { success: true, ...data };
+}
+
 const handlers = {
   ERP_SESSION: (req) => handleErpSession(req),
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
   SYNC_SEARCH_ITEMS: (req) => handleSyncSearchItems(req.erpUrl, req.payload),
   GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),
+  INSPECT_COMPETITOR_LINK: (req) => handleInspectCompetitorLink(req.payload),
   GET_STATUS: async () => {
     const [{ connectionStatus }, config] = await Promise.all([
       chrome.storage.local.get(["connectionStatus"]),

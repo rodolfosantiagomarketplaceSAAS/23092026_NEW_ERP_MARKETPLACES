@@ -74,6 +74,25 @@
             "_blank"
           );
         }
+      } else if (event.data?.type === "CRM_CHECK_COMPETITOR_LINK") {
+        const { requestId, payload } = event.data;
+        chrome.runtime.sendMessage(
+          { action: "INSPECT_COMPETITOR_LINK", payload },
+          (response) => {
+            const err = chrome.runtime.lastError;
+            window.postMessage(
+              {
+                type: "CRM_COMPETITOR_CHECK_RESULT",
+                requestId,
+                result: response || {
+                  success: false,
+                  error: err ? err.message : "Sem resposta da extensão",
+                },
+              },
+              "*"
+            );
+          }
+        );
       }
     });
 

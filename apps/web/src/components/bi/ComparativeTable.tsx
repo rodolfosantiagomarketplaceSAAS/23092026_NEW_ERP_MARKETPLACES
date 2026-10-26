@@ -21,6 +21,7 @@ import {
   ShoppingBag,
   Store,
   RefreshCw,
+  CheckCircle2,
 } from "lucide-react";
 import type { ComparativeListingGroup, CompetitorComparisonItem } from "@crm/types";
 import { RepriceModal } from "./RepriceModal";
@@ -50,6 +51,7 @@ interface ComparativeTableProps {
   groups: ComparativeListingGroup[];
   highlightedIds?: Record<string, boolean>;
   onPriceUpdated?: (groupId: string, newPrice: number, newOriginalPrice?: number | null) => void;
+  onComparisonRefreshed?: (myListingId: string, resultData: any) => void;
   onOpenPairModal?: (group: ComparativeListingGroup) => void;
   onDeleteCompetitor?: (myListingId: string, competitorId: string) => void;
   onDeleteMyListing?: (myListingId: string, title: string) => void;
@@ -60,6 +62,7 @@ export function ComparativeTable({
   groups,
   highlightedIds = {},
   onPriceUpdated,
+  onComparisonRefreshed,
   onOpenPairModal,
   onDeleteCompetitor,
   onDeleteMyListing,
@@ -79,6 +82,138 @@ export function ComparativeTable({
   const [selectedGroupForReprice, setSelectedGroupForReprice] = useState<ComparativeListingGroup | null>(null);
   const [selectedGroupForAdd, setSelectedGroupForAdd] = useState<ComparativeListingGroup | null>(null);
   const [refreshingPriceId, setRefreshingPriceId] = useState<string | null>(null);
+  const [refreshingCompId, setRefreshingCompId] = useState<string | null>(null);
+  const [verifiedSuccessIds, setVerifiedSuccessIds] = useState<Record<string, boolean>>({});
+  const [toastNotification, setToastNotification] = useState<{
+    id: string;
+    text: string;
+    type: "success" | "info" | "error";
+  } | null>(null);
+
+  /**
+   * Confere e atualiza os dados do anúncio concorrente através do link (via extensão ou API oficial)
+   * e também atualiza o preço e promoções do anúncio próprio do Mercado Livre
+   */
+  const handleRefreshComparison = async (
+    group: ComparativeListingGroup,
+    competitor: CompetitorComparisonItem
+  ) => {
+    const targetCompId = competitor.id;
+    setRefreshingCompId(targetCompId);
+    setToastNotification({
+      id: targetCompId,
+      text: "Conferindo anúncio concorrente via link e sincronizando com Mercado Livre...",
+      type: "info",
+    });
+
+    try {
+      const compPermalink =
+        competitor.permalink ||
+        (competitor.external_id ? `https://produto.mercadolivre.com.br/${competitor.external_id}` : "");
+
+      // 1. Tenta acionar a extensão primeiro (se estiver ativa no navegador)
+      let extResponse: any = null;
+      if (
+        typeof window !== "undefined" &&
+        ((window as any).__CRM_MARKETPLACES_EXTENSION_ACTIVE__ ||
+          document.documentElement.getAttribute("data-crm-extension-installed") === "true")
+      ) {
+        try {
+          extResponse = await new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve(null), 3000);
+            const reqId = "req_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+
+            const handleMsg = (e: MessageEvent) => {
+              if (e.data?.type === "CRM_COMPETITOR_CHECK_RESULT" && e.data?.requestId === reqId) {
+                clearTimeout(timeout);
+                window.removeEventListener("message", handleMsg);
+                resolve(e.data.result);
+              }
+            };
+            window.addEventListener("message", handleMsg);
+
+            window.postMessage(
+              {
+                type: "CRM_CHECK_COMPETITOR_LINK",
+                requestId: reqId,
+                payload: {
+                  my_listing_id: group.my_listing.id,
+                  competitor_id: competitor.id,
+                  permalink: compPermalink,
+                  external_id: competitor.external_id,
+                  platform: group.my_listing.platform || "mercadolivre",
+                },
+              },
+              "*"
+            );
+          });
+        } catch (extErr) {
+          console.warn("Aviso ao comunicar com extensão:", extErr);
+        }
+      }
+
+      // Se a extensão já processou e concluiu:
+      if (extResponse && extResponse.success && extResponse.comparison) {
+        if (onComparisonRefreshed) {
+          onComparisonRefreshed(group.my_listing.id, extResponse);
+        }
+        setVerifiedSuccessIds((prev) => ({ ...prev, [targetCompId]: true }));
+        setToastNotification({
+          id: targetCompId,
+          text: `✓ Dados conferidos pela extensão via link! Concorrente: R$ ${Number(extResponse.competitor?.current_price).toFixed(2)} | Meu Anúncio: R$ ${Number(extResponse.my_listing?.current_price).toFixed(2)}`,
+          type: "success",
+        });
+        return;
+      }
+
+      // 2. Chamada direta ao endpoint de verificação profunda (/api/bi/refresh-comparison)
+      const res = await fetch("/api/bi/refresh-comparison", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          my_listing_id: group.my_listing.id,
+          competitor_id: competitor.id,
+          competitor_permalink: compPermalink,
+          competitor_external_id: competitor.external_id,
+          platform: group.my_listing.platform || "mercadolivre",
+          verified_data: extResponse?.verifiedData || null,
+        }),
+      });
+
+      const json = await res.json();
+      if (res.ok && json.success) {
+        if (onComparisonRefreshed) {
+          onComparisonRefreshed(group.my_listing.id, json);
+        }
+        setVerifiedSuccessIds((prev) => ({ ...prev, [targetCompId]: true }));
+        setToastNotification({
+          id: targetCompId,
+          text: `✓ Dados conferidos e atualizados com sucesso! Concorrente: R$ ${Number(json.competitor?.current_price).toFixed(2)} | Meu Anúncio: R$ ${Number(json.my_listing?.current_price).toFixed(2)}`,
+          type: "success",
+        });
+      } else {
+        alert(json.error || "Não foi possível verificar os dados do concorrente.");
+        setToastNotification({
+          id: targetCompId,
+          text: json.error || "Erro ao verificar dados.",
+          type: "error",
+        });
+      }
+    } catch (err: any) {
+      console.error("Erro ao atualizar comparativo:", err);
+      alert("Falha de conexão ao conferir dados com o Mercado Livre.");
+      setToastNotification({
+        id: targetCompId,
+        text: "Falha de conexão ao conferir dados.",
+        type: "error",
+      });
+    } finally {
+      setRefreshingCompId(null);
+      setTimeout(() => {
+        setToastNotification(null);
+      }, 7000);
+    }
+  };
 
   const handleRefreshSinglePrice = async (myListingId: string) => {
     setRefreshingPriceId(myListingId);
@@ -196,7 +331,36 @@ export function ComparativeTable({
   };
 
   return (
-    <div className="bg-white border border-[#E2E8F0] rounded-md shadow-xs overflow-hidden">
+    <div className="space-y-2">
+      {toastNotification && (
+        <div
+          className={`px-3.5 py-2 rounded-lg text-xs font-medium flex items-center justify-between border shadow-2xs transition-all ${
+            toastNotification.type === "success"
+              ? "bg-emerald-50 border-emerald-300 text-emerald-900"
+              : toastNotification.type === "error"
+              ? "bg-red-50 border-red-300 text-red-900"
+              : "bg-indigo-50 border-indigo-300 text-indigo-900"
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <RefreshCw
+              className={`w-3.5 h-3.5 shrink-0 ${
+                toastNotification.type === "info" ? "animate-spin text-indigo-600" : "text-emerald-600"
+              }`}
+            />
+            <span>{toastNotification.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setToastNotification(null)}
+            className="text-slate-400 hover:text-slate-700 font-bold ml-2 text-xs"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
+      <div className="bg-white border border-[#E2E8F0] rounded-md shadow-xs overflow-hidden">
       {/* Tabela de Alta Densidade 100% Responsiva com Scroll Suave */}
       <div className="overflow-x-auto w-full">
         <table className="w-full text-left border-collapse text-xs min-w-[880px]">
@@ -443,6 +607,29 @@ export function ComparativeTable({
                                   )}
                                 </div>
                               )}
+
+                              {/* Botão de Atualizar Dados ao lado do comparativo */}
+                              <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRefreshComparison(group, topComp)}
+                                  disabled={refreshingCompId === topComp.id}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-all shadow-2xs hover:shadow active:scale-95 disabled:opacity-60 cursor-pointer"
+                                  title="A extensão e API conferem o anúncio do concorrente via link e atualizam meu anúncio"
+                                >
+                                  <RefreshCw
+                                    className={`w-3 h-3 text-indigo-600 ${
+                                      refreshingCompId === topComp.id ? "animate-spin" : ""
+                                    }`}
+                                  />
+                                  <span>{refreshingCompId === topComp.id ? "Conferindo..." : "Atualizar Dados"}</span>
+                                </button>
+                                {verifiedSuccessIds[topComp.id] && (
+                                  <span className="inline-flex items-center gap-0.5 text-[9.5px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.2 rounded animate-pulse">
+                                    <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Conferido no Link
+                                  </span>
+                                )}
+                              </div>
                             </div>
                           </div>
                         ) : (
@@ -538,6 +725,23 @@ export function ComparativeTable({
                       {/* 8. Ações Rápidas */}
                       <td className="py-2 px-2 text-center">
                         <div className="flex items-center justify-center space-x-0.5">
+                          {/* Atualizar Dados via Link do Concorrente e API */}
+                          {topComp && (
+                            <button
+                              type="button"
+                              onClick={() => handleRefreshComparison(group, topComp)}
+                              disabled={refreshingCompId === topComp.id}
+                              className="p-1 rounded hover:bg-indigo-50 text-indigo-600 hover:text-indigo-800 transition-colors disabled:opacity-50"
+                              title="Atualizar dados: confere anúncio concorrente via link e atualiza meu anúncio"
+                            >
+                              <RefreshCw
+                                className={`w-3.5 h-3.5 ${
+                                  refreshingCompId === topComp.id ? "animate-spin text-indigo-600" : ""
+                                }`}
+                              />
+                            </button>
+                          )}
+
                           {/* Adicionar Mais Concorrente ao Meu Anúncio (1:N) */}
                           <button
                             onClick={() => setSelectedGroupForAdd(group)}
@@ -648,6 +852,29 @@ export function ComparativeTable({
                                     <span>•</span>
                                     <span className="font-mono text-slate-400 text-[10px]">ID: {comp.external_id}</span>
                                   </div>
+
+                                  {/* Botão de Atualizar Dados da Sublinha */}
+                                  <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRefreshComparison(group, comp)}
+                                      disabled={refreshingCompId === comp.id}
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 transition-all shadow-2xs hover:shadow active:scale-95 disabled:opacity-60 cursor-pointer"
+                                      title="A extensão e API conferem o anúncio do concorrente via link e atualizam meu anúncio"
+                                    >
+                                      <RefreshCw
+                                        className={`w-2.5 h-2.5 text-indigo-600 ${
+                                          refreshingCompId === comp.id ? "animate-spin" : ""
+                                        }`}
+                                      />
+                                      <span>{refreshingCompId === comp.id ? "Conferindo..." : "Atualizar Dados"}</span>
+                                    </button>
+                                    {verifiedSuccessIds[comp.id] && (
+                                      <span className="inline-flex items-center gap-0.5 text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded animate-pulse">
+                                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" /> Conferido
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               </div>
                             </td>
@@ -687,6 +914,19 @@ export function ComparativeTable({
                             {/* 9. Ações Rápidas Concorrente Adicional */}
                             <td className="py-2 px-2 text-center">
                               <div className="flex items-center justify-center space-x-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleRefreshComparison(group, comp)}
+                                  disabled={refreshingCompId === comp.id}
+                                  className="p-1 rounded hover:bg-indigo-50 text-indigo-600 hover:text-indigo-800 transition-colors disabled:opacity-50"
+                                  title="Atualizar dados: confere anúncio concorrente adicional via link e atualiza meu anúncio"
+                                >
+                                  <RefreshCw
+                                    className={`w-3.5 h-3.5 ${
+                                      refreshingCompId === comp.id ? "animate-spin text-indigo-600" : ""
+                                    }`}
+                                  />
+                                </button>
                                 <a
                                   href={subCompUrl}
                                   target="_blank"
@@ -742,6 +982,7 @@ export function ComparativeTable({
           }
         }}
       />
+    </div>
     </div>
   );
 }

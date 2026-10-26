@@ -38,39 +38,49 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
       };
     }
 
-    // 2. Busca token do Mercado Livre
-    const scope = {
-      userId: listing.user_id,
-      organizationId: listing.organization_id || null,
-    };
-    const accessToken = await getActiveMarketplaceToken("mercadolivre", scope);
-    if (!accessToken) {
-      return { success: false, myListingId, error: "Token de acesso do Mercado Livre indisponível." };
+    // 2. Busca token do Mercado Livre (se disponível)
+    let accessToken: string | null = null;
+    try {
+      const scope = {
+        userId: listing.user_id,
+        organizationId: listing.organization_id || null,
+      };
+      accessToken = await getActiveMarketplaceToken("mercadolivre", scope);
+    } catch {
+      accessToken = null;
     }
 
-    const cleanId = (listing.external_id || "").trim();
+    const cleanId = (listing.external_id || "").replace(/[^a-zA-Z0-9]/g, "").trim();
     if (!cleanId) {
       return { success: false, myListingId, error: "external_id ausente." };
     }
 
-    // 3. Consulta em paralelo: dados base do anúncio, endpoint oficial /sale_price e promoções
+    // 3. Consulta em paralelo: dados base do anúncio (público ou autenticado), /sale_price e promoções
+    const headers: Record<string, string> = {
+      "User-Agent": "CRM-Marketplaces-ERP/2.0",
+      Accept: "application/json",
+    };
+    if (accessToken) {
+      headers["Authorization"] = `Bearer ${accessToken}`;
+    }
+
     const [itemRes, salePriceRes, promoRes] = await Promise.all([
       fetch(`https://api.mercadolibre.com/items/${cleanId}`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
+        headers,
         cache: "no-store",
       }).catch(() => null),
-      fetch(`https://api.mercadolibre.com/items/${cleanId}/sale_price`, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "User-Agent": "CRM-Marketplaces-ERP/2.0",
-          Accept: "application/json",
-        },
-        cache: "no-store",
-      }).catch(() => null),
-      fetch(`https://api.mercadolibre.com/seller-promotions/items/${cleanId}?app_version=v2`, {
-        headers: { Authorization: `Bearer ${accessToken}` },
-        cache: "no-store",
-      }).catch(() => null),
+      accessToken
+        ? fetch(`https://api.mercadolibre.com/items/${cleanId}/sale_price`, {
+            headers,
+            cache: "no-store",
+          }).catch(() => null)
+        : Promise.resolve(null),
+      accessToken
+        ? fetch(`https://api.mercadolibre.com/seller-promotions/items/${cleanId}?app_version=v2`, {
+            headers,
+            cache: "no-store",
+          }).catch(() => null)
+        : Promise.resolve(null),
     ]);
 
     const itemData = itemRes && itemRes.ok ? await itemRes.json() : null;
