@@ -20,6 +20,7 @@ import {
   Calendar,
   ShoppingBag,
   Store,
+  RefreshCw,
 } from "lucide-react";
 import type { ComparativeListingGroup, CompetitorComparisonItem } from "@crm/types";
 import { RepriceModal } from "./RepriceModal";
@@ -48,7 +49,7 @@ function formatSales(sales?: number | null) {
 interface ComparativeTableProps {
   groups: ComparativeListingGroup[];
   highlightedIds?: Record<string, boolean>;
-  onPriceUpdated?: (groupId: string, newPrice: number) => void;
+  onPriceUpdated?: (groupId: string, newPrice: number, newOriginalPrice?: number | null) => void;
   onOpenPairModal?: (group: ComparativeListingGroup) => void;
   onDeleteCompetitor?: (myListingId: string, competitorId: string) => void;
   onDeleteMyListing?: (myListingId: string, title: string) => void;
@@ -77,6 +78,31 @@ export function ComparativeTable({
 
   const [selectedGroupForReprice, setSelectedGroupForReprice] = useState<ComparativeListingGroup | null>(null);
   const [selectedGroupForAdd, setSelectedGroupForAdd] = useState<ComparativeListingGroup | null>(null);
+  const [refreshingPriceId, setRefreshingPriceId] = useState<string | null>(null);
+
+  const handleRefreshSinglePrice = async (myListingId: string) => {
+    setRefreshingPriceId(myListingId);
+    try {
+      const res = await fetch("/api/my-listings/refresh-price", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ my_listing_id: myListingId }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        if (onPriceUpdated && json.current_price !== undefined) {
+          onPriceUpdated(myListingId, json.current_price, json.original_price);
+        }
+      } else {
+        alert(json.error || "Não foi possível atualizar o preço do anúncio.");
+      }
+    } catch (err) {
+      console.error("Erro ao atualizar preço:", err);
+      alert("Falha de conexão ao atualizar preço.");
+    } finally {
+      setRefreshingPriceId(null);
+    }
+  };
 
   const toggleRow = (id: string) => {
     setExpandedRows((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -316,13 +342,26 @@ export function ComparativeTable({
 
                       {/* 2. Meu Preço */}
                       <td className="py-2 px-2 text-right">
-                        <div>
-                          <MarketplacePrice
-                            currentPrice={group.my_listing.current_price}
-                            originalPrice={group.my_listing.original_price}
-                            align="right"
-                            size="sm"
-                          />
+                        <div className="flex flex-col items-end group/price relative">
+                          <div className="flex items-center gap-1 justify-end w-full">
+                            <MarketplacePrice
+                              currentPrice={group.my_listing.current_price}
+                              originalPrice={group.my_listing.original_price}
+                              align="right"
+                              size="sm"
+                            />
+                            {!isRadar && (
+                              <button
+                                type="button"
+                                onClick={() => handleRefreshSinglePrice(group.my_listing.id)}
+                                disabled={refreshingPriceId === group.my_listing.id}
+                                className="opacity-0 group-hover/price:opacity-100 p-0.5 text-slate-400 hover:text-indigo-600 rounded transition-all ml-0.5"
+                                title="Atualizar preço e promoção do Mercado Livre agora"
+                              >
+                                <RefreshCw className={`w-3 h-3 ${refreshingPriceId === group.my_listing.id ? "animate-spin text-indigo-600" : ""}`} />
+                              </button>
+                            )}
+                          </div>
                           {group.my_listing.product_cost_price && (
                             <div className="text-[9.5px] text-slate-400 mt-0.5">
                               Custo: R$ {Number(group.my_listing.product_cost_price).toFixed(2)}

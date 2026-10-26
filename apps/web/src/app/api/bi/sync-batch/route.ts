@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
+import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 
 const SyncBatchSchema = z.object({
   anuncioProprioIds: z.array(z.string().uuid()).optional(),
@@ -110,6 +111,17 @@ export async function POST(req: NextRequest) {
         .from("competitor_listings")
         .update({ last_scraped_at: new Date().toISOString() })
         .in("id", competitorIds);
+    }
+
+    // Sincroniza em paralelo os preços promocionais atualizados dos anúncios próprios vinculados
+    const uniqueMyListingIds = Array.from(
+      new Set(matches.map((m: any) => m.my_listing_id).filter(Boolean))
+    ) as string[];
+
+    if (uniqueMyListingIds.length > 0) {
+      await Promise.allSettled(
+        uniqueMyListingIds.map((id) => syncSingleMyListingPrice(id))
+      );
     }
 
     return NextResponse.json({

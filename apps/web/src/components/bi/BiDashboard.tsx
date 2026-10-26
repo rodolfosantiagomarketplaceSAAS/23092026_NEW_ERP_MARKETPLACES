@@ -153,8 +153,8 @@ export function BiDashboard() {
     fetchData();
   }, [fetchData]);
 
-  // Atualização local de preço quando usuário reprecifica no modal
-  const handlePriceUpdated = (listingId: string, newPrice: number) => {
+  // Atualização local de preço quando usuário reprecifica no modal ou sincroniza preço individual
+  const handlePriceUpdated = (listingId: string, newPrice: number, newOriginalPrice?: number | null) => {
     setData((prev) => {
       if (!prev) return prev;
       const updatedItems = prev.items.map((group) => {
@@ -169,6 +169,7 @@ export function BiDashboard() {
             my_listing: {
               ...group.my_listing,
               current_price: newPrice,
+              original_price: newOriginalPrice !== undefined ? newOriginalPrice : group.my_listing.original_price,
             },
             diff_brl: diffBrl,
             diff_pct: diffPct,

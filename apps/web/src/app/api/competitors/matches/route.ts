@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { removeCompetitorMatch, removeMyListing } from "@/lib/data/comparativeStore";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 
 export async function POST(req: NextRequest) {
   try {
@@ -44,6 +45,13 @@ export async function POST(req: NextRequest) {
         { error: "Falha ao registrar pareamento no banco de dados.", details: matchError.message },
         { status: 500 }
       );
+    }
+
+    // 3. Atualiza imediatamente o preço e status promocional do anúncio próprio direto do ML
+    try {
+      await syncSingleMyListingPrice(my_listing_id);
+    } catch (syncErr) {
+      console.warn("[POST /api/competitors/matches] Aviso ao sincronizar preço próprio:", syncErr);
     }
 
     return NextResponse.json({

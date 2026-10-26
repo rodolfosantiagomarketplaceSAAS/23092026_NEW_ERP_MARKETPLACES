@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveSyncedSearch } from "@/lib/data/marketSearchStore";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 import type { MarketSearchItem } from "@crm/types";
 
 export const dynamic = "force-dynamic";
@@ -111,6 +112,12 @@ export async function POST(req: NextRequest) {
               });
 
               totalMatched = matchRecords.length;
+
+              try {
+                await syncSingleMyListingPrice(my_listing_id);
+              } catch (sErr) {
+                console.warn("Aviso ao sincronizar preço do anúncio próprio no bulk-sync:", sErr);
+              }
             }
 
             // Registra os preços iniciais no histórico

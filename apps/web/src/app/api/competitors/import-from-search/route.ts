@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { importFromSearchSchema } from "@crm/types";
+import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 
 export const dynamic = "force-dynamic";
 
@@ -100,6 +101,11 @@ export async function POST(req: NextRequest) {
 
       if (!matchError) {
         matched = true;
+        try {
+          await syncSingleMyListingPrice(my_listing_id);
+        } catch (sErr) {
+          console.warn("Aviso ao atualizar preço próprio:", sErr);
+        }
       } else {
         console.warn("Aviso ao criar pareamento listing_matches:", matchError);
       }

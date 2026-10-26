@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { competitorSyncSchema } from "@/lib/validators/competitor";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 import { addOrUpdateMockCompetitor } from "@/lib/data/comparativeStore";
 import { resolveRequestUser } from "@/lib/extension/auth";
 
@@ -148,6 +149,11 @@ export async function POST(req: NextRequest) {
               console.error("[API Sync] Falha ao vincular concorrente ao anúncio próprio:", matchError);
             } else {
               matched = true;
+              try {
+                await syncSingleMyListingPrice(item.my_listing_id);
+              } catch (sErr) {
+                console.warn("[API Sync] Aviso ao sincronizar preço próprio:", sErr);
+              }
             }
           } else {
             matched = true; // Pareamento mantido no cache
