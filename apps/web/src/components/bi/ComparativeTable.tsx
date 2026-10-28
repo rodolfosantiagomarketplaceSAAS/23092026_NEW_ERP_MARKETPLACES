@@ -107,9 +107,10 @@ export function ComparativeTable({
     });
 
     try {
+      const cleanExtDigits = (competitor.external_id || "").replace(/^MLB-?/i, "");
       const compPermalink =
         competitor.permalink ||
-        (competitor.external_id ? `https://produto.mercadolivre.com.br/${competitor.external_id}` : "");
+        (cleanExtDigits ? `https://produto.mercadolivre.com.br/MLB-${cleanExtDigits}` : "");
 
       // 1. Tenta acionar a extensão primeiro (se estiver ativa no navegador)
       let extResponse: any = null;
@@ -120,7 +121,7 @@ export function ComparativeTable({
       ) {
         try {
           extResponse = await new Promise((resolve) => {
-            const timeout = setTimeout(() => resolve(null), 3000);
+            const timeout = setTimeout(() => resolve(null), 8000);
             const reqId = "req_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
 
             const handleMsg = (e: MessageEvent) => {
@@ -137,6 +138,7 @@ export function ComparativeTable({
                 type: "CRM_CHECK_COMPETITOR_LINK",
                 requestId: reqId,
                 payload: {
+                  erpUrl: window.location.origin,
                   my_listing_id: group.my_listing.id,
                   competitor_id: competitor.id,
                   permalink: compPermalink,
@@ -152,7 +154,7 @@ export function ComparativeTable({
         }
       }
 
-      // Se a extensão já processou e concluiu:
+      // Se a extensão já processou e concluiu no ERP:
       if (extResponse && extResponse.success && extResponse.comparison) {
         if (onComparisonRefreshed) {
           onComparisonRefreshed(group.my_listing.id, extResponse);
@@ -176,7 +178,7 @@ export function ComparativeTable({
           competitor_permalink: compPermalink,
           competitor_external_id: competitor.external_id,
           platform: group.my_listing.platform || "mercadolivre",
-          verified_data: extResponse?.verifiedData || null,
+          verified_data: extResponse?.verifiedData || extResponse?.competitor || null,
         }),
       });
 
@@ -192,19 +194,17 @@ export function ComparativeTable({
           type: "success",
         });
       } else {
-        alert(json.error || "Não foi possível verificar os dados do concorrente.");
         setToastNotification({
           id: targetCompId,
-          text: json.error || "Erro ao verificar dados.",
+          text: json.error || "Não foi possível verificar os dados do concorrente.",
           type: "error",
         });
       }
     } catch (err: any) {
       console.error("Erro ao atualizar comparativo:", err);
-      alert("Falha de conexão ao conferir dados com o Mercado Livre.");
       setToastNotification({
         id: targetCompId,
-        text: "Falha de conexão ao conferir dados.",
+        text: "Falha de conexão ao conferir dados com o Mercado Livre.",
         type: "error",
       });
     } finally {
@@ -416,7 +416,7 @@ export function ComparativeTable({
                 const hasMultipleCompetitors = !isRadar && group.competitors.length > 1;
                 const topComp = hasCompetitors ? group.competitors[0] : null;
                 const compUrl = topComp
-                  ? topComp.permalink || `https://www.mercadolivre.com.br/p/${topComp.external_id}`
+                  ? topComp.permalink || `https://produto.mercadolivre.com.br/MLB-${(topComp.external_id || "").replace(/^MLB-?/i, "")}`
                   : null;
 
                 return (
@@ -650,7 +650,7 @@ export function ComparativeTable({
                         {topComp ? (
                           <div>
                             <MarketplacePrice
-                              currentPrice={group.lowest_competitor_price ?? topComp.current_price}
+                              currentPrice={topComp.current_price}
                               originalPrice={topComp.original_price}
                               align="right"
                               size="sm"
@@ -797,7 +797,7 @@ export function ComparativeTable({
                     {isExpanded && hasMultipleCompetitors && (
                       group.competitors.slice(1).map((comp, compIdx) => {
                         const isHighlighted = highlightedIds[comp.id];
-                        const subCompUrl = comp.permalink || `https://www.mercadolivre.com.br/p/${comp.external_id}`;
+                        const subCompUrl = comp.permalink || `https://produto.mercadolivre.com.br/MLB-${(comp.external_id || "").replace(/^MLB-?/i, "")}`;
 
                         return (
                           <tr

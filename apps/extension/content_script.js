@@ -511,6 +511,8 @@
 
     if (!sellerName) {
       sellerName = "Vendedor Mercado Livre";
+    } else {
+      sellerName = sellerName.replace(/^(Vendido\s+por|Loja:?)\s+/i, "").replace(/\s+/g, " ").trim();
     }
 
     let sellerReputation = "comum";
@@ -547,10 +549,13 @@
     let promoBadge = null;
     const promoEl =
       document.querySelector(".ui-pdp-promotions-pill") ||
-      document.querySelector(".ui-pdp-color--GREEN");
+      document.querySelector(".andes-money-amount__discount");
 
     if (promoEl && promoEl.innerText.trim()) {
-      promoBadge = promoEl.innerText.trim().slice(0, 50);
+      const cleanPromo = promoEl.innerText.replace(/\s+/g, " ").trim();
+      if (!/^\d+x\s*R\$/i.test(cleanPromo) && !/sem\s+juros/i.test(cleanPromo)) {
+        promoBadge = cleanPromo.slice(0, 40);
+      }
     } else if (bodyHtml.includes("OFERTA DO DIA")) {
       promoBadge = "Oferta do Dia";
     } else if (bodyHtml.includes("RELÂMPAGO") || bodyHtml.includes("Relâmpago")) {

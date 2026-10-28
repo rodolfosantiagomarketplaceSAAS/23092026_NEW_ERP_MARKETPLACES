@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import {
+  cleanPromoBadge,
+  cleanSellerName,
+  normalizeCompetitorPermalink,
+} from "@/lib/services/competitorScraper";
 import type {
   BiComparativeResponse,
   ComparativeListingGroup,
@@ -23,20 +28,21 @@ const STATUS_ORDER: Record<CompetitivenessStatus, number> = {
 
 function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparisonItem {
   const compPrice = Number(comp.current_price);
+  const origPrice = comp.original_price ? Number(comp.original_price) : null;
   const diffBrl = referencePrice - compPrice;
   const diffPct = compPrice > 0 ? (diffBrl / compPrice) * 100 : 0;
 
   return {
     id: comp.id,
     external_id: comp.external_id,
-    seller_name: comp.seller_name,
+    seller_name: cleanSellerName(comp.seller_name),
     seller_reputation: comp.seller_reputation,
     title: comp.title,
     current_price: compPrice,
-    original_price: comp.original_price ? Number(comp.original_price) : null,
+    original_price: origPrice && origPrice > compPrice ? origPrice : null,
     shipping_type: comp.shipping_type,
-    promo_badge: comp.promo_badge,
-    permalink: comp.permalink,
+    promo_badge: cleanPromoBadge(comp.promo_badge, compPrice, origPrice),
+    permalink: normalizeCompetitorPermalink(comp.permalink, comp.external_id, comp.platform) || comp.permalink,
     thumbnail_url: comp.thumbnail_url,
     price_difference_brl: Number(diffBrl.toFixed(2)),
     price_difference_pct: Number(diffPct.toFixed(2)),
@@ -54,7 +60,9 @@ function buildMyListingGroup(item: Row, matchedIds: Set<string>): ComparativeLis
     .map((m: Row) => m.competitor_listings);
 
   activeComps.forEach((c) => matchedIds.add(c.id));
-  const competitors = activeComps.map((c) => toCompetitorItem(c, myPrice));
+  const competitors = activeComps
+    .map((c) => toCompetitorItem(c, myPrice))
+    .sort((a, b) => a.current_price - b.current_price);
 
   const lowestPrice = competitors.length ? Math.min(...competitors.map((c) => c.current_price)) : null;
   let status: CompetitivenessStatus = "UNMATCHED";
