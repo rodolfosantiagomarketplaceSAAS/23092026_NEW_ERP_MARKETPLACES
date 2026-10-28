@@ -333,9 +333,9 @@ export async function POST(req: NextRequest) {
 
     const finalCreatedAt =
       partialData.listing_created_at ||
-      existingComp?.listing_created_at ||
       (await refineMlCreationDateFromImage(finalExternalId, finalThumbnail)) ||
       estimateMlCreationDate(finalExternalId, finalThumbnail) ||
+      existingComp?.listing_created_at ||
       null;
 
     const compVerified: VerifiedCompetitorData = {

@@ -33,11 +33,15 @@ function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparis
   const diffBrl = referencePrice - compPrice;
   const diffPct = compPrice > 0 ? (diffBrl / compPrice) * 100 : 0;
 
-  const resolvedCreatedAt =
-    comp.listing_created_at ||
-    estimateMlCreationDate(comp.external_id, comp.thumbnail_url) ||
-    comp.created_at ||
-    null;
+  const estCreatedAt = estimateMlCreationDate(comp.external_id, comp.thumbnail_url);
+  let resolvedCreatedAt = comp.listing_created_at || estCreatedAt || comp.created_at || null;
+  if (comp.listing_created_at && estCreatedAt) {
+    const dbTime = new Date(comp.listing_created_at).getTime();
+    const estTime = new Date(estCreatedAt).getTime();
+    if (!isNaN(dbTime) && !isNaN(estTime) && dbTime > estTime + 45 * 86400000) {
+      resolvedCreatedAt = estCreatedAt;
+    }
+  }
 
   return {
     id: comp.id,

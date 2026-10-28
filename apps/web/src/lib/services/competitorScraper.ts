@@ -182,8 +182,8 @@ const ODD_MLB_ANCHORS: [number, number][] = [
 ];
 
 const EVEN_MLB_ANCHORS: [number, number][] = [
-  [4000000000, 1747267200],
-  [5302227582, 1775736000],
+  [4000000000, 1715000000],
+  [5302227582, 1740744000],
   [6776418892, 1778775181],
   [7071688620, 1782907200],
   [7136348316, 1783638496],
@@ -206,8 +206,8 @@ const EVEN_MLB_ANCHORS: [number, number][] = [
 
 /**
  * Estima a data real de criação de um anúncio do Mercado Livre via:
- * 1) JSON no HTML (startTime / date_created)
- * 2) Interpolação Dual-Shard do ID MLB (Ímpar / Par)
+ * 1) JSON/DOM no HTML (startTime / date_created / Publicado há X dias)
+ * 2) Interpolação Dual-Shard do ID MLB (Ímpar / Par) validada contra o sufixo _MMYYYY da foto
  * 3) Sufixo _MMYYYY da URL da foto no mlstatic.com
  */
 export function estimateMlCreationDate(
@@ -223,6 +223,38 @@ export function estimateMlCreationDate(
     if (jsonDateMatch?.[1]) {
       const d = new Date(jsonDateMatch[1]);
       if (!isNaN(d.getTime())) return d.toISOString();
+    }
+
+    const relDaysMatch = html.match(/Publicado:?\s*h[áa]\s*(\d+)\s*dias?/i);
+    if (relDaysMatch) {
+      const days = parseInt(relDaysMatch[1], 10);
+      if (!isNaN(days) && days >= 0 && days < 5000) {
+        return new Date(Date.now() - days * 86400000).toISOString();
+      }
+    }
+    const explicitDateMatch = html.match(
+      /Publicado\s*(?:em|:)?\s*(\d{2})\/(\d{2})\/(20\d{2})/i
+    );
+    if (explicitDateMatch) {
+      const day = parseInt(explicitDateMatch[1], 10);
+      const month = parseInt(explicitDateMatch[2], 10) - 1;
+      const year = parseInt(explicitDateMatch[3], 10);
+      const d = new Date(Date.UTC(year, month, day, 12, 0, 0));
+      if (!isNaN(d.getTime())) return d.toISOString();
+    }
+  }
+
+  let imgMonthYear: { month: number; year: number; endOfMonthMs: number; defaultMs: number } | null = null;
+  if (thumbnailUrl) {
+    const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
+    if (imgDateMatch) {
+      const month = parseInt(imgDateMatch[1], 10);
+      const year = parseInt(imgDateMatch[2], 10);
+      if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+        const endOfMonthMs = new Date(Date.UTC(year, month, 0, 12, 0, 0)).getTime();
+        const defaultMs = Math.min(endOfMonthMs, Date.now());
+        imgMonthYear = { month, year, endOfMonthMs, defaultMs };
+      }
     }
   }
 
@@ -256,22 +288,19 @@ export function estimateMlCreationDate(
       const nowSec = Math.floor(Date.now() / 1000);
       const clamped = Math.min(Math.round(sec), nowSec);
       if (clamped > 1200000000) {
-        return new Date(clamped * 1000).toISOString();
+        const interpMs = clamped * 1000;
+        // Se a URL da foto possui _MMYYYY de um mês anterior à interpolação (> 45 dias antes),
+        // respeita o mês/ano real de upload da foto
+        if (imgMonthYear && interpMs > imgMonthYear.endOfMonthMs + 45 * 86400000) {
+          return new Date(imgMonthYear.defaultMs).toISOString();
+        }
+        return new Date(interpMs).toISOString();
       }
     }
   }
 
-  if (thumbnailUrl) {
-    const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
-    if (imgDateMatch) {
-      const month = parseInt(imgDateMatch[1], 10);
-      const year = parseInt(imgDateMatch[2], 10);
-      if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
-        const d = new Date(Date.UTC(year, month - 1, 14, 12, 0, 0));
-        const clampedMs = Math.min(d.getTime(), Date.now());
-        return new Date(clampedMs).toISOString();
-      }
-    }
+  if (imgMonthYear) {
+    return new Date(imgMonthYear.defaultMs).toISOString();
   }
 
   return null;
@@ -923,6 +952,10 @@ export async function fetchCompetitorViaMlApi(params: {
       }
     }
 
+    const resolvedThumb = itemObj.thumbnail
+      ? String(itemObj.thumbnail).replace("http://", "https://")
+      : null;
+
     return {
       title: itemObj.title,
       current_price: resolvedPrice,
@@ -931,10 +964,13 @@ export async function fetchCompetitorViaMlApi(params: {
       seller_reputation: resolvedReputation,
       shipping_type: shippingType,
       promo_badge: cleanPromoBadge(null, resolvedPrice, resolvedOriginalPrice),
-      thumbnail_url: itemObj.thumbnail
-        ? String(itemObj.thumbnail).replace("http://", "https://")
-        : null,
+      thumbnail_url: resolvedThumb,
       sales_count_approx: Number(itemObj.sold_quantity || 0),
+      listing_created_at:
+        itemObj.date_created ||
+        itemObj.start_time ||
+        estimateMlCreationDate(resolvedItemId, resolvedThumb) ||
+        undefined,
       permalink: itemObj.permalink || permalink || undefined,
       external_id: resolvedItemId,
       source: "ml_api",

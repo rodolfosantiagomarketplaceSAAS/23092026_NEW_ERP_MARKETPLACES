@@ -235,8 +235,8 @@
   ];
 
   const EVEN_MLB_ANCHORS = [
-    [4000000000, 1747267200],
-    [5302227582, 1775736000],
+    [4000000000, 1715000000],
+    [5302227582, 1740744000],
     [6776418892, 1778775181],
     [7071688620, 1782907200],
     [7136348316, 1783638496],
@@ -259,6 +259,20 @@
 
   function interpolateMlbCreationDate(externalId, thumbnailUrl = null) {
     try {
+      let imgMonthYear = null;
+      if (thumbnailUrl) {
+        const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
+        if (imgDateMatch) {
+          const month = parseInt(imgDateMatch[1], 10);
+          const year = parseInt(imgDateMatch[2], 10);
+          if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+            const endOfMonthMs = new Date(Date.UTC(year, month, 0, 12, 0, 0)).getTime();
+            const defaultMs = Math.min(endOfMonthMs, Date.now());
+            imgMonthYear = { month, year, endOfMonthMs, defaultMs };
+          }
+        }
+      }
+
       const m = String(externalId || "").match(/MLB(?!U)-?(\d{8,12})/i);
       if (m) {
         const num = parseInt(m[1], 10);
@@ -288,23 +302,17 @@
           const nowSec = Math.floor(Date.now() / 1000);
           const clamped = Math.min(Math.round(sec), nowSec);
           if (clamped > 1200000000) {
-            return new Date(clamped * 1000).toISOString();
+            const interpMs = clamped * 1000;
+            if (imgMonthYear && interpMs > imgMonthYear.endOfMonthMs + 45 * 86400000) {
+              return new Date(imgMonthYear.defaultMs).toISOString();
+            }
+            return new Date(interpMs).toISOString();
           }
         }
       }
 
-      // Fallback pelo sufixo _MMYYYY da URL da foto no mlstatic
-      if (thumbnailUrl) {
-        const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
-        if (imgDateMatch) {
-          const month = parseInt(imgDateMatch[1], 10);
-          const year = parseInt(imgDateMatch[2], 10);
-          if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
-            const d = new Date(Date.UTC(year, month - 1, 14, 12, 0, 0));
-            const clampedMs = Math.min(d.getTime(), Date.now());
-            return new Date(clampedMs).toISOString();
-          }
-        }
+      if (imgMonthYear) {
+        return new Date(imgMonthYear.defaultMs).toISOString();
       }
     } catch {}
     return null;

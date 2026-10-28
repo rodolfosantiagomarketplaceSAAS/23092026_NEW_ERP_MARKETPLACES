@@ -8,10 +8,12 @@ import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 import {
   cleanPromoBadge,
   cleanSellerName,
+  estimateMlCreationDate,
   extractMlbId,
   extractMlbuId,
   fetchCompetitorViaMlApi,
   normalizeCompetitorPermalink,
+  refineMlCreationDateFromImage,
   resolveAnyActiveMlToken,
   scrapeCompetitorFromUrl,
 } from "@/lib/services/competitorScraper";
@@ -71,6 +73,7 @@ export async function POST(req: NextRequest) {
           permalink,
           thumbnail_url,
           sales_count_approx,
+          listing_created_at,
           last_scraped_at
         )
       `
@@ -179,6 +182,14 @@ export async function POST(req: NextRequest) {
           newOrig
         );
 
+        const finalThumb = updatedData?.thumbnail_url || c.thumbnail_url;
+        const resolvedCreatedAt =
+          updatedData?.listing_created_at ||
+          (await refineMlCreationDateFromImage(c.external_id, finalThumb)) ||
+          estimateMlCreationDate(c.external_id, finalThumb) ||
+          c.listing_created_at ||
+          null;
+
         await supabase
           .from("competitor_listings")
           .update({
@@ -192,12 +203,13 @@ export async function POST(req: NextRequest) {
               updatedData?.shipping_type || c.shipping_type || "padrao",
             promo_badge: cleanBadge,
             permalink: updatedData?.permalink || normUrl || c.permalink,
-            thumbnail_url: updatedData?.thumbnail_url || c.thumbnail_url,
+            thumbnail_url: finalThumb,
             sales_count_approx:
               updatedData?.sales_count_approx &&
               updatedData.sales_count_approx > 0
                 ? updatedData.sales_count_approx
                 : Number(c.sales_count_approx || 0),
+            listing_created_at: resolvedCreatedAt,
             last_scraped_at: nowIso,
             updated_at: nowIso,
           })

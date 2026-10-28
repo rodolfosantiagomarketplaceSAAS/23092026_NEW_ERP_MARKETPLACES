@@ -330,6 +330,35 @@ function parseHtmlMultilayer(html, permalink, externalId) {
   if (discountMatch) promoBadge = discountMatch[1].toUpperCase();
   else if (html.includes("OFERTA DO DIA")) promoBadge = "OFERTA DO DIA";
 
+  let listingCreatedAt = null;
+  const jsonDateMatch =
+    html.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
+    html.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
+    html.match(/"date_created"\s*:\s*"([^"]+)"/i);
+  if (jsonDateMatch && jsonDateMatch[1]) {
+    const d = new Date(jsonDateMatch[1]);
+    if (!isNaN(d.getTime())) listingCreatedAt = d.toISOString();
+  }
+  if (!listingCreatedAt) {
+    const relDaysMatch = html.match(/Publicado:?\s*h[áa]\s*(\d+)\s*dias?/i);
+    if (relDaysMatch) {
+      const days = parseInt(relDaysMatch[1], 10);
+      if (!isNaN(days) && days >= 0 && days < 5000) {
+        listingCreatedAt = new Date(Date.now() - days * 86400000).toISOString();
+      }
+    }
+  }
+  if (!listingCreatedAt) {
+    const explicitDateMatch = html.match(/Publicado\s*(?:em|:)?\s*(\d{2})\/(\d{2})\/(20\d{2})/i);
+    if (explicitDateMatch) {
+      const day = parseInt(explicitDateMatch[1], 10);
+      const month = parseInt(explicitDateMatch[2], 10) - 1;
+      const year = parseInt(explicitDateMatch[3], 10);
+      const d = new Date(Date.UTC(year, month, day, 12, 0, 0));
+      if (!isNaN(d.getTime())) listingCreatedAt = d.toISOString();
+    }
+  }
+
   if (currentPrice <= 0) return null;
 
   return {
@@ -342,6 +371,7 @@ function parseHtmlMultilayer(html, permalink, externalId) {
     promo_badge: promoBadge,
     thumbnail_url: thumbnailUrl,
     sales_count_approx: salesCount,
+    listing_created_at: listingCreatedAt,
     permalink,
     external_id: externalId,
   };
@@ -449,6 +479,39 @@ async function extractViaBackgroundTab(targetUrl, externalId) {
           }
         }
 
+        let listingCreatedAt = null;
+        const scripts = document.querySelectorAll("script");
+        for (const s of scripts) {
+          const c = s.textContent || "";
+          const dm =
+            c.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
+            c.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
+            c.match(/"date_created"\s*:\s*"([^"]+)"/i);
+          if (dm && dm[1]) {
+            const d = new Date(dm[1]);
+            if (!isNaN(d.getTime())) {
+              listingCreatedAt = d.toISOString();
+              break;
+            }
+          }
+        }
+        if (!listingCreatedAt) {
+          const bodyText = document.body?.innerText || "";
+          const relMatch = bodyText.match(/Publicado:?\s*h[áa]\s*(\d+)\s*dias?/i);
+          if (relMatch) {
+            const days = parseInt(relMatch[1], 10);
+            if (!isNaN(days) && days >= 0 && days < 5000) {
+              listingCreatedAt = new Date(Date.now() - days * 86400000).toISOString();
+            }
+          } else {
+            const expMatch = bodyText.match(/Publicado\s*(?:em|:)?\s*(\d{2})\/(\d{2})\/(20\d{2})/i);
+            if (expMatch) {
+              const d = new Date(Date.UTC(parseInt(expMatch[3], 10), parseInt(expMatch[2], 10) - 1, parseInt(expMatch[1], 10), 12, 0, 0));
+              if (!isNaN(d.getTime())) listingCreatedAt = d.toISOString();
+            }
+          }
+        }
+
         return {
           title,
           current_price: price,
@@ -457,6 +520,7 @@ async function extractViaBackgroundTab(targetUrl, externalId) {
           shipping_type: shippingType,
           thumbnail_url: ogImg,
           sales_count_approx: salesCount,
+          listing_created_at: listingCreatedAt,
         };
       },
     });
@@ -496,8 +560,33 @@ async function handleInspectCompetitorLink(payload) {
 
   let extracted = null;
 
+  // 0. Verifica se o anúncio já está aberto em alguma aba ativa do navegador para obter os dados ao vivo do content_script
+  try {
+    const cleanExtDigits = String(external_id || "").replace(/^MLB-?/i, "");
+    const openTabs = await chrome.tabs.query({});
+    const matchingTab = openTabs.find((t) => {
+      if (!t.url) return false;
+      if (cleanExtDigits && t.url.includes(cleanExtDigits)) return true;
+      if (permalink && t.url.split("?")[0] === permalink.split("?")[0]) return true;
+      return false;
+    });
+    if (matchingTab && matchingTab.id) {
+      const tabRes = await new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), 2000);
+        chrome.tabs.sendMessage(matchingTab.id, { action: "GET_PAGE_DATA" }, (res) => {
+          clearTimeout(timer);
+          if (chrome.runtime.lastError || !res || !res.data) return resolve(null);
+          resolve(res.data);
+        });
+      });
+      if (tabRes && tabRes.current_price > 0) {
+        extracted = tabRes;
+      }
+    }
+  } catch {}
+
   // 1. Tenta carregar o HTML da página do anúncio com cookies da sessão do navegador (credentials: "include")
-  if (permalink) {
+  if (!extracted && permalink) {
     try {
       const res = await fetch(permalink, {
         credentials: "include",
