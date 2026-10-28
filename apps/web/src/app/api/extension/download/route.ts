@@ -3,6 +3,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import {
   EXTENSION_FILENAME,
   EXTENSION_VERSION,
+  EXTENSION_UPDATED_AT,
   EXTENSION_ZIP_BASE64,
 } from "@/lib/extension/packageBinary";
 
@@ -39,6 +40,7 @@ export async function GET(_req: NextRequest) {
         "Content-Disposition": `attachment; filename="${EXTENSION_FILENAME}"`,
         "Content-Length": fileBuffer.length.toString(),
         "X-Extension-Version": EXTENSION_VERSION,
+        "X-Extension-Updated-At": EXTENSION_UPDATED_AT,
         "Cache-Control": "private, no-cache, no-store, must-revalidate",
         "Pragma": "no-cache",
         "Expires": "0",

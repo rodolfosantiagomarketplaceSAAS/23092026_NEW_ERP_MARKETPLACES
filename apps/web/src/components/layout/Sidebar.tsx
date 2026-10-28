@@ -26,6 +26,7 @@ import {
   type UserProfileInfo,
   type OrganizationInfo,
 } from "@/lib/services/auth";
+import { EXTENSION_VERSION } from "@/lib/extension/version";
 
 function SidebarContent() {
   const [collapsed, setCollapsed] = useState(false);
@@ -236,7 +237,7 @@ function SidebarContent() {
               </div>
               {!collapsed && (
                 <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  .ZIP
+                  v{EXTENSION_VERSION}
                 </span>
               )}
             </a>

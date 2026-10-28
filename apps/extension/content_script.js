@@ -55,7 +55,7 @@
     document.documentElement.setAttribute("data-crm-extension-installed", "true");
     window.dispatchEvent(
       new CustomEvent("CRM_EXTENSION_DETECTED", {
-        detail: { version: "1.0.0", origin: currentErpUrl },
+        detail: { version: (typeof chrome !== "undefined" && chrome.runtime?.getManifest?.()?.version) || "1.1.0", origin: currentErpUrl },
       })
     );
 

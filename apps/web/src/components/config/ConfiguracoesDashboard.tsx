@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from "react";
+import { EXTENSION_VERSION, EXTENSION_UPDATED_AT } from "@/lib/extension/version";
 import {
   Key,
   Globe,
@@ -25,6 +26,7 @@ import {
   Store,
   AlertCircle,
   Download,
+  Clock,
 } from "lucide-react";
 
 interface MlAccount {
@@ -772,7 +774,11 @@ export function ConfiguracoesDashboard() {
                     Download Autenticado Liberado
                   </span>
                   <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-sky-500/20 text-sky-200 border border-sky-400/30">
-                    Versão 1.1.0 (.ZIP)
+                    Versão {EXTENSION_VERSION} (.ZIP)
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-indigo-500/20 text-indigo-200 border border-indigo-400/30 flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-indigo-300" />
+                    Atualizado em {EXTENSION_UPDATED_AT}
                   </span>
                 </div>
                 <h3 className="text-base font-bold text-white flex items-center gap-2">
@@ -780,7 +786,7 @@ export function ConfiguracoesDashboard() {
                   Instalar Extensão no Computador de Trabalho
                 </h3>
                 <p className="text-xs text-slate-300 leading-relaxed">
-                  Baixe o arquivo compactado (.zip) da extensão para instalar no Google Chrome deste ou de qualquer outro PC onde você for operar o ERP. A extensão captura dados dos concorrentes no Mercado Livre e Shopee e sincroniza com o ERP.
+                  Baixe o arquivo compactado (.zip) da extensão para instalar no Google Chrome deste ou de qualquer outro PC onde você for operar o ERP. A extensão captura dados dos concorrentes no Mercado Livre e Shopee e sincroniza com o ERP. Sempre que uma nova atualização for lançada (versão atual: <strong>v{EXTENSION_VERSION}</strong> de <strong>{EXTENSION_UPDATED_AT}</strong>), basta baixar novamente e clicar em &quot;Recarregar&quot; no Chrome.
                 </p>
               </div>
 
