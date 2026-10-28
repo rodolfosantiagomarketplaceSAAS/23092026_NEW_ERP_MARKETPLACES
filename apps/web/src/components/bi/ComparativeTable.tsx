@@ -50,27 +50,54 @@ function formatSales(sales?: number | null) {
   return `${count.toLocaleString("pt-BR")} venda${count === 1 ? "" : "s"}`;
 }
 
-function estimateCompetitorFees(price: number, platform = "mercadolivre") {
+function estimateCompetitorFees(
+  comp: {
+    current_price: number;
+    sale_fee_amount?: number | null;
+    sale_fee_pct?: number | null;
+    shipping_cost?: number | null;
+    listing_type?: string | null;
+  },
+  platform = "mercadolivre"
+) {
+  const price = Number(comp?.current_price) || 0;
   if (!price || price <= 0) return { fee: 0, pct: 0, shipping: 0 };
+
   if (platform === "shopee") {
-    const pct = 20;
+    const pct = comp.sale_fee_pct && comp.sale_fee_pct > 0 ? comp.sale_fee_pct : 20;
     const fixed = price >= 8 ? 4.0 : price * 0.5;
+    const fee =
+      comp.sale_fee_amount && comp.sale_fee_amount > 0
+        ? Number(comp.sale_fee_amount)
+        : Number(((price * pct) / 100 + fixed).toFixed(2));
     return {
-      fee: Number(((price * pct) / 100 + fixed).toFixed(2)),
+      fee,
       pct,
-      shipping: 0,
+      shipping: comp.shipping_cost !== undefined && comp.shipping_cost !== null ? Number(comp.shipping_cost) : 0,
     };
   }
-  const pct = 11.5;
-  const fee = Number(((price * pct) / 100).toFixed(2));
-  let shipping = 21.65;
-  if (price < 19) shipping = 5.65;
-  else if (price < 49) shipping = 6.85;
-  else if (price < 79) shipping = 10.25;
-  else if (price < 100) shipping = 12.95;
-  else if (price < 120) shipping = 14.95;
-  else if (price < 150) shipping = 16.95;
-  else if (price < 200) shipping = 19.05;
+
+  const isClassic = comp.listing_type === "gold_special";
+  const defaultPct = isClassic ? 12 : 17;
+  const pct = comp.sale_fee_pct && comp.sale_fee_pct > 0 ? Number(comp.sale_fee_pct) : defaultPct;
+  const fixedFee = price < 12.5 ? price / 2 : price < 29 ? 6.25 : price < 50 ? 6.5 : price < 79 ? 6.75 : 0;
+  const fee =
+    comp.sale_fee_amount && comp.sale_fee_amount > 0
+      ? Number(comp.sale_fee_amount)
+      : Number(((price * pct) / 100 + fixedFee).toFixed(2));
+
+  let defaultShipping = 22.45;
+  if (price < 79) defaultShipping = 0;
+  else if (price < 100) defaultShipping = 13.65;
+  else if (price < 120) defaultShipping = 16.85;
+  else if (price < 150) defaultShipping = 18.65;
+  else if (price < 200) defaultShipping = 20.45;
+
+  const shipping =
+    comp.shipping_cost !== undefined && comp.shipping_cost !== null && comp.shipping_cost >= 0
+      ? Number(comp.shipping_cost)
+      : defaultShipping;
+
   return { fee, pct, shipping };
 }
 
@@ -646,7 +673,7 @@ export function ComparativeTable({
                                   {formatSales(topComp.sales_count_approx)}
                                 </span>
                                 {(() => {
-                                  const f = estimateCompetitorFees(topComp.current_price, group.my_listing.platform);
+                                  const f = estimateCompetitorFees(topComp, group.my_listing.platform);
                                   return (
                                     <>
                                       <span
@@ -935,7 +962,7 @@ export function ComparativeTable({
                                       {formatSales(comp.sales_count_approx)}
                                     </span>
                                     {(() => {
-                                      const f = estimateCompetitorFees(comp.current_price, group.my_listing.platform);
+                                      const f = estimateCompetitorFees(comp, group.my_listing.platform);
                                       return (
                                         <>
                                           <span

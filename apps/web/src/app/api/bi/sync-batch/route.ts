@@ -8,7 +8,10 @@ import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 import {
   cleanPromoBadge,
   cleanSellerName,
+  encodeCompetitorMetaInPermalink,
+  estimateCompetitorFeesAndShipping,
   estimateMlCreationDate,
+  extractCompetitorMetaFromPermalink,
   extractMlbId,
   extractMlbuId,
   fetchCompetitorViaMlApi,
@@ -190,6 +193,30 @@ export async function POST(req: NextRequest) {
           c.listing_created_at ||
           null;
 
+        const { meta: existingMeta } = extractCompetitorMetaFromPermalink(c.permalink);
+        const estFees = estimateCompetitorFeesAndShipping(
+          newPrice,
+          c.platform || "mercadolivre",
+          updatedData?.listing_type || existingMeta.listing_type,
+          c.external_id
+        );
+        const permalinkWithMeta = encodeCompetitorMetaInPermalink(
+          updatedData?.permalink || normUrl || c.permalink,
+          {
+            listing_type: updatedData?.listing_type || existingMeta.listing_type || estFees.listing_type,
+            sale_fee_amount:
+              updatedData?.sale_fee_amount ??
+              (newPrice === Number(c.current_price) ? existingMeta.sale_fee_amount : null) ??
+              estFees.sale_fee_amount,
+            sale_fee_pct:
+              updatedData?.sale_fee_pct ?? existingMeta.sale_fee_pct ?? estFees.sale_fee_pct,
+            shipping_cost:
+              updatedData?.shipping_cost ??
+              (newPrice === Number(c.current_price) ? existingMeta.shipping_cost : null) ??
+              estFees.shipping_cost,
+          }
+        );
+
         await supabase
           .from("competitor_listings")
           .update({
@@ -202,7 +229,7 @@ export async function POST(req: NextRequest) {
             shipping_type:
               updatedData?.shipping_type || c.shipping_type || "padrao",
             promo_badge: cleanBadge,
-            permalink: updatedData?.permalink || normUrl || c.permalink,
+            permalink: permalinkWithMeta,
             thumbnail_url: finalThumb,
             sales_count_approx:
               updatedData?.sales_count_approx &&

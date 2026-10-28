@@ -3,7 +3,9 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   cleanPromoBadge,
   cleanSellerName,
+  estimateCompetitorFeesAndShipping,
   estimateMlCreationDate,
+  extractCompetitorMetaFromPermalink,
   normalizeCompetitorPermalink,
 } from "@/lib/services/competitorScraper";
 import type {
@@ -43,6 +45,14 @@ function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparis
     }
   }
 
+  const { cleanPermalink, meta } = extractCompetitorMetaFromPermalink(comp.permalink);
+  const estFees = estimateCompetitorFeesAndShipping(
+    compPrice,
+    comp.platform || "mercadolivre",
+    meta.listing_type || comp.listing_type,
+    comp.external_id
+  );
+
   return {
     id: comp.id,
     external_id: comp.external_id,
@@ -53,7 +63,9 @@ function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparis
     original_price: origPrice && origPrice > compPrice ? origPrice : null,
     shipping_type: comp.shipping_type,
     promo_badge: cleanPromoBadge(comp.promo_badge, compPrice, origPrice),
-    permalink: normalizeCompetitorPermalink(comp.permalink, comp.external_id, comp.platform) || comp.permalink,
+    permalink:
+      normalizeCompetitorPermalink(cleanPermalink, comp.external_id, comp.platform) ||
+      cleanPermalink,
     thumbnail_url: comp.thumbnail_url,
     price_difference_brl: Number(diffBrl.toFixed(2)),
     price_difference_pct: Number(diffPct.toFixed(2)),
@@ -61,6 +73,10 @@ function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparis
     sales_count_approx: comp.sales_count_approx ?? 0,
     listing_created_at: resolvedCreatedAt,
     created_at: comp.created_at,
+    listing_type: meta.listing_type ?? estFees.listing_type,
+    sale_fee_amount: meta.sale_fee_amount ?? estFees.sale_fee_amount,
+    sale_fee_pct: meta.sale_fee_pct ?? estFees.sale_fee_pct,
+    shipping_cost: meta.shipping_cost ?? estFees.shipping_cost,
   };
 }
 

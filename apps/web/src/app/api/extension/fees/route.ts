@@ -16,17 +16,17 @@ export async function OPTIONS() {
 }
 
 /**
- * Calcula o frete padrão do Mercado Envios (faixa até 300g) por faixa de preço
+ * Calcula o frete padrão do Mercado Envios (faixa até 300g com 50% desc. Líder/Verde) por faixa de preço
  */
 function estimateMlShippingByPrice(price: number): number {
   if (price < 19) return 5.65;
   if (price < 49) return 6.85;
   if (price < 79) return 10.25;
-  if (price < 100) return 12.95;
-  if (price < 120) return 14.95;
-  if (price < 150) return 16.95;
-  if (price < 200) return 19.05;
-  return 21.65;
+  if (price < 100) return 13.65;
+  if (price < 120) return 16.85;
+  if (price < 150) return 18.65;
+  if (price < 200) return 20.45;
+  return 22.45;
 }
 
 /**
@@ -58,16 +58,17 @@ function calculateFallbackFees(
     listingType === "gold_pro" ||
     listingType === "premium" ||
     /premium/i.test(listingType);
-  const pct = isPremium ? 16.5 : 11.5;
-  const saleFee = Number(((price * pct) / 100).toFixed(2));
-  const shippingCost = estimateMlShippingByPrice(price);
+  const pct = isPremium ? 17 : 12;
+  const fixedFee = price < 79 ? 6.0 : 0;
+  const saleFee = Number(((price * pct) / 100 + fixedFee).toFixed(2));
+  const shippingCost = price < 79 ? 0 : estimateMlShippingByPrice(price);
 
   return {
     listing_type_id: isPremium ? "gold_pro" : "gold_special",
     listing_type_label: isPremium ? "Premium" : "Clássico",
     sale_fee_amount: saleFee,
     sale_fee_pct: pct,
-    fixed_fee: 0,
+    fixed_fee: fixedFee,
     shipping_cost: shippingCost,
     shipping_source: "fallback_table",
     net_receivable: Number(Math.max(0, price - saleFee - shippingCost).toFixed(2)),
@@ -146,10 +147,11 @@ export async function GET(req: NextRequest) {
     if (!categoryId && (title || breadcrumb)) {
       try {
         const q = (title || breadcrumb).trim().slice(0, 100);
-        const ddRes = await fetch(
-          `https://api.mercadolibre.com/sites/MLB/domain_discovery/search?limit=1&q=${encodeURIComponent(q)}`,
-          { headers, cache: "no-store" }
-        );
+        const ddUrl = `https://api.mercadolibre.com/sites/MLB/domain_discovery/search?limit=1&q=${encodeURIComponent(q)}`;
+        let ddRes = await fetch(ddUrl, { headers, cache: "no-store" });
+        if (!ddRes.ok) {
+          ddRes = await fetch(ddUrl, { cache: "no-store" });
+        }
         if (ddRes.ok) {
           const ddData = await ddRes.json();
           if (Array.isArray(ddData) && ddData[0]?.category_id) {
@@ -167,6 +169,14 @@ export async function GET(req: NextRequest) {
     let shippingCost = fallback.shipping_cost;
     let shippingSource = fallback.shipping_source;
     let billableWeight: number | null = null;
+
+    const isExplicitlyHeavy =
+      /\b(kit\s+motor|motor\s+(?:deslizante|basculante|pivotante)|automatizador\s+completo|bateria\s+automotiva|pneu|roda\s+aro)\b/i.test(
+        title
+      ) &&
+      !/\b(placa|central|controle|sensor|pe[çc]a|engrenagem|pel[íi]cula|ppf|adesivo|capa|capinha|fita|filme)\b/i.test(
+        title
+      );
 
     // 3. Consulta tarifa oficial (/sites/MLB/listing_prices) e frete exato do item (?item_id=MLB...) em paralelo
     const lpUrl = `https://api.mercadolibre.com/sites/MLB/listing_prices?price=${price}${
@@ -203,24 +213,29 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 4. Verifica se o frete exato por item_id retornou com sucesso
+    // 4. Verifica se o frete exato por item_id retornou com sucesso (e se não usou peso inflado > 300g para item leve)
     let resolvedExactShipping = false;
     if (exactShipRes && exactShipRes.ok) {
       const shipData = await exactShipRes.json().catch(() => null);
       const listCost = shipData?.coverage?.all_country?.list_cost;
-      if (typeof listCost === "number" && listCost >= 0) {
+      const itemBillableWeight = shipData?.coverage?.all_country?.billable_weight ?? null;
+      if (
+        typeof listCost === "number" &&
+        listCost >= 0 &&
+        (isExplicitlyHeavy || !itemBillableWeight || itemBillableWeight <= 300)
+      ) {
         shippingCost = Number(listCost.toFixed(2));
-        billableWeight = shipData?.coverage?.all_country?.billable_weight ?? null;
+        billableWeight = itemBillableWeight;
         shippingSource = "ml_item_id";
         resolvedExactShipping = true;
       }
     }
 
-    // 5. Fallback por dimensões se item_id não for um anúncio direto (ex: ID de catálogo puro)
+    // 5. Fallback por dimensões se item_id não for um anúncio direto ou tiver peso de categoria inflado (> 300g)
     if (!resolvedExactShipping && sellerId) {
       try {
         let dims = "5x10x15,250";
-        if (categoryId) {
+        if (categoryId && isExplicitlyHeavy) {
           const catShipRes = await fetch(
             `https://api.mercadolibre.com/categories/${categoryId}/shipping_preferences`,
             { headers, cache: "no-store" }
@@ -229,14 +244,7 @@ export async function GET(req: NextRequest) {
             const spData = await catShipRes.json().catch(() => null);
             const d = spData?.dimensions;
             if (d && d.height && d.width && d.length && d.weight) {
-              const isExplicitlyHeavy =
-                /\b(kit\s+motor|motor\s+(?:deslizante|basculante|pivotante)|automatizador\s+completo)\b/i.test(
-                  title
-                ) && !/\b(placa|central|controle|sensor|pe[çc]a|engrenagem)\b/i.test(title);
-              // Evita usar pesos inflados de categorias genéricas (ex: 11.1kg de Motores quando o item é uma Placa/Central)
-              if (d.weight <= 1000 || isExplicitlyHeavy) {
-                dims = `${d.height}x${d.width}x${d.length},${d.weight}`;
-              }
+              dims = `${d.height}x${d.width}x${d.length},${d.weight}`;
             }
           }
         }
@@ -248,7 +256,7 @@ export async function GET(req: NextRequest) {
           const listCost = shipData?.coverage?.all_country?.list_cost;
           if (typeof listCost === "number" && listCost >= 0) {
             shippingCost = Number(listCost.toFixed(2));
-            billableWeight = shipData?.coverage?.all_country?.billable_weight ?? null;
+            billableWeight = shipData?.coverage?.all_country?.billable_weight ?? 250;
             shippingSource = "ml_dimensions";
           }
         }

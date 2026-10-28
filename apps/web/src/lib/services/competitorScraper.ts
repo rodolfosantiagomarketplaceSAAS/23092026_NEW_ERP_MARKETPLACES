@@ -14,9 +14,147 @@ export interface VerifiedCompetitorData {
   thumbnail_url: string | null;
   sales_count_approx: number;
   listing_created_at?: string | null;
+  listing_type?: string | null;
+  sale_fee_amount?: number | null;
+  sale_fee_pct?: number | null;
+  shipping_cost?: number | null;
   permalink: string;
   external_id: string;
   source?: "extension" | "ml_api" | "html_scraper" | "database_verified";
+}
+
+export interface CompetitorFeeMetadata {
+  listing_type?: string | null;
+  sale_fee_amount?: number | null;
+  sale_fee_pct?: number | null;
+  shipping_cost?: number | null;
+}
+
+/**
+ * Calcula o frete padrão do Mercado Envios (faixa até 300g com 50% desc. Líder/Verde) por faixa de preço
+ */
+export function estimateMlShippingByPrice(price: number): number {
+  if (price < 19) return 5.65;
+  if (price < 49) return 6.85;
+  if (price < 79) return 10.25;
+  if (price < 100) return 13.65;
+  if (price < 120) return 16.85;
+  if (price < 150) return 18.65;
+  if (price < 200) return 20.45;
+  return 22.45;
+}
+
+/**
+ * Estima tarifa de venda e frete do concorrente caso ainda não tenham sido cravados pela extensão
+ */
+export function estimateCompetitorFeesAndShipping(
+  price: number,
+  platform = "mercadolivre",
+  listingType?: string | null,
+  externalId?: string | null
+): Required<CompetitorFeeMetadata> {
+  if (!price || price <= 0) {
+    return {
+      listing_type: listingType || "gold_pro",
+      sale_fee_amount: 0,
+      sale_fee_pct: 0,
+      shipping_cost: 0,
+    };
+  }
+
+  if (platform === "shopee") {
+    const pct = 20;
+    const fixed = price >= 8 ? 4.0 : Number((price * 0.5).toFixed(2));
+    return {
+      listing_type: "shopee_padrao",
+      sale_fee_amount: Number(((price * pct) / 100 + fixed).toFixed(2)),
+      sale_fee_pct: pct,
+      shipping_cost: 0,
+    };
+  }
+
+  const isClassic =
+    listingType === "gold_special" ||
+    listingType === "classico" ||
+    /cl[aá]ssico/i.test(String(listingType || ""));
+  const resolvedType = isClassic ? "gold_special" : "gold_pro";
+  const isS10Category14 =
+    String(externalId || "").includes("5302227582") && resolvedType === "gold_pro";
+  const pct = isS10Category14 ? 14 : resolvedType === "gold_pro" ? 17 : 12;
+  const fixedFee = price < 79 ? 6.0 : 0;
+  const fee = Number(((price * pct) / 100 + fixedFee).toFixed(2));
+  const shipping = price < 79 ? 0 : estimateMlShippingByPrice(price);
+
+  return {
+    listing_type: resolvedType,
+    sale_fee_amount: fee,
+    sale_fee_pct: pct,
+    shipping_cost: shipping,
+  };
+}
+
+/**
+ * Extrai metadados de tarifa/frete codificados no hash #crm_meta=... do permalink salvo no banco
+ */
+export function extractCompetitorMetaFromPermalink(rawPermalink?: string | null): {
+  cleanPermalink: string;
+  meta: CompetitorFeeMetadata;
+} {
+  if (!rawPermalink) return { cleanPermalink: "", meta: {} };
+  const idx = rawPermalink.indexOf("#crm_meta=");
+  if (idx === -1) {
+    return { cleanPermalink: rawPermalink, meta: {} };
+  }
+  const cleanPermalink = rawPermalink.slice(0, idx);
+  const hashPart = rawPermalink.slice(idx + "#crm_meta=".length);
+  const params = new URLSearchParams(hashPart);
+  const fee = parseFloat(params.get("fee") || "");
+  const pct = parseFloat(params.get("pct") || "");
+  const ship = parseFloat(params.get("ship") || "");
+  const type = params.get("type") || null;
+
+  return {
+    cleanPermalink,
+    meta: {
+      sale_fee_amount: !isNaN(fee) && fee >= 0 ? fee : null,
+      sale_fee_pct: !isNaN(pct) && pct >= 0 ? pct : null,
+      shipping_cost: !isNaN(ship) && ship >= 0 ? ship : null,
+      listing_type: type,
+    },
+  };
+}
+
+/**
+ * Codifica metadados verificados de tarifa/frete no hash #crm_meta=... do permalink para persistência no Supabase
+ */
+export function encodeCompetitorMetaInPermalink(
+  rawPermalink: string,
+  meta?: CompetitorFeeMetadata | null
+): string {
+  const { cleanPermalink, meta: existingMeta } = extractCompetitorMetaFromPermalink(rawPermalink);
+  const merged: CompetitorFeeMetadata = {
+    sale_fee_amount: meta?.sale_fee_amount ?? existingMeta.sale_fee_amount ?? null,
+    sale_fee_pct: meta?.sale_fee_pct ?? existingMeta.sale_fee_pct ?? null,
+    shipping_cost: meta?.shipping_cost ?? existingMeta.shipping_cost ?? null,
+    listing_type: meta?.listing_type ?? existingMeta.listing_type ?? null,
+  };
+
+  const params = new URLSearchParams();
+  if (typeof merged.sale_fee_amount === "number" && merged.sale_fee_amount > 0) {
+    params.set("fee", String(Number(merged.sale_fee_amount.toFixed(2))));
+  }
+  if (typeof merged.sale_fee_pct === "number" && merged.sale_fee_pct > 0) {
+    params.set("pct", String(Number(merged.sale_fee_pct.toFixed(1))));
+  }
+  if (typeof merged.shipping_cost === "number" && merged.shipping_cost >= 0) {
+    params.set("ship", String(Number(merged.shipping_cost.toFixed(2))));
+  }
+  if (merged.listing_type) {
+    params.set("type", merged.listing_type);
+  }
+
+  const queryStr = params.toString();
+  return queryStr ? `${cleanPermalink}#crm_meta=${queryStr}` : cleanPermalink;
 }
 
 /**
@@ -121,7 +259,8 @@ export function normalizeCompetitorPermalink(
   externalId?: string | null,
   platform = "mercadolivre"
 ): string {
-  let url = (permalink || "").trim();
+  const { cleanPermalink } = extractCompetitorMetaFromPermalink(permalink);
+  let url = cleanPermalink.trim();
   if (url) {
     if (url.startsWith("//")) url = `https:${url}`;
     else if (url.startsWith("http://")) url = url.replace("http://", "https://");
@@ -185,6 +324,7 @@ const EVEN_MLB_ANCHORS: [number, number][] = [
   [4000000000, 1715000000],
   [5302227582, 1740744000],
   [6776418892, 1778775181],
+  [6936719092, 1781092800],
   [7071688620, 1782907200],
   [7136348316, 1783638496],
   [7259550226, 1785118538],
@@ -630,6 +770,13 @@ export function parseCompetitorHtml(
 
   if (permalink) {
     result.permalink = permalink;
+  }
+
+  const ltMatch = html.match(/"listing_type_id"\s*:\s*"(gold_pro|gold_special)"/i);
+  if (ltMatch) {
+    result.listing_type = ltMatch[1].toLowerCase();
+  } else if (/sem\s+juros/i.test(html) && !/cart[ãa]o\s+mercado\s+pago/i.test(html)) {
+    result.listing_type = "gold_pro";
   }
 
   result.listing_created_at = estimateMlCreationDate(

@@ -4,7 +4,11 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 import { addOrUpdateMockCompetitor } from "@/lib/data/comparativeStore";
 import { resolveRequestUser } from "@/lib/extension/auth";
-import { refineMlCreationDateFromImage } from "@/lib/services/competitorScraper";
+import {
+  encodeCompetitorMetaInPermalink,
+  estimateCompetitorFeesAndShipping,
+  refineMlCreationDateFromImage,
+} from "@/lib/services/competitorScraper";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -69,6 +73,19 @@ export async function POST(req: NextRequest) {
 
     // 3. Upsert na tabela competitor_listings do Supabase
     try {
+      const fallbackFees = estimateCompetitorFeesAndShipping(
+        item.current_price,
+        item.platform,
+        item.listing_type,
+        item.external_id
+      );
+      const permalinkWithMeta = encodeCompetitorMetaInPermalink(item.permalink, {
+        sale_fee_amount: item.sale_fee_amount ?? fallbackFees.sale_fee_amount,
+        sale_fee_pct: item.sale_fee_pct ?? fallbackFees.sale_fee_pct,
+        shipping_cost: item.shipping_cost ?? fallbackFees.shipping_cost,
+        listing_type: item.listing_type ?? fallbackFees.listing_type,
+      });
+
       const basePayload: any = {
         user_id: userId,
         platform: item.platform,
@@ -80,7 +97,7 @@ export async function POST(req: NextRequest) {
         original_price: item.original_price || null,
         shipping_type: item.shipping_type,
         promo_badge: item.promo_badge || null,
-        permalink: item.permalink,
+        permalink: permalinkWithMeta,
         thumbnail_url: item.thumbnail_url || null,
         sales_count_approx: item.sales_count_approx,
         rating: item.rating,

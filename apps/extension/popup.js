@@ -170,8 +170,11 @@ document.addEventListener("DOMContentLoaded", async () => {
           </div>
         `;
 
-        // Refina Tarifa e Frete junto à API Oficial do Mercado Livre via ERP
-        if (currentScrapedData.current_price > 0) {
+        // Refina Tarifa e Frete junto à API Oficial do Mercado Livre via ERP (apenas se não veio cravado do DOM)
+        if (
+          currentScrapedData.current_price > 0 &&
+          (!currentScrapedData.fee_from_dom || !currentScrapedData.shipping_from_dom)
+        ) {
           chrome.runtime.sendMessage(
             {
               action: "GET_COMPETITOR_FEES",
@@ -203,9 +206,8 @@ document.addEventListener("DOMContentLoaded", async () => {
                 }
               }
 
-              // Só atualiza o frete se não veio cravado do DOM ou se a API retornou o frete exato do item_id
-              const canUpdateShipping =
-                !currentScrapedData.shipping_from_dom || feeRes.shipping_source === "ml_item_id";
+              // Nunca sobrescreve o frete se ele já veio cravado do DOM da página
+              const canUpdateShipping = !currentScrapedData.shipping_from_dom;
               if (typeof feeRes.shipping_cost === "number" && canUpdateShipping) {
                 finalShipping = feeRes.shipping_cost;
                 currentScrapedData.shipping_cost = finalShipping;
@@ -377,6 +379,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       {
         action: "TRIGGER_CAPTURE_FROM_POPUP",
         my_listing_id: selectedListingId,
+        scraped_data: currentScrapedData || null,
       },
       (res) => {
         captureNowBtn.disabled = false;

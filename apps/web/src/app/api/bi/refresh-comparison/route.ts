@@ -10,7 +10,10 @@ import {
 import {
   cleanPromoBadge,
   cleanSellerName,
+  encodeCompetitorMetaInPermalink,
+  estimateCompetitorFeesAndShipping,
   estimateMlCreationDate,
+  extractCompetitorMetaFromPermalink,
   extractMlbId,
   extractMlbuId,
   fetchCompetitorViaMlApi,
@@ -200,6 +203,19 @@ export async function POST(req: NextRequest) {
             ? Number(verified_data.sales_count_approx)
             : undefined,
         listing_created_at: verified_data.listing_created_at || undefined,
+        listing_type: verified_data.listing_type || undefined,
+        sale_fee_amount:
+          typeof verified_data.sale_fee_amount === "number"
+            ? verified_data.sale_fee_amount
+            : undefined,
+        sale_fee_pct:
+          typeof verified_data.sale_fee_pct === "number"
+            ? verified_data.sale_fee_pct
+            : undefined,
+        shipping_cost:
+          typeof verified_data.shipping_cost === "number"
+            ? verified_data.shipping_cost
+            : undefined,
         permalink: verified_data.permalink || normalizedPermalink || undefined,
         external_id:
           verified_data.external_id || rawExternalId || mlbId || undefined,
@@ -325,10 +341,15 @@ export async function POST(req: NextRequest) {
       existingComp?.external_id ||
       `MLB${Date.now()}`;
 
+    const { cleanPermalink: existingCleanPermalink, meta: existingMeta } =
+      extractCompetitorMetaFromPermalink(existingComp?.permalink);
+
     const finalPermalink =
-      partialData.permalink ||
-      normalizedPermalink ||
-      existingComp?.permalink ||
+      normalizeCompetitorPermalink(
+        partialData.permalink || normalizedPermalink || existingCleanPermalink,
+        finalExternalId,
+        platform
+      ) ||
       `https://produto.mercadolivre.com.br/MLB-${finalExternalId.replace(/^MLB-?/i, "")}`;
 
     const finalCreatedAt =
@@ -337,6 +358,28 @@ export async function POST(req: NextRequest) {
       estimateMlCreationDate(finalExternalId, finalThumbnail) ||
       existingComp?.listing_created_at ||
       null;
+
+    const estFees = estimateCompetitorFeesAndShipping(
+      finalPrice,
+      platform,
+      partialData.listing_type || existingMeta.listing_type,
+      finalExternalId
+    );
+    const finalListingType =
+      partialData.listing_type || existingMeta.listing_type || estFees.listing_type;
+    const finalSaleFeeAmount =
+      partialData.sale_fee_amount ?? existingMeta.sale_fee_amount ?? estFees.sale_fee_amount;
+    const finalSaleFeePct =
+      partialData.sale_fee_pct ?? existingMeta.sale_fee_pct ?? estFees.sale_fee_pct;
+    const finalShippingCost =
+      partialData.shipping_cost ?? existingMeta.shipping_cost ?? estFees.shipping_cost;
+
+    const permalinkForDb = encodeCompetitorMetaInPermalink(finalPermalink, {
+      listing_type: finalListingType,
+      sale_fee_amount: finalSaleFeeAmount,
+      sale_fee_pct: finalSaleFeePct,
+      shipping_cost: finalShippingCost,
+    });
 
     const compVerified: VerifiedCompetitorData = {
       title: finalTitle,
@@ -349,6 +392,10 @@ export async function POST(req: NextRequest) {
       thumbnail_url: finalThumbnail,
       sales_count_approx: finalSalesCount,
       listing_created_at: finalCreatedAt,
+      listing_type: finalListingType,
+      sale_fee_amount: finalSaleFeeAmount,
+      sale_fee_pct: finalSaleFeePct,
+      shipping_cost: finalShippingCost,
       permalink: finalPermalink,
       external_id: finalExternalId,
       source: partialData.source || "database_verified",
@@ -367,7 +414,7 @@ export async function POST(req: NextRequest) {
         seller_reputation: compVerified.seller_reputation,
         shipping_type: compVerified.shipping_type,
         promo_badge: compVerified.promo_badge,
-        permalink: compVerified.permalink,
+        permalink: permalinkForDb,
         thumbnail_url: compVerified.thumbnail_url,
         sales_count_approx: compVerified.sales_count_approx,
         listing_created_at: compVerified.listing_created_at,

@@ -361,6 +361,25 @@ function parseHtmlMultilayer(html, permalink, externalId) {
 
   if (currentPrice <= 0) return null;
 
+  let listingType = "gold_special";
+  const ltMatch = html.match(/"listing_type_id"\s*:\s*"(gold_pro|gold_special)"/i);
+  if (ltMatch && ltMatch[1]) {
+    listingType = ltMatch[1].toLowerCase();
+  } else if (/sem\s+juros/i.test(html) && !/cart[ãa]o\s+mercado\s+pago/i.test(html)) {
+    listingType = "gold_pro";
+  }
+
+  const saleFeePct = listingType === "gold_pro" ? 17 : 12;
+  const fixedFee =
+    currentPrice < 12.5 ? currentPrice / 2 : currentPrice < 29 ? 6.25 : currentPrice < 50 ? 6.5 : currentPrice < 79 ? 6.75 : 0;
+  const saleFeeAmount = Number(((currentPrice * saleFeePct) / 100 + fixedFee).toFixed(2));
+  let shippingCost = 22.45;
+  if (currentPrice < 79) shippingCost = 0;
+  else if (currentPrice < 100) shippingCost = 13.65;
+  else if (currentPrice < 120) shippingCost = 16.85;
+  else if (currentPrice < 150) shippingCost = 18.65;
+  else if (currentPrice < 200) shippingCost = 20.45;
+
   return {
     title,
     current_price: currentPrice,
@@ -372,6 +391,10 @@ function parseHtmlMultilayer(html, permalink, externalId) {
     thumbnail_url: thumbnailUrl,
     sales_count_approx: salesCount,
     listing_created_at: listingCreatedAt,
+    listing_type: listingType,
+    sale_fee_amount: saleFeeAmount,
+    sale_fee_pct: saleFeePct,
+    shipping_cost: shippingCost,
     permalink,
     external_id: externalId,
   };
@@ -480,23 +503,36 @@ async function extractViaBackgroundTab(targetUrl, externalId) {
         }
 
         let listingCreatedAt = null;
+        let listingType = "gold_special";
         const scripts = document.querySelectorAll("script");
         for (const s of scripts) {
           const c = s.textContent || "";
-          const dm =
-            c.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
-            c.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
-            c.match(/"date_created"\s*:\s*"([^"]+)"/i);
-          if (dm && dm[1]) {
-            const d = new Date(dm[1]);
-            if (!isNaN(d.getTime())) {
-              listingCreatedAt = d.toISOString();
-              break;
+          const lt = c.match(/"listing_type_id"\s*:\s*"(gold_pro|gold_special)"/i);
+          if (lt && lt[1]) listingType = lt[1].toLowerCase();
+          if (!listingCreatedAt) {
+            const dm =
+              c.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
+              c.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
+              c.match(/"date_created"\s*:\s*"([^"]+)"/i);
+            if (dm && dm[1]) {
+              const d = new Date(dm[1]);
+              if (!isNaN(d.getTime())) {
+                listingCreatedAt = d.toISOString();
+              }
             }
           }
         }
+        const bodyText = document.body?.innerText || "";
+        if (listingType === "gold_special") {
+          const installEl =
+            document.querySelector(".ui-pdp-price__subtitles") ||
+            document.querySelector("#pricing_price_subtitle");
+          const installText = installEl?.innerText || "";
+          if (/sem\s+juros/i.test(installText) && !/cart[ãa]o\s+mercado\s+pago/i.test(installText)) {
+            listingType = "gold_pro";
+          }
+        }
         if (!listingCreatedAt) {
-          const bodyText = document.body?.innerText || "";
           const relMatch = bodyText.match(/Publicado:?\s*h[áa]\s*(\d+)\s*dias?/i);
           if (relMatch) {
             const days = parseInt(relMatch[1], 10);
@@ -512,6 +548,33 @@ async function extractViaBackgroundTab(targetUrl, externalId) {
           }
         }
 
+        let saleFeePct = listingType === "gold_pro" ? 17 : 12;
+        const fixedFee =
+          price > 0 && price < 12.5 ? price / 2 : price < 29 ? 6.25 : price < 50 ? 6.5 : price < 79 ? 6.75 : 0;
+        let saleFeeAmount = price > 0 ? Number(((price * saleFeePct) / 100 + fixedFee).toFixed(2)) : 0;
+        let shippingCost = 22.45;
+        if (price < 79) shippingCost = 0;
+        else if (price < 100) shippingCost = 13.65;
+        else if (price < 120) shippingCost = 16.85;
+        else if (price < 150) shippingCost = 18.65;
+        else if (price < 200) shippingCost = 20.45;
+
+        const domTarifaMatch = bodyText.match(/Tarifa:\s*R\$\s*([\d.,]+)/i);
+        const domFreteMatch = bodyText.match(/Frete:\s*R\$\s*([\d.,]+)/i);
+        if (domTarifaMatch) {
+          const parsedT = parseBrl(domTarifaMatch[1]);
+          if (parsedT > 0 && parsedT < price) {
+            saleFeeAmount = parsedT;
+            saleFeePct = Number(((parsedT / price) * 100).toFixed(1));
+          }
+        }
+        if (domFreteMatch) {
+          const parsedF = parseBrl(domFreteMatch[1]);
+          if (parsedF >= 0 && parsedF < price) {
+            shippingCost = parsedF;
+          }
+        }
+
         return {
           title,
           current_price: price,
@@ -521,6 +584,10 @@ async function extractViaBackgroundTab(targetUrl, externalId) {
           thumbnail_url: ogImg,
           sales_count_approx: salesCount,
           listing_created_at: listingCreatedAt,
+          listing_type: listingType,
+          sale_fee_amount: saleFeeAmount,
+          sale_fee_pct: saleFeePct,
+          shipping_cost: shippingCost,
         };
       },
     });
@@ -563,24 +630,40 @@ async function handleInspectCompetitorLink(payload) {
   // 0. Verifica se o anúncio já está aberto em alguma aba ativa do navegador para obter os dados ao vivo do content_script
   try {
     const cleanExtDigits = String(external_id || "").replace(/^MLB-?/i, "");
+    const cleanPermalinkBase = (permalink || "").split(/[?#]/)[0];
     const openTabs = await chrome.tabs.query({});
-    const matchingTab = openTabs.find((t) => {
+    const candidateTabs = openTabs.filter((t) => {
       if (!t.url) return false;
       if (cleanExtDigits && t.url.includes(cleanExtDigits)) return true;
-      if (permalink && t.url.split("?")[0] === permalink.split("?")[0]) return true;
+      if (cleanPermalinkBase && t.url.split(/[?#]/)[0] === cleanPermalinkBase) return true;
       return false;
     });
-    if (matchingTab && matchingTab.id) {
+
+    // Se não achou pela URL direta (ex: link de catálogo /up/MLBU...), consulta abas abertas do Mercado Livre
+    const mlTabsToQuery =
+      candidateTabs.length > 0
+        ? candidateTabs
+        : openTabs.filter((t) => t.url && t.url.includes("mercadolivre.com.br"));
+
+    for (const tab of mlTabsToQuery) {
+      if (!tab.id) continue;
       const tabRes = await new Promise((resolve) => {
-        const timer = setTimeout(() => resolve(null), 2000);
-        chrome.tabs.sendMessage(matchingTab.id, { action: "GET_PAGE_DATA" }, (res) => {
+        const timer = setTimeout(() => resolve(null), 1500);
+        chrome.tabs.sendMessage(tab.id, { action: "GET_PAGE_DATA" }, (res) => {
           clearTimeout(timer);
           if (chrome.runtime.lastError || !res || !res.data) return resolve(null);
           resolve(res.data);
         });
       });
       if (tabRes && tabRes.current_price > 0) {
-        extracted = tabRes;
+        const tabExtDigits = String(tabRes.external_id || "").replace(/^MLB-?/i, "");
+        if (
+          candidateTabs.includes(tab) ||
+          (cleanExtDigits && tabExtDigits === cleanExtDigits)
+        ) {
+          extracted = tabRes;
+          break;
+        }
       }
     }
   } catch {}

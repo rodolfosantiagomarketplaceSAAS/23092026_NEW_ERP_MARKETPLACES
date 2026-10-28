@@ -124,6 +124,10 @@ export interface CompetitorComparisonItem {
   sales_count_approx?: number;
   listing_created_at?: string | null;
   created_at?: string;
+  listing_type?: string | null;
+  sale_fee_amount?: number | null;
+  sale_fee_pct?: number | null;
+  shipping_cost?: number | null;
 }
 
 export interface ComparativeListingGroup {
@@ -170,6 +174,10 @@ export const competitorSyncSchema = z.object({
   sales_count_approx: z.number().int().nonnegative().optional().default(0),
   rating: z.number().min(0).max(5).optional().default(5.0),
   listing_created_at: z.string().nullable().optional(),
+  listing_type: z.string().nullable().optional(),
+  sale_fee_amount: z.number().nonnegative().nullable().optional(),
+  sale_fee_pct: z.number().nonnegative().nullable().optional(),
+  shipping_cost: z.number().nonnegative().nullable().optional(),
   my_listing_id: z.string().nullable().optional(),
 });
 

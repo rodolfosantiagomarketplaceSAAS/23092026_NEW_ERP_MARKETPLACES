@@ -238,6 +238,7 @@
     [4000000000, 1715000000],
     [5302227582, 1740744000],
     [6776418892, 1778775181],
+    [6936719092, 1781092800],
     [7071688620, 1782907200],
     [7136348316, 1783638496],
     [7259550226, 1785118538],
@@ -783,19 +784,28 @@
       .join(" > ");
 
     const isPremium = listingType === "gold_pro";
-    let saleFeePct = isPremium ? 16.5 : 11.5;
-    let saleFeeAmount = currentPrice > 0 ? Number(((currentPrice * saleFeePct) / 100).toFixed(2)) : 0;
+    let saleFeePct = isPremium ? 17 : 12;
+    const fixedFee =
+      currentPrice > 0 && currentPrice < 12.5
+        ? currentPrice / 2
+        : currentPrice < 29
+        ? 6.25
+        : currentPrice < 50
+        ? 6.5
+        : currentPrice < 79
+        ? 6.75
+        : 0;
+    let saleFeeAmount =
+      currentPrice > 0 ? Number(((currentPrice * saleFeePct) / 100 + fixedFee).toFixed(2)) : 0;
 
     let shippingCost = 0;
     if (currentPrice > 0) {
-      if (currentPrice < 19) shippingCost = 5.65;
-      else if (currentPrice < 49) shippingCost = 6.85;
-      else if (currentPrice < 79) shippingCost = 10.25;
-      else if (currentPrice < 100) shippingCost = 12.95;
-      else if (currentPrice < 120) shippingCost = 14.95;
-      else if (currentPrice < 150) shippingCost = 16.95;
-      else if (currentPrice < 200) shippingCost = 19.05;
-      else shippingCost = 21.65;
+      if (currentPrice < 79) shippingCost = 0;
+      else if (currentPrice < 100) shippingCost = 13.65;
+      else if (currentPrice < 120) shippingCost = 16.85;
+      else if (currentPrice < 150) shippingCost = 18.65;
+      else if (currentPrice < 200) shippingCost = 20.45;
+      else shippingCost = 22.45;
     }
 
     // Identifica item_id real mesmo em páginas de catálogo (/p/MLB...)
@@ -1056,7 +1066,7 @@
   /**
    * Dispara a captura para o Service Worker
    */
-  async function triggerCapture(myListingId = null) {
+  async function triggerCapture(myListingId = null, popupScrapedData = null) {
     let data = extractProductData();
     if (!data || !data.current_price) {
       showToast(
@@ -1067,6 +1077,24 @@
     }
 
     data = await refineMlCreationDateAsync(data);
+
+    if (popupScrapedData && typeof popupScrapedData === "object") {
+      if (typeof popupScrapedData.sale_fee_amount === "number" && popupScrapedData.sale_fee_amount > 0) {
+        data.sale_fee_amount = popupScrapedData.sale_fee_amount;
+      }
+      if (typeof popupScrapedData.sale_fee_pct === "number" && popupScrapedData.sale_fee_pct > 0) {
+        data.sale_fee_pct = popupScrapedData.sale_fee_pct;
+      }
+      if (typeof popupScrapedData.shipping_cost === "number" && popupScrapedData.shipping_cost >= 0) {
+        data.shipping_cost = popupScrapedData.shipping_cost;
+      }
+      if (popupScrapedData.listing_type) {
+        data.listing_type = popupScrapedData.listing_type;
+      }
+      if (popupScrapedData.listing_created_at) {
+        data.listing_created_at = popupScrapedData.listing_created_at;
+      }
+    }
 
     // Se não foi passado diretamente, verifica no storage se há anúncio selecionado
     if (!myListingId && (chrome?.storage?.local || chrome?.storage?.sync)) {
@@ -1828,7 +1856,7 @@
     }
 
     if (request.action === "TRIGGER_CAPTURE_FROM_POPUP") {
-      triggerCapture(request.my_listing_id)
+      triggerCapture(request.my_listing_id, request.scraped_data || null)
         .then((result) => {
           sendResponse(result || { success: true });
         })
