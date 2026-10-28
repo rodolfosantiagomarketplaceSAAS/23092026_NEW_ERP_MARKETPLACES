@@ -33,18 +33,21 @@ function formatDate(dateString?: string | null) {
   try {
     const d = new Date(dateString);
     if (isNaN(d.getTime())) return null;
-    return d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    const dateStr = d.toLocaleDateString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric" });
+    const diffDays = Math.max(0, Math.floor((Date.now() - d.getTime()) / 86400000));
+    const ageLabel = diffDays === 0 ? "hoje" : diffDays === 1 ? "há 1 dia" : `há ${diffDays} dias`;
+    return `${dateStr} • ${ageLabel}`;
   } catch {
     return null;
   }
 }
 
 function formatSales(sales?: number | null) {
-  if (sales === undefined || sales === null || sales < 0) return null;
-  if (sales >= 1000) {
-    return `+${(sales / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil vendas`;
+  const count = sales === undefined || sales === null || sales < 0 ? 0 : sales;
+  if (count >= 1000) {
+    return `+${(count / 1000).toLocaleString("pt-BR", { maximumFractionDigits: 1 })} mil vendas`;
   }
-  return `${sales.toLocaleString("pt-BR")} venda${sales === 1 ? "" : "s"}`;
+  return `${count.toLocaleString("pt-BR")} venda${count === 1 ? "" : "s"}`;
 }
 
 interface ComparativeTableProps {
@@ -483,23 +486,29 @@ export function ComparativeTable({
                               <span className="font-mono text-slate-400 text-[10px]">ID: {group.my_listing.external_id}</span>
                             </div>
 
-                            {(formatDate(group.my_listing.listing_created_at || group.my_listing.created_at) ||
-                              (group.my_listing.sales_count_approx !== undefined && group.my_listing.sales_count_approx > 0)) && (
-                              <div className="flex items-center gap-1 mt-1 flex-wrap">
-                                {formatDate(group.my_listing.listing_created_at || group.my_listing.created_at) && (
-                                  <span className="inline-flex items-center gap-0.5 text-slate-500 bg-slate-100 px-1 py-0.2 rounded text-[9.5px]" title="Data de criação do anúncio">
-                                    <Calendar className="w-2.5 h-2.5 text-slate-400" />
-                                    {formatDate(group.my_listing.listing_created_at || group.my_listing.created_at)}
-                                  </span>
-                                )}
-                                {group.my_listing.sales_count_approx !== undefined && group.my_listing.sales_count_approx > 0 && (
-                                  <span className="inline-flex items-center gap-0.5 text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 text-[9.5px] font-semibold" title="Vendas estimadas">
-                                    <ShoppingBag className="w-2.5 h-2.5 text-emerald-600" />
-                                    {formatSales(group.my_listing.sales_count_approx)}
-                                  </span>
-                                )}
-                              </div>
-                            )}
+                            <div className="flex items-center gap-1 mt-1 flex-wrap">
+                              {formatDate(group.my_listing.listing_created_at || group.my_listing.created_at) && (
+                                <span className="inline-flex items-center gap-0.5 text-slate-600 bg-slate-100 border border-slate-200 px-1.5 py-0.2 rounded text-[9.5px] font-medium" title="Data de criação e idade do anúncio">
+                                  <Calendar className="w-2.5 h-2.5 text-slate-400" />
+                                  {formatDate(group.my_listing.listing_created_at || group.my_listing.created_at)}
+                                </span>
+                              )}
+                              <span
+                                className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded border text-[9.5px] font-semibold ${
+                                  (group.my_listing.sales_count_approx ?? 0) > 0
+                                    ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                                    : "text-slate-500 bg-slate-50 border-slate-200"
+                                }`}
+                                title="Vendas estimadas"
+                              >
+                                <ShoppingBag
+                                  className={`w-2.5 h-2.5 ${
+                                    (group.my_listing.sales_count_approx ?? 0) > 0 ? "text-emerald-600" : "text-slate-400"
+                                  }`}
+                                />
+                                {formatSales(group.my_listing.sales_count_approx)}
+                              </span>
+                            </div>
                           </div>
                         </div>
                       </td>
@@ -589,24 +598,30 @@ export function ComparativeTable({
                                 <span className="font-mono text-slate-400 text-[10px]">ID: {topComp.external_id}</span>
                               </div>
 
-                              {/* Data de Criação e Vendas Estimadas */}
-                              {(formatDate(topComp.listing_created_at || topComp.created_at) ||
-                                (topComp.sales_count_approx !== undefined && topComp.sales_count_approx > 0)) && (
-                                <div className="flex items-center gap-1 mt-1 flex-wrap">
-                                  {formatDate(topComp.listing_created_at || topComp.created_at) && (
-                                    <span className="inline-flex items-center gap-0.5 text-slate-500 bg-white/90 border border-slate-200 px-1 py-0.2 rounded text-[9.5px]" title="Data de criação do concorrente">
-                                      <Calendar className="w-2.5 h-2.5 text-slate-400" />
-                                      {formatDate(topComp.listing_created_at || topComp.created_at)}
-                                    </span>
-                                  )}
-                                  {topComp.sales_count_approx !== undefined && topComp.sales_count_approx > 0 && (
-                                    <span className="inline-flex items-center gap-0.5 text-emerald-700 bg-emerald-50 px-1 py-0.2 rounded border border-emerald-200 text-[9.5px] font-semibold" title="Vendas estimadas do concorrente">
-                                      <ShoppingBag className="w-2.5 h-2.5 text-emerald-600" />
-                                      {formatSales(topComp.sales_count_approx)}
-                                    </span>
-                                  )}
-                                </div>
-                              )}
+                              {/* Data de Criação, Idade em Dias e Vendas Estimadas */}
+                              <div className="flex items-center gap-1 mt-1 flex-wrap">
+                                {formatDate(topComp.listing_created_at || topComp.created_at) && (
+                                  <span className="inline-flex items-center gap-0.5 text-slate-600 bg-white/90 border border-slate-200 px-1.5 py-0.2 rounded text-[9.5px] font-medium" title="Data de criação e idade do anúncio concorrente">
+                                    <Calendar className="w-2.5 h-2.5 text-slate-400" />
+                                    {formatDate(topComp.listing_created_at || topComp.created_at)}
+                                  </span>
+                                )}
+                                <span
+                                  className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded border text-[9.5px] font-semibold ${
+                                    (topComp.sales_count_approx ?? 0) > 0
+                                      ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                                      : "text-slate-500 bg-white/90 border-slate-200"
+                                  }`}
+                                  title="Vendas estimadas do concorrente"
+                                >
+                                  <ShoppingBag
+                                    className={`w-2.5 h-2.5 ${
+                                      (topComp.sales_count_approx ?? 0) > 0 ? "text-emerald-600" : "text-slate-400"
+                                    }`}
+                                  />
+                                  {formatSales(topComp.sales_count_approx)}
+                                </span>
+                              </div>
 
                               {/* Botão de Atualizar Dados ao lado do comparativo */}
                               <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
@@ -853,6 +868,31 @@ export function ComparativeTable({
                                     <span className="font-mono text-slate-400 text-[10px]">ID: {comp.external_id}</span>
                                   </div>
 
+                                  {/* Data de Criação, Idade em Dias e Vendas Estimadas da Sublinha */}
+                                  <div className="flex items-center gap-1 mt-1 flex-wrap">
+                                    {formatDate(comp.listing_created_at || comp.created_at) && (
+                                      <span className="inline-flex items-center gap-0.5 text-slate-600 bg-white/90 border border-slate-200 px-1.5 py-0.2 rounded text-[9.5px] font-medium" title="Data de criação e idade do anúncio concorrente">
+                                        <Calendar className="w-2.5 h-2.5 text-slate-400" />
+                                        {formatDate(comp.listing_created_at || comp.created_at)}
+                                      </span>
+                                    )}
+                                    <span
+                                      className={`inline-flex items-center gap-0.5 px-1.5 py-0.2 rounded border text-[9.5px] font-semibold ${
+                                        (comp.sales_count_approx ?? 0) > 0
+                                          ? "text-emerald-700 bg-emerald-50 border-emerald-200"
+                                          : "text-slate-500 bg-white/90 border-slate-200"
+                                      }`}
+                                      title="Vendas estimadas do concorrente"
+                                    >
+                                      <ShoppingBag
+                                        className={`w-2.5 h-2.5 ${
+                                          (comp.sales_count_approx ?? 0) > 0 ? "text-emerald-600" : "text-slate-400"
+                                        }`}
+                                      />
+                                      {formatSales(comp.sales_count_approx)}
+                                    </span>
+                                  </div>
+
                                   {/* Botão de Atualizar Dados da Sublinha */}
                                   <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                                     <button
@@ -908,6 +948,11 @@ export function ComparativeTable({
                               <div className="flex flex-col gap-0.5 items-start">
                                 {renderShippingBadge(comp.shipping_type)}
                                 {renderReputationBadge(comp.seller_reputation)}
+                                {comp.promo_badge && (
+                                  <span className="px-1 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200 truncate max-w-[80px]">
+                                    {comp.promo_badge}
+                                  </span>
+                                )}
                               </div>
                             </td>
 
