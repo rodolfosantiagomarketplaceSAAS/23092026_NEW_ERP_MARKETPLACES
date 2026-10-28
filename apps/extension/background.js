@@ -544,6 +544,7 @@ async function handleGetCompetitorFees(req) {
   const config = await getStoredConfig();
   const params = new URLSearchParams();
   if (req.platform) params.set("platform", req.platform);
+  if (req.item_id) params.set("item_id", req.item_id);
   if (req.price) params.set("price", String(req.price));
   if (req.listing_type) params.set("listing_type", req.listing_type);
   if (req.category_id) params.set("category_id", req.category_id);

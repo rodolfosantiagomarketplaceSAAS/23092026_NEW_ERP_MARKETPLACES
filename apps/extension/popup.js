@@ -176,6 +176,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             {
               action: "GET_COMPETITOR_FEES",
               platform: currentDetectedPlatform,
+              item_id: currentScrapedData.resolved_item_id || currentScrapedData.external_id,
               price: currentScrapedData.current_price,
               listing_type: currentScrapedData.listing_type,
               category_id: currentScrapedData.category_id,
@@ -188,17 +189,38 @@ document.addEventListener("DOMContentLoaded", async () => {
               const shipEl = document.getElementById("extShippingCostVal");
               const netEl = document.getElementById("extNetVal");
 
-              if (feeEl && typeof feeRes.sale_fee_amount === "number") {
-                feeEl.innerText = `${formatMoney(feeRes.sale_fee_amount)} (${feeRes.sale_fee_pct}% • ${
-                  feeRes.listing_type_label || "Clássico"
-                })`;
+              let finalFee = currentScrapedData.sale_fee_amount || 0;
+              let finalShipping = currentScrapedData.shipping_cost || 0;
+
+              if (typeof feeRes.sale_fee_amount === "number" && !currentScrapedData.fee_from_dom) {
+                finalFee = feeRes.sale_fee_amount;
+                currentScrapedData.sale_fee_amount = finalFee;
+                currentScrapedData.sale_fee_pct = feeRes.sale_fee_pct;
+                if (feeEl) {
+                  feeEl.innerText = `${formatMoney(finalFee)} (${feeRes.sale_fee_pct}% • ${
+                    feeRes.listing_type_label || "Clássico"
+                  })`;
+                }
               }
-              if (shipEl && typeof feeRes.shipping_cost === "number") {
-                shipEl.innerText =
-                  feeRes.shipping_cost > 0 ? formatMoney(feeRes.shipping_cost) : "R$ 0,00 (Comprador / Programa)";
+
+              // Só atualiza o frete se não veio cravado do DOM ou se a API retornou o frete exato do item_id
+              const canUpdateShipping =
+                !currentScrapedData.shipping_from_dom || feeRes.shipping_source === "ml_item_id";
+              if (typeof feeRes.shipping_cost === "number" && canUpdateShipping) {
+                finalShipping = feeRes.shipping_cost;
+                currentScrapedData.shipping_cost = finalShipping;
+                if (shipEl) {
+                  shipEl.innerText =
+                    finalShipping > 0 ? formatMoney(finalShipping) : "R$ 0,00 (Comprador / Programa)";
+                }
               }
-              if (netEl && typeof feeRes.net_receivable === "number") {
-                netEl.innerText = formatMoney(feeRes.net_receivable);
+
+              const finalNet = Number(
+                Math.max(0, (currentScrapedData.current_price || 0) - finalFee - finalShipping).toFixed(2)
+              );
+              currentScrapedData.net_receivable = finalNet;
+              if (netEl) {
+                netEl.innerText = formatMoney(finalNet);
               }
             }
           );

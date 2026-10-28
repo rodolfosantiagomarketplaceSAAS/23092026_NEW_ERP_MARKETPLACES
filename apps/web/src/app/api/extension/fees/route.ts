@@ -16,6 +16,20 @@ export async function OPTIONS() {
 }
 
 /**
+ * Calcula o frete padrão do Mercado Envios (faixa até 300g) por faixa de preço
+ */
+function estimateMlShippingByPrice(price: number): number {
+  if (price < 19) return 5.65;
+  if (price < 49) return 6.85;
+  if (price < 79) return 10.25;
+  if (price < 100) return 12.95;
+  if (price < 120) return 14.95;
+  if (price < 150) return 16.95;
+  if (price < 200) return 19.05;
+  return 21.65;
+}
+
+/**
  * Calcula tarifa e frete de fallback quando a API do ML não estiver acessível
  */
 function calculateFallbackFees(
@@ -35,6 +49,7 @@ function calculateFallbackFees(
       sale_fee_pct: pct,
       fixed_fee: fixedFee,
       shipping_cost: shippingCost,
+      shipping_source: "shopee_table",
       net_receivable: Number(Math.max(0, price - saleFee - shippingCost).toFixed(2)),
     };
   }
@@ -45,17 +60,7 @@ function calculateFallbackFees(
     /premium/i.test(listingType);
   const pct = isPremium ? 16.5 : 11.5;
   const saleFee = Number(((price * pct) / 100).toFixed(2));
-
-  let shippingCost = 19.85;
-  if (price < 19) {
-    shippingCost = 6.25;
-  } else if (price < 49) {
-    shippingCost = 6.5;
-  } else if (price < 79) {
-    shippingCost = 10.25;
-  } else {
-    shippingCost = 19.85;
-  }
+  const shippingCost = estimateMlShippingByPrice(price);
 
   return {
     listing_type_id: isPremium ? "gold_pro" : "gold_special",
@@ -64,6 +69,7 @@ function calculateFallbackFees(
     sale_fee_pct: pct,
     fixed_fee: 0,
     shipping_cost: shippingCost,
+    shipping_source: "fallback_table",
     net_receivable: Number(Math.max(0, price - saleFee - shippingCost).toFixed(2)),
   };
 }
@@ -75,6 +81,7 @@ export async function GET(req: NextRequest) {
     const price = parseFloat(searchParams.get("price") || "0");
     const rawListingType = searchParams.get("listing_type") || "gold_special";
     const rawCategoryId = searchParams.get("category_id") || "";
+    const rawItemId = searchParams.get("item_id") || "";
     const breadcrumb = searchParams.get("breadcrumb") || "";
     const title = searchParams.get("title") || "";
 
@@ -115,6 +122,10 @@ export async function GET(req: NextRequest) {
       Accept: "application/json",
     };
 
+    // Normaliza item_id (ex: MLB-1263554412 -> MLB1263554412)
+    const itemMatch = rawItemId.match(/MLB-?(\d+)/i);
+    const normalizedItemId = itemMatch ? `MLB${itemMatch[1]}` : "";
+
     // 1. Resolve seller_id para consulta de frete oficial (shipping_options/free)
     let sellerId: string | null = null;
     try {
@@ -130,11 +141,11 @@ export async function GET(req: NextRequest) {
       sellerId = row?.seller_id ? String(row.seller_id) : null;
     } catch {}
 
-    // 2. Resolve category_id (direto ou via domain_discovery usando breadcrumb + título)
+    // 2. Resolve category_id (direto ou via domain_discovery usando título/breadcrumb)
     let categoryId = /^MLB\d+$/.test(rawCategoryId.trim()) ? rawCategoryId.trim() : "";
-    if (!categoryId && (breadcrumb || title)) {
+    if (!categoryId && (title || breadcrumb)) {
       try {
-        const q = `${breadcrumb} ${title}`.trim().slice(0, 100);
+        const q = (title || breadcrumb).trim().slice(0, 100);
         const ddRes = await fetch(
           `https://api.mercadolibre.com/sites/MLB/domain_discovery/search?limit=1&q=${encodeURIComponent(q)}`,
           { headers, cache: "no-store" }
@@ -154,20 +165,25 @@ export async function GET(req: NextRequest) {
     let fixedFee = fallback.fixed_fee;
     let listingTypeLabel = fallback.listing_type_label;
     let shippingCost = fallback.shipping_cost;
+    let shippingSource = fallback.shipping_source;
+    let billableWeight: number | null = null;
 
-    // 3. Consulta tarifa oficial (/sites/MLB/listing_prices) e dimensões da categoria em paralelo
+    // 3. Consulta tarifa oficial (/sites/MLB/listing_prices) e frete exato do item (?item_id=MLB...) em paralelo
     const lpUrl = `https://api.mercadolibre.com/sites/MLB/listing_prices?price=${price}${
       categoryId ? `&category_id=${categoryId}` : ""
     }`;
 
-    const [lpRes, catShipRes] = await Promise.all([
+    const exactItemShipPromise =
+      sellerId && normalizedItemId
+        ? fetch(
+            `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free?item_id=${normalizedItemId}`,
+            { headers, cache: "no-store" }
+          ).catch(() => null)
+        : Promise.resolve(null);
+
+    const [lpRes, exactShipRes] = await Promise.all([
       fetch(lpUrl, { headers, cache: "no-store" }).catch(() => null),
-      categoryId
-        ? fetch(`https://api.mercadolibre.com/categories/${categoryId}/shipping_preferences`, {
-            headers,
-            cache: "no-store",
-          }).catch(() => null)
-        : Promise.resolve(null),
+      exactItemShipPromise,
     ]);
 
     if (lpRes && lpRes.ok) {
@@ -187,20 +203,44 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // 4. Consulta custo oficial de envio (Mercado Envios / shipping_options/free)
-    let dims = "10x25x20,500";
-    if (catShipRes && catShipRes.ok) {
-      const spData = await catShipRes.json().catch(() => null);
-      if (spData?.dimensions) {
-        const d = spData.dimensions;
-        if (d.height && d.width && d.length && d.weight) {
-          dims = `${d.height}x${d.width}x${d.length},${d.weight}`;
-        }
+    // 4. Verifica se o frete exato por item_id retornou com sucesso
+    let resolvedExactShipping = false;
+    if (exactShipRes && exactShipRes.ok) {
+      const shipData = await exactShipRes.json().catch(() => null);
+      const listCost = shipData?.coverage?.all_country?.list_cost;
+      if (typeof listCost === "number" && listCost >= 0) {
+        shippingCost = Number(listCost.toFixed(2));
+        billableWeight = shipData?.coverage?.all_country?.billable_weight ?? null;
+        shippingSource = "ml_item_id";
+        resolvedExactShipping = true;
       }
     }
 
-    if (sellerId) {
+    // 5. Fallback por dimensões se item_id não for um anúncio direto (ex: ID de catálogo puro)
+    if (!resolvedExactShipping && sellerId) {
       try {
+        let dims = "5x10x15,250";
+        if (categoryId) {
+          const catShipRes = await fetch(
+            `https://api.mercadolibre.com/categories/${categoryId}/shipping_preferences`,
+            { headers, cache: "no-store" }
+          ).catch(() => null);
+          if (catShipRes && catShipRes.ok) {
+            const spData = await catShipRes.json().catch(() => null);
+            const d = spData?.dimensions;
+            if (d && d.height && d.width && d.length && d.weight) {
+              const isExplicitlyHeavy =
+                /\b(kit\s+motor|motor\s+(?:deslizante|basculante|pivotante)|automatizador\s+completo)\b/i.test(
+                  title
+                ) && !/\b(placa|central|controle|sensor|pe[çc]a|engrenagem)\b/i.test(title);
+              // Evita usar pesos inflados de categorias genéricas (ex: 11.1kg de Motores quando o item é uma Placa/Central)
+              if (d.weight <= 1000 || isExplicitlyHeavy) {
+                dims = `${d.height}x${d.width}x${d.length},${d.weight}`;
+              }
+            }
+          }
+        }
+
         const freeShipUrl = `https://api.mercadolibre.com/users/${sellerId}/shipping_options/free?item_price=${price}&listing_type_id=${targetListingTypeId}&mode=me2&condition=new&logistic_type=drop_off&dimensions=${dims}`;
         const shipRes = await fetch(freeShipUrl, { headers, cache: "no-store" });
         if (shipRes.ok) {
@@ -208,6 +248,8 @@ export async function GET(req: NextRequest) {
           const listCost = shipData?.coverage?.all_country?.list_cost;
           if (typeof listCost === "number" && listCost >= 0) {
             shippingCost = Number(listCost.toFixed(2));
+            billableWeight = shipData?.coverage?.all_country?.billable_weight ?? null;
+            shippingSource = "ml_dimensions";
           }
         }
       } catch {}
@@ -219,6 +261,7 @@ export async function GET(req: NextRequest) {
       {
         success: true,
         platform: "mercadolivre",
+        item_id: normalizedItemId || null,
         category_id: categoryId || null,
         listing_type_id: targetListingTypeId,
         listing_type_label: listingTypeLabel,
@@ -226,6 +269,8 @@ export async function GET(req: NextRequest) {
         sale_fee_pct: saleFeePct,
         fixed_fee: fixedFee,
         shipping_cost: shippingCost,
+        billable_weight: billableWeight,
+        shipping_source: shippingSource,
         net_receivable: netReceivable,
         source: "ml_official_api",
       },
@@ -238,4 +283,3 @@ export async function GET(req: NextRequest) {
     );
   }
 }
-

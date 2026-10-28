@@ -63,10 +63,14 @@ function estimateCompetitorFees(price: number, platform = "mercadolivre") {
   }
   const pct = 11.5;
   const fee = Number(((price * pct) / 100).toFixed(2));
-  let shipping = 19.85;
-  if (price < 19) shipping = 6.25;
-  else if (price < 49) shipping = 6.5;
+  let shipping = 21.65;
+  if (price < 19) shipping = 5.65;
+  else if (price < 49) shipping = 6.85;
   else if (price < 79) shipping = 10.25;
+  else if (price < 100) shipping = 12.95;
+  else if (price < 120) shipping = 14.95;
+  else if (price < 150) shipping = 16.95;
+  else if (price < 200) shipping = 19.05;
   return { fee, pct, shipping };
 }
 

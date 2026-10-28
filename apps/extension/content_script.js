@@ -780,13 +780,29 @@
 
     let shippingCost = 0;
     if (currentPrice > 0) {
-      if (currentPrice < 19) shippingCost = 6.25;
-      else if (currentPrice < 49) shippingCost = 6.5;
+      if (currentPrice < 19) shippingCost = 5.65;
+      else if (currentPrice < 49) shippingCost = 6.85;
       else if (currentPrice < 79) shippingCost = 10.25;
-      else shippingCost = 19.85;
+      else if (currentPrice < 100) shippingCost = 12.95;
+      else if (currentPrice < 120) shippingCost = 14.95;
+      else if (currentPrice < 150) shippingCost = 16.95;
+      else if (currentPrice < 200) shippingCost = 19.05;
+      else shippingCost = 21.65;
+    }
+
+    // Identifica item_id real mesmo em páginas de catálogo (/p/MLB...)
+    let resolvedItemId = externalId;
+    const urlItemMatch =
+      window.location.href.match(/item_id[:=](MLB-?\d+)/i) ||
+      window.location.href.match(/[?&]wid=(MLB-?\d+)/i) ||
+      scriptsText.match(/"item_id"\s*:\s*"(MLB\d+)"/i);
+    if (urlItemMatch && urlItemMatch[1]) {
+      resolvedItemId = urlItemMatch[1].replace("-", "").toUpperCase();
     }
 
     // Se houver informação explícita de Tarifa/Frete já renderizada no DOM, aproveita os valores exatos
+    let feeFromDom = false;
+    let shippingFromDom = false;
     const pageBodyText = document.body?.innerText || "";
     const domTarifaMatch = pageBodyText.match(/Tarifa:\s*R\$\s*([\d.,]+)/i);
     const domFreteMatch = pageBodyText.match(/Frete:\s*R\$\s*([\d.,]+)/i);
@@ -795,12 +811,14 @@
       if (parsedT > 0 && parsedT < currentPrice) {
         saleFeeAmount = parsedT;
         saleFeePct = Number(((saleFeeAmount / currentPrice) * 100).toFixed(1));
+        feeFromDom = true;
       }
     }
     if (domFreteMatch) {
       const parsedF = parseBrlCurrency(domFreteMatch[1]);
       if (parsedF > 0 && parsedF < currentPrice) {
         shippingCost = parsedF;
+        shippingFromDom = true;
       }
     }
 
@@ -810,6 +828,7 @@
     return {
       platform: "mercadolivre",
       external_id: externalId,
+      resolved_item_id: resolvedItemId,
       title,
       current_price: currentPrice,
       original_price: originalPrice,
@@ -828,6 +847,8 @@
       sale_fee_amount: saleFeeAmount,
       sale_fee_pct: saleFeePct,
       shipping_cost: shippingCost,
+      fee_from_dom: feeFromDom,
+      shipping_from_dom: shippingFromDom,
       net_receivable: netReceivable,
       rating: 4.8,
     };
