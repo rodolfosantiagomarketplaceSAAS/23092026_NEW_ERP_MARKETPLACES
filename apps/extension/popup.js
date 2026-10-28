@@ -47,6 +47,7 @@ document.addEventListener("DOMContentLoaded", async () => {
   const listingSearchInput = document.getElementById("listingSearchInput");
   const listingSearchClear = document.getElementById("listingSearchClear");
   const listingDropdownList = document.getElementById("listingDropdownList");
+  const showFloatingBtnCheckbox = document.getElementById("showFloatingBtnCheckbox");
 
   let allMyListings = [];
   let activePlatformFilter = "all";
@@ -205,6 +206,26 @@ document.addEventListener("DOMContentLoaded", async () => {
     btnSetVercel.addEventListener("click", () => {
       erpUrlInput.value = "https://23092026-new-erp-marketplaces-web.vercel.app";
       saveBtn?.click();
+    });
+  }
+
+  // Controle da visibilidade do botão flutuante nos anúncios
+  if (showFloatingBtnCheckbox) {
+    chrome.storage.local.get(["showFloatingBtn"], (res) => {
+      // Padrão: false (desativado para não cobrir o conteúdo do Mercado Livre)
+      showFloatingBtnCheckbox.checked = res?.showFloatingBtn === true;
+    });
+
+    showFloatingBtnCheckbox.addEventListener("change", () => {
+      const isEnabled = showFloatingBtnCheckbox.checked;
+      chrome.storage.local.set({ showFloatingBtn: isEnabled }, () => {
+        showFeedback(
+          isEnabled
+            ? "Botão flutuante ativado nas páginas de anúncios."
+            : "Botão flutuante desativado. Não aparecerá mais nos anúncios.",
+          "info"
+        );
+      });
     });
   }
 

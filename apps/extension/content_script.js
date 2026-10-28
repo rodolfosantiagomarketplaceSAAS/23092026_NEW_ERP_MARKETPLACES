@@ -852,9 +852,52 @@
 
   /**
    * Injeta Floating Action Button Discreto (Tiny ERP Style)
+   * REQUISITO: O botão flutuante NÃO aparece por padrão para não cobrir o frete/botões do Mercado Livre.
+   * O usuário pode ativá-lo se desejar pelo popup da extensão, e caso ativo, possui botão "✕" para fechar.
    */
   function injectFloatingButton() {
-    if (document.getElementById("crm-erp-floating-btn")) return;
+    if (!isProductPage()) return;
+
+    // Se já estiver renderizado, não duplica
+    if (document.getElementById("crm-erp-floating-container")) return;
+
+    // Verifica preferência do usuário (padrão: false / desativado)
+    const storage = chrome?.storage?.local || chrome?.storage?.sync;
+    if (storage) {
+      storage.get(["showFloatingBtn"], (res) => {
+        // Se NÃO estiver explicitamente habilitado, não injeta
+        if (!res || res.showFloatingBtn !== true) {
+          const oldBtn = document.getElementById("crm-erp-floating-container") || document.getElementById("crm-erp-floating-btn");
+          if (oldBtn) oldBtn.remove();
+          return;
+        }
+
+        renderFloatingButtonWidget();
+      });
+    }
+  }
+
+  function renderFloatingButtonWidget() {
+    if (document.getElementById("crm-erp-floating-container")) return;
+
+    const container = document.createElement("div");
+    container.id = "crm-erp-floating-container";
+    container.style.cssText = `
+      position: fixed;
+      bottom: 24px;
+      right: 24px;
+      z-index: 999998;
+      display: inline-flex;
+      align-items: center;
+      background-color: #0F172A;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.4);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 12px;
+      overflow: hidden;
+      transition: all 0.2s ease;
+    `;
 
     const btn = document.createElement("button");
     btn.id = "crm-erp-floating-btn";
@@ -864,37 +907,26 @@
       </svg>
       Capturar Concorrente (ERP)
     `;
-
     btn.style.cssText = `
-      position: fixed;
-      bottom: 24px;
-      right: 24px;
-      z-index: 999998;
-      display: inline-flex;
-      align-items: center;
-      padding: 9px 16px;
-      background-color: #0F172A;
+      background: transparent;
       color: #FFFFFF;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      border: none;
+      padding: 9px 14px;
+      font-family: inherit;
       font-size: 12px;
       font-weight: 600;
-      border: 1px solid #334155;
-      border-radius: 6px;
       cursor: pointer;
-      box-shadow: 0 4px 14px rgba(15, 23, 42, 0.3);
-      transition: all 0.2s ease;
+      display: inline-flex;
+      align-items: center;
+      outline: none;
+      transition: background-color 0.2s;
     `;
 
     btn.onmouseover = () => {
       btn.style.backgroundColor = "#1E293B";
-      btn.style.transform = "translateY(-2px)";
-      btn.style.boxShadow = "0 6px 18px rgba(15, 23, 42, 0.4)";
     };
-
     btn.onmouseout = () => {
-      btn.style.backgroundColor = "#0F172A";
-      btn.style.transform = "translateY(0)";
-      btn.style.boxShadow = "0 4px 14px rgba(15, 23, 42, 0.3)";
+      btn.style.backgroundColor = "transparent";
     };
 
     btn.onclick = () => {
@@ -909,7 +941,46 @@
       });
     };
 
-    document.body.appendChild(btn);
+    // Botão discreto para fechar e desativar o botão flutuante
+    const closeBtn = document.createElement("button");
+    closeBtn.id = "crm-erp-floating-close";
+    closeBtn.innerHTML = "&times;";
+    closeBtn.title = "Fechar e ocultar este botão (pode reativar no popup da extensão)";
+    closeBtn.style.cssText = `
+      background: transparent;
+      color: #94A3B8;
+      border: none;
+      border-left: 1px solid #334155;
+      padding: 9px 12px;
+      font-size: 16px;
+      font-weight: bold;
+      line-height: 1;
+      cursor: pointer;
+      outline: none;
+      transition: color 0.15s, background-color 0.15s;
+    `;
+    closeBtn.onmouseover = () => {
+      closeBtn.style.color = "#FFFFFF";
+      closeBtn.style.backgroundColor = "#EF4444";
+    };
+    closeBtn.onmouseout = () => {
+      closeBtn.style.color = "#94A3B8";
+      closeBtn.style.backgroundColor = "transparent";
+    };
+
+    closeBtn.onclick = (e) => {
+      e.stopPropagation();
+      container.remove();
+      const storage = chrome?.storage?.local || chrome?.storage?.sync;
+      if (storage) {
+        storage.set({ showFloatingBtn: false });
+      }
+      showToast("Botão flutuante ocultado. Para reativar, abra o popup da extensão.", "info");
+    };
+
+    container.appendChild(btn);
+    container.appendChild(closeBtn);
+    document.body.appendChild(container);
   }
 
   // ==============================================================================
