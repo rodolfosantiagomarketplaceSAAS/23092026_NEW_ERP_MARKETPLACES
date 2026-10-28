@@ -10,11 +10,13 @@ import {
 import {
   cleanPromoBadge,
   cleanSellerName,
+  estimateMlCreationDate,
   extractMlbId,
   extractMlbuId,
   fetchCompetitorViaMlApi,
   normalizeCompetitorPermalink,
   parsePrice,
+  refineMlCreationDateFromImage,
   resolveAnyActiveMlToken,
   scrapeCompetitorFromUrl,
   type VerifiedCompetitorData,
@@ -312,7 +314,7 @@ export async function POST(req: NextRequest) {
 
     const finalSalesCount =
       partialData.sales_count_approx !== undefined &&
-      partialData.sales_count_approx > 0
+      partialData.sales_count_approx !== null
         ? partialData.sales_count_approx
         : Number(existingComp?.sales_count_approx || 0);
 
@@ -329,6 +331,13 @@ export async function POST(req: NextRequest) {
       existingComp?.permalink ||
       `https://produto.mercadolivre.com.br/MLB-${finalExternalId.replace(/^MLB-?/i, "")}`;
 
+    const finalCreatedAt =
+      partialData.listing_created_at ||
+      existingComp?.listing_created_at ||
+      (await refineMlCreationDateFromImage(finalExternalId, finalThumbnail)) ||
+      estimateMlCreationDate(finalExternalId, finalThumbnail) ||
+      null;
+
     const compVerified: VerifiedCompetitorData = {
       title: finalTitle,
       current_price: finalPrice,
@@ -339,10 +348,7 @@ export async function POST(req: NextRequest) {
       promo_badge: finalPromoBadge,
       thumbnail_url: finalThumbnail,
       sales_count_approx: finalSalesCount,
-      listing_created_at:
-        partialData.listing_created_at ||
-        existingComp?.listing_created_at ||
-        null,
+      listing_created_at: finalCreatedAt,
       permalink: finalPermalink,
       external_id: finalExternalId,
       source: partialData.source || "database_verified",
@@ -364,6 +370,7 @@ export async function POST(req: NextRequest) {
         permalink: compVerified.permalink,
         thumbnail_url: compVerified.thumbnail_url,
         sales_count_approx: compVerified.sales_count_approx,
+        listing_created_at: compVerified.listing_created_at,
         last_scraped_at: nowIso,
         updated_at: nowIso,
       };

@@ -310,8 +310,21 @@ function parseHtmlMultilayer(html, permalink, externalId) {
   if (/mercadol[íi]der\s+platinum/i.test(html)) sellerReputation = "platinum";
   else if (/mercadol[íi]der\s+gold/i.test(html)) sellerReputation = "gold";
 
-  const soldMatch = html.match(/"sold_quantity"\s*:\s*(\d+)/i);
-  if (soldMatch) salesCount = parseInt(soldMatch[1], 10) || 0;
+  // Vendas estimadas restritas ao subtítulo principal do anúncio (.ui-pdp-subtitle)
+  const pdpSubtitleMatch = html.match(/class=["'][^"']*ui-pdp-subtitle[^"']*["'][^>]*>([\s\S]*?)<\/span>/i);
+  if (pdpSubtitleMatch) {
+    const subText = pdpSubtitleMatch[1].replace(/<[^>]+>/g, " ").trim();
+    const subSold = subText.match(/(\+?\d+(?:[.,]\d+)?)\s*(mil|k)?\s*vendid/i);
+    if (subSold) {
+      let num = parseFloat(subSold[1].replace("+", "").replace(/\./g, "").replace(",", "."));
+      if (subSold[2] && (subSold[2].toLowerCase().startsWith("mil") || subSold[2].toLowerCase() === "k")) {
+        num *= 1000;
+      }
+      salesCount = !isNaN(num) && num >= 0 ? Math.round(num) : 0;
+    } else {
+      salesCount = 0;
+    }
+  }
 
   const discountMatch = html.match(/(\d{1,2}%\s*OFF)/i);
   if (discountMatch) promoBadge = discountMatch[1].toUpperCase();
@@ -420,6 +433,22 @@ async function extractViaBackgroundTab(targetUrl, externalId) {
 
         const ogImg = document.querySelector('meta[property="og:image"]')?.getAttribute("content") || null;
 
+        let salesCount = 0;
+        const subtitleEl =
+          document.querySelector(".ui-pdp-header .ui-pdp-subtitle") ||
+          document.querySelector(".ui-pdp-subtitle") ||
+          document.querySelector(".ui-pdp-header__subtitle");
+        if (subtitleEl && subtitleEl.innerText) {
+          const m = subtitleEl.innerText.trim().match(/(\+?\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
+          if (m) {
+            let n = parseFloat(m[1].replace("+", "").replace(/\./g, "").replace(",", "."));
+            if (m[2] && (m[2].toLowerCase().startsWith("mil") || m[2].toLowerCase() === "k")) n *= 1000;
+            if (!isNaN(n) && n >= 0) salesCount = Math.round(n);
+          } else {
+            salesCount = 0;
+          }
+        }
+
         return {
           title,
           current_price: price,
@@ -427,6 +456,7 @@ async function extractViaBackgroundTab(targetUrl, externalId) {
           seller_name: sellerName,
           shipping_type: shippingType,
           thumbnail_url: ogImg,
+          sales_count_approx: salesCount,
         };
       },
     });

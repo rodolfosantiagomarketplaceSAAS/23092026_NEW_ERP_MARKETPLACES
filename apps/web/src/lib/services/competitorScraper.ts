@@ -151,6 +151,174 @@ export function normalizeCompetitorPermalink(
 }
 
 /**
+ * Tabelas de calibração cronológica Dual-Shard de IDs do Mercado Livre Brasil (MLB)
+ */
+const ODD_MLB_ANCHORS: [number, number][] = [
+  [1000000001, 1520000000],
+  [2000000001, 1630000000],
+  [3000000001, 1672531200],
+  [3500000001, 1717200000],
+  [4000000001, 1747267200],
+  [4473157969, 1770897600],
+  [4680140101, 1778774182],
+  [4729260091, 1780401600],
+  [4907118005, 1784289600],
+  [4949688649, 1785118614],
+  [5007001935, 1786033623],
+  [5049362965, 1786580776],
+  [5102291473, 1787268007],
+  [5147833041, 1787875766],
+  [5180213341, 1788400367],
+  [5215384915, 1789056122],
+  [5261622325, 1789846455],
+  [5309734189, 1790683356],
+  [5342125297, 1791301373],
+  [5371657083, 1791737346],
+  [5390836089, 1791980576],
+  [5392217295, 1791993935],
+  [5425017267, 1792428203],
+  [5451861735, 1792759331],
+  [5467689883, 1793060428],
+];
+
+const EVEN_MLB_ANCHORS: [number, number][] = [
+  [4000000000, 1747267200],
+  [5302227582, 1775736000],
+  [6776418892, 1778775181],
+  [7071688620, 1782907200],
+  [7136348316, 1783638496],
+  [7259550226, 1785118538],
+  [7349483204, 1786059234],
+  [7400693466, 1786581179],
+  [7472416462, 1787271960],
+  [7536360518, 1787876196],
+  [7585061812, 1788450863],
+  [7619525010, 1789056362],
+  [7669930830, 1789847705],
+  [7721699724, 1790681669],
+  [7757951996, 1791302312],
+  [7790395684, 1791740343],
+  [7819244990, 1792079149],
+  [7846016296, 1792426830],
+  [7862839620, 1792636014],
+  [7891206434, 1793059319],
+];
+
+/**
+ * Estima a data real de criação de um anúncio do Mercado Livre via:
+ * 1) JSON no HTML (startTime / date_created)
+ * 2) Interpolação Dual-Shard do ID MLB (Ímpar / Par)
+ * 3) Sufixo _MMYYYY da URL da foto no mlstatic.com
+ */
+export function estimateMlCreationDate(
+  externalIdOrUrl?: string | null,
+  thumbnailUrl?: string | null,
+  html?: string | null
+): string | null {
+  if (html) {
+    const jsonDateMatch =
+      html.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
+      html.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
+      html.match(/"date_created"\s*:\s*"([^"]+)"/i);
+    if (jsonDateMatch?.[1]) {
+      const d = new Date(jsonDateMatch[1]);
+      if (!isNaN(d.getTime())) return d.toISOString();
+    }
+  }
+
+  const m = String(externalIdOrUrl || "").match(/MLB(?!U)-?(\d{8,12})/i);
+  if (m) {
+    const num = parseInt(m[1], 10);
+    if (!isNaN(num) && num >= 500000000) {
+      const anchors =
+        num % 2 === 0 && num >= 4000000000 ? EVEN_MLB_ANCHORS : ODD_MLB_ANCHORS;
+      let sec = 0;
+
+      if (num <= anchors[0][0]) {
+        const [x0, y0] = anchors[0];
+        const [x1, y1] = anchors[1];
+        sec = y0 - ((x0 - num) / (x1 - x0)) * (y1 - y0);
+      } else if (num >= anchors[anchors.length - 1][0]) {
+        const [x0, y0] = anchors[anchors.length - 2];
+        const [x1, y1] = anchors[anchors.length - 1];
+        sec = y1 + ((num - x1) / (x1 - x0)) * (y1 - y0);
+      } else {
+        for (let i = 0; i < anchors.length - 1; i++) {
+          const [x0, y0] = anchors[i];
+          const [x1, y1] = anchors[i + 1];
+          if (num >= x0 && num <= x1) {
+            sec = y0 + ((num - x0) / (x1 - x0)) * (y1 - y0);
+            break;
+          }
+        }
+      }
+
+      const nowSec = Math.floor(Date.now() / 1000);
+      const clamped = Math.min(Math.round(sec), nowSec);
+      if (clamped > 1200000000) {
+        return new Date(clamped * 1000).toISOString();
+      }
+    }
+  }
+
+  if (thumbnailUrl) {
+    const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
+    if (imgDateMatch) {
+      const month = parseInt(imgDateMatch[1], 10);
+      const year = parseInt(imgDateMatch[2], 10);
+      if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+        const d = new Date(Date.UTC(year, month - 1, 14, 12, 0, 0));
+        const clampedMs = Math.min(d.getTime(), Date.now());
+        return new Date(clampedMs).toISOString();
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Refina a data de criação consultando o header Last-Modified da imagem no http2.mlstatic.com
+ */
+export async function refineMlCreationDateFromImage(
+  externalIdOrUrl?: string | null,
+  thumbnailUrl?: string | null,
+  html?: string | null
+): Promise<string | null> {
+  const baseEst = estimateMlCreationDate(externalIdOrUrl, thumbnailUrl, html);
+  if (!thumbnailUrl || !thumbnailUrl.includes("mlstatic.com")) {
+    return baseEst;
+  }
+
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 1500);
+    const res = await fetch(thumbnailUrl.replace(/^http:\/\//i, "https://"), {
+      method: "GET",
+      headers: { Range: "bytes=0-1" },
+      signal: controller.signal,
+    }).catch(() => null);
+    clearTimeout(timer);
+
+    const lastMod = res?.headers?.get("last-modified");
+    if (lastMod) {
+      const imgDate = new Date(lastMod);
+      if (!isNaN(imgDate.getTime())) {
+        if (!baseEst) return imgDate.toISOString();
+        const estDate = new Date(baseEst);
+        const diffDays = Math.abs(imgDate.getTime() - estDate.getTime()) / 86400000;
+        if (imgDate.getTime() < estDate.getTime() || diffDays <= 14) {
+          return imgDate.toISOString();
+        }
+      }
+    }
+  } catch {
+    // mantém baseEst
+  }
+  return baseEst;
+}
+
+/**
  * Busca recursivamente um objeto Schema.org Product dentro de JSON-LD (incluindo @graph e arrays)
  */
 function findProductInJsonLd(obj: any): any {
@@ -350,26 +518,30 @@ export function parseCompetitorHtml(
     }
   }
 
-  // Vendas estimadas (subtitle ou sold_quantity)
-  const soldQtyMatch = html.match(/"sold_quantity"\s*:\s*(\d+)/i);
-  const subtitleSoldMatch = html.match(
-    /(\+?\d+(?:[.,]\d+)?)\s*(mil|k)?\s*vendid/i
+  // Vendas estimadas (restrito ao ui-pdp-subtitle do anúncio principal para nunca capturar vendas da loja do vendedor)
+  const pdpSubtitleMatch = html.match(
+    /class=["'][^"']*ui-pdp-subtitle[^"']*["'][^>]*>([\s\S]*?)<\/span>/i
   );
-  if (subtitleSoldMatch) {
-    let num = parseFloat(
-      subtitleSoldMatch[1].replace("+", "").replace(/\./g, "").replace(",", ".")
+  if (pdpSubtitleMatch) {
+    const subText = pdpSubtitleMatch[1].replace(/<[^>]+>/g, " ").trim();
+    const subtitleSoldMatch = subText.match(
+      /(\+?\d+(?:[.,]\d+)?)\s*(mil|k)?\s*vendid/i
     );
-    if (
-      subtitleSoldMatch[2] &&
-      (subtitleSoldMatch[2].toLowerCase().startsWith("mil") ||
-        subtitleSoldMatch[2].toLowerCase() === "k")
-    ) {
-      num *= 1000;
+    if (subtitleSoldMatch) {
+      let num = parseFloat(
+        subtitleSoldMatch[1].replace("+", "").replace(/\./g, "").replace(",", ".")
+      );
+      if (
+        subtitleSoldMatch[2] &&
+        (subtitleSoldMatch[2].toLowerCase().startsWith("mil") ||
+          subtitleSoldMatch[2].toLowerCase() === "k")
+      ) {
+        num *= 1000;
+      }
+      if (!isNaN(num) && num >= 0) result.sales_count_approx = Math.round(num);
+    } else if (/novo|usado|recondicionado/i.test(subText)) {
+      result.sales_count_approx = 0;
     }
-    if (!isNaN(num) && num >= 0) result.sales_count_approx = Math.round(num);
-  } else if (soldQtyMatch) {
-    const count = parseInt(soldQtyMatch[1], 10);
-    if (!isNaN(count)) result.sales_count_approx = count;
   }
 
   // Logística
@@ -430,6 +602,12 @@ export function parseCompetitorHtml(
   if (permalink) {
     result.permalink = permalink;
   }
+
+  result.listing_created_at = estimateMlCreationDate(
+    result.external_id || permalink,
+    result.thumbnail_url,
+    html
+  );
 
   return result;
 }

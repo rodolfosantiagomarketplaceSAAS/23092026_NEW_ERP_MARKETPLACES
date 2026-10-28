@@ -4,6 +4,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 import { addOrUpdateMockCompetitor } from "@/lib/data/comparativeStore";
 import { resolveRequestUser } from "@/lib/extension/auth";
+import { refineMlCreationDateFromImage } from "@/lib/services/competitorScraper";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -86,8 +87,14 @@ export async function POST(req: NextRequest) {
         last_scraped_at: new Date().toISOString(),
       };
 
-      if (item.listing_created_at) {
-        basePayload.listing_created_at = item.listing_created_at;
+      const resolvedCreatedAt =
+        item.listing_created_at ||
+        (item.platform === "mercadolivre"
+          ? await refineMlCreationDateFromImage(item.external_id, item.thumbnail_url)
+          : null);
+
+      if (resolvedCreatedAt) {
+        basePayload.listing_created_at = resolvedCreatedAt;
       }
 
       let { data, error: compError } = await supabase

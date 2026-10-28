@@ -115,13 +115,23 @@ document.addEventListener("DOMContentLoaded", async () => {
         const formattedPrice = currentScrapedData.current_price
           ? `R$ ${currentScrapedData.current_price.toFixed(2)}`
           : "Preço não detectado";
+        const salesCount = Number(currentScrapedData.sales_count_approx || 0);
         const formattedSales =
-          currentScrapedData.sales_count_approx !== undefined && currentScrapedData.sales_count_approx > 0
-            ? `${currentScrapedData.sales_count_approx.toLocaleString("pt-BR")} vendas`
-            : "0 vendas";
-        const formattedDate = currentScrapedData.listing_created_at
-          ? new Date(currentScrapedData.listing_created_at).toLocaleDateString("pt-BR")
-          : "Não detectada";
+          salesCount > 0
+            ? `${salesCount.toLocaleString("pt-BR")} ${salesCount === 1 ? "venda" : "vendas"}`
+            : "0 vendas (Sem vendas)";
+        const salesColor = salesCount > 0 ? "#059669" : "#64748B";
+
+        let formattedDate = "Não detectada";
+        if (currentScrapedData.listing_created_at) {
+          const createdObj = new Date(currentScrapedData.listing_created_at);
+          if (!isNaN(createdObj.getTime())) {
+            const brDate = createdObj.toLocaleDateString("pt-BR");
+            const diffDays = Math.max(0, Math.floor((Date.now() - createdObj.getTime()) / 86400000));
+            const ageText = diffDays === 0 ? "hoje" : diffDays === 1 ? "há 1 dia" : `há ${diffDays} dias`;
+            formattedDate = `${brDate} (${ageText})`;
+          }
+        }
 
         pageInfoBox.innerHTML = `
           <div class="detected-prod">
@@ -130,8 +140,8 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span>ID: <code>${currentScrapedData.external_id}</code></span>
             <span>Preço: <strong style="color:#0f766e;">${formattedPrice}</strong></span>
             <span>Vendedor: <strong>${currentScrapedData.seller_name || "Desconhecido"}</strong></span>
-            <span>Vendas: <strong style="color:#059669;">${formattedSales}</strong></span>
-            <span>Criado em: <strong style="color:#475569;">${formattedDate}</strong></span>
+            <span>Vendas: <strong style="color:${salesColor};">${formattedSales}</strong></span>
+            <span>Criado em: <strong style="color:#334155;">${formattedDate}</strong></span>
           </div>
         `;
 

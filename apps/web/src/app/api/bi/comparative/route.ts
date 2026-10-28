@@ -3,6 +3,7 @@ import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   cleanPromoBadge,
   cleanSellerName,
+  estimateMlCreationDate,
   normalizeCompetitorPermalink,
 } from "@/lib/services/competitorScraper";
 import type {
@@ -32,6 +33,12 @@ function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparis
   const diffBrl = referencePrice - compPrice;
   const diffPct = compPrice > 0 ? (diffBrl / compPrice) * 100 : 0;
 
+  const resolvedCreatedAt =
+    comp.listing_created_at ||
+    estimateMlCreationDate(comp.external_id, comp.thumbnail_url) ||
+    comp.created_at ||
+    null;
+
   return {
     id: comp.id,
     external_id: comp.external_id,
@@ -48,7 +55,7 @@ function toCompetitorItem(comp: Row, referencePrice: number): CompetitorComparis
     price_difference_pct: Number(diffPct.toFixed(2)),
     last_scraped_at: comp.last_scraped_at,
     sales_count_approx: comp.sales_count_approx ?? 0,
-    listing_created_at: comp.listing_created_at || comp.created_at || null,
+    listing_created_at: resolvedCreatedAt,
     created_at: comp.created_at,
   };
 }
@@ -85,8 +92,14 @@ function buildMyListingGroup(item: Row, matchedIds: Set<string>): ComparativeLis
       original_price: item.original_price ? Number(item.original_price) : null,
       product_sku: product?.sku || null,
       product_cost_price: product?.cost_price ? Number(product.cost_price) : null,
-      sales_count_approx: item.sales_count_approx ?? 0,
-      listing_created_at: item.listing_created_at || item.created_at || null,
+      sales_count_approx: item.sales_count_approx ?? item.sold_quantity ?? 0,
+      listing_created_at:
+        item.listing_created_at ||
+        item.raw_data?.date_created ||
+        item.raw_data?.start_time ||
+        estimateMlCreationDate(item.external_id, item.thumbnail_url) ||
+        item.created_at ||
+        null,
     },
     competitors,
     lowest_competitor_price: lowestPrice,

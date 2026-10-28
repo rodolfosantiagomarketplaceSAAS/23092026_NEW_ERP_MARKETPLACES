@@ -203,12 +203,124 @@
   }
 
   /**
+   * Tabelas de calibração cronológica Dual-Shard de IDs do Mercado Livre Brasil (MLB)
+   * O Mercado Livre Brasil utiliza duas sequências monotônicas paralelas (IDs ímpares e IDs pares).
+   */
+  const ODD_MLB_ANCHORS = [
+    [1000000001, 1520000000],
+    [2000000001, 1630000000],
+    [3000000001, 1672531200],
+    [3500000001, 1717200000],
+    [4000000001, 1747267200],
+    [4473157969, 1770897600],
+    [4680140101, 1778774182],
+    [4729260091, 1780401600],
+    [4907118005, 1784289600],
+    [4949688649, 1785118614],
+    [5007001935, 1786033623],
+    [5049362965, 1786580776],
+    [5102291473, 1787268007],
+    [5147833041, 1787875766],
+    [5180213341, 1788400367],
+    [5215384915, 1789056122],
+    [5261622325, 1789846455],
+    [5309734189, 1790683356],
+    [5342125297, 1791301373],
+    [5371657083, 1791737346],
+    [5390836089, 1791980576],
+    [5392217295, 1791993935],
+    [5425017267, 1792428203],
+    [5451861735, 1792759331],
+    [5467689883, 1793060428],
+  ];
+
+  const EVEN_MLB_ANCHORS = [
+    [4000000000, 1747267200],
+    [5302227582, 1775736000],
+    [6776418892, 1778775181],
+    [7071688620, 1782907200],
+    [7136348316, 1783638496],
+    [7259550226, 1785118538],
+    [7349483204, 1786059234],
+    [7400693466, 1786581179],
+    [7472416462, 1787271960],
+    [7536360518, 1787876196],
+    [7585061812, 1788450863],
+    [7619525010, 1789056362],
+    [7669930830, 1789847705],
+    [7721699724, 1790681669],
+    [7757951996, 1791302312],
+    [7790395684, 1791740343],
+    [7819244990, 1792079149],
+    [7846016296, 1792426830],
+    [7862839620, 1792636014],
+    [7891206434, 1793059319],
+  ];
+
+  function interpolateMlbCreationDate(externalId, thumbnailUrl = null) {
+    try {
+      const m = String(externalId || "").match(/MLB(?!U)-?(\d{8,12})/i);
+      if (m) {
+        const num = parseInt(m[1], 10);
+        if (!isNaN(num) && num >= 500000000) {
+          const anchors = num % 2 === 0 && num >= 4000000000 ? EVEN_MLB_ANCHORS : ODD_MLB_ANCHORS;
+          let sec = 0;
+
+          if (num <= anchors[0][0]) {
+            const [x0, y0] = anchors[0];
+            const [x1, y1] = anchors[1];
+            sec = y0 - ((x0 - num) / (x1 - x0)) * (y1 - y0);
+          } else if (num >= anchors[anchors.length - 1][0]) {
+            const [x0, y0] = anchors[anchors.length - 2];
+            const [x1, y1] = anchors[anchors.length - 1];
+            sec = y1 + ((num - x1) / (x1 - x0)) * (y1 - y0);
+          } else {
+            for (let i = 0; i < anchors.length - 1; i++) {
+              const [x0, y0] = anchors[i];
+              const [x1, y1] = anchors[i + 1];
+              if (num >= x0 && num <= x1) {
+                sec = y0 + ((num - x0) / (x1 - x0)) * (y1 - y0);
+                break;
+              }
+            }
+          }
+
+          const nowSec = Math.floor(Date.now() / 1000);
+          const clamped = Math.min(Math.round(sec), nowSec);
+          if (clamped > 1200000000) {
+            return new Date(clamped * 1000).toISOString();
+          }
+        }
+      }
+
+      // Fallback pelo sufixo _MMYYYY da URL da foto no mlstatic
+      if (thumbnailUrl) {
+        const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
+        if (imgDateMatch) {
+          const month = parseInt(imgDateMatch[1], 10);
+          const year = parseInt(imgDateMatch[2], 10);
+          if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+            const d = new Date(Date.UTC(year, month - 1, 14, 12, 0, 0));
+            const clampedMs = Math.min(d.getTime(), Date.now());
+            return new Date(clampedMs).toISOString();
+          }
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
    * Helper: Extrai quantidade estimada de vendas do Mercado Livre
+   * IMPORTANTE: Verifica estritamente o subtítulo do anúncio (.ui-pdp-subtitle).
+   * Se o subtítulo for apenas "Novo" ou "Usado" (sem "vendido"), retorna 0 imediatamente
+   * para NUNCA capturar o total de vendas da loja do vendedor (ex: "+1000 vendas") ou carrosséis.
    */
   function extractMlSalesCount() {
     try {
-      // 1. Subtítulo tradicional (.ui-pdp-subtitle) ou cabeçalho (.ui-pdp-header__subtitle)
+      // 1. Subtítulo oficial do cabeçalho do anúncio (.ui-pdp-subtitle)
       const subtitleEl =
+        document.querySelector(".ui-pdp-header .ui-pdp-subtitle") ||
         document.querySelector(".ui-pdp-subtitle") ||
         document.querySelector(".ui-pdp-header__subtitle") ||
         document.querySelector('[class*="ui-pdp-subtitle"]');
@@ -223,34 +335,22 @@
           }
           if (!isNaN(num) && num >= 0) return Math.round(num);
         }
-      }
-
-      // 2. Procura em elementos no cabeçalho ou corpo com 'vendido(s)'
-      const spans = document.querySelectorAll("span, p, div");
-      for (const el of spans) {
-        if (el.children.length === 0 && /vendid/i.test(el.innerText || "")) {
-          const text = el.innerText.trim();
-          const match = text.match(/(\+?\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
-          if (match) {
-            let num = parseFloat(match[1].replace("+", "").replace(/\./g, "").replace(",", "."));
-            if (match[2] && (match[2].toLowerCase().startsWith("mil") || match[2].toLowerCase() === "k")) {
-              num = num * 1000;
-            }
-            if (!isNaN(num) && num >= 0) return Math.round(num);
-          }
+        // Se o subtítulo existe (ex: "Novo" ou "Usado") e NÃO contém "vendido", o anúncio tem 0 vendas!
+        if (/novo|usado|recondicionado/i.test(text)) {
+          return 0;
         }
       }
 
-      // 3. Busca em tags de script (ex: sold_quantity)
-      const scripts = document.querySelectorAll("script");
-      for (const script of scripts) {
-        const content = script.textContent;
-        if (content && content.includes('"sold_quantity"')) {
-          const match = content.match(/"sold_quantity"\s*:\s*(\d+)/);
-          if (match) {
-            const count = parseInt(match[1], 10);
-            if (!isNaN(count)) return count;
+      // 2. Fallback restrito APENAS ao container do cabeçalho do produto (nunca vendedor ou carrossel)
+      const headerContainer = document.querySelector(".ui-pdp-header");
+      if (headerContainer && headerContainer.innerText) {
+        const match = headerContainer.innerText.match(/(\+?\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
+        if (match) {
+          let num = parseFloat(match[1].replace("+", "").replace(/\./g, "").replace(",", "."));
+          if (match[2] && (match[2].toLowerCase().startsWith("mil") || match[2].toLowerCase() === "k")) {
+            num = num * 1000;
           }
+          if (!isNaN(num) && num >= 0) return Math.round(num);
         }
       }
     } catch (e) {
@@ -260,10 +360,11 @@
   }
 
   /**
-   * Helper: Extrai data de criação do anúncio do Mercado Livre (startTime / date_created)
+   * Helper: Extrai data de criação do anúncio do Mercado Livre (Multicamada)
    */
-  function extractMlCreationDate() {
+  function extractMlCreationDate(externalId = null, thumbnailUrl = null) {
     try {
+      // Camada 1: Scripts JSON embutidos na página (startTime / start_time / date_created)
       const scripts = document.querySelectorAll("script");
       for (const script of scripts) {
         const content = script.textContent;
@@ -282,23 +383,79 @@
         }
       }
 
-      // Fallback em todo o HTML
-      const html = document.documentElement.innerHTML;
-      const htmlMatch =
-        html.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
-        html.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
-        html.match(/"date_created"\s*:\s*"([^"]+)"/i);
-
-      if (htmlMatch && htmlMatch[1]) {
-        const d = new Date(htmlMatch[1]);
-        if (!isNaN(d.getTime())) {
-          return d.toISOString();
+      // Camada 2: Informação visível no DOM (ex: "Publicado: há 258 dias" ou "Publicado em DD/MM/YYYY")
+      const bodyText = document.body?.innerText || "";
+      const relDaysMatch = bodyText.match(/Publicado:?\s*h[áa]\s*(\d+)\s*dias?/i);
+      if (relDaysMatch) {
+        const days = parseInt(relDaysMatch[1], 10);
+        if (!isNaN(days) && days >= 0 && days < 5000) {
+          return new Date(Date.now() - days * 86400000).toISOString();
         }
       }
+      if (/Publicado:?\s*hoje/i.test(bodyText)) {
+        return new Date().toISOString();
+      }
+      if (/Publicado:?\s*ontem/i.test(bodyText)) {
+        return new Date(Date.now() - 86400000).toISOString();
+      }
+      const explicitDateMatch = bodyText.match(/Publicado\s*(?:em|:)?\s*(\d{2})\/(\d{2})\/(20\d{2})/i);
+      if (explicitDateMatch) {
+        const day = parseInt(explicitDateMatch[1], 10);
+        const month = parseInt(explicitDateMatch[2], 10) - 1;
+        const year = parseInt(explicitDateMatch[3], 10);
+        const d = new Date(Date.UTC(year, month, day, 12, 0, 0));
+        if (!isNaN(d.getTime())) return d.toISOString();
+      }
+
+      // Camada 3: Interpolação Cronológica Dual-Shard do ID MLB + Sufixo da Imagem
+      const interpolated = interpolateMlbCreationDate(externalId, thumbnailUrl);
+      if (interpolated) return interpolated;
     } catch (e) {
       console.warn("[ERP Extractor] Erro ao extrair data de criação ML:", e);
     }
     return null;
+  }
+
+  /**
+   * Refina a data de criação consultando o cabeçalho HTTP Last-Modified da primeira imagem no mlstatic.com
+   */
+  async function refineMlCreationDateAsync(data) {
+    if (!data || data.platform !== "mercadolivre") return data;
+    try {
+      const imgUrl =
+        data.thumbnail_url ||
+        document.querySelector('meta[property="og:image"]')?.getAttribute("content") ||
+        document.querySelector(".ui-pdp-gallery__figure img")?.getAttribute("src");
+
+      if (imgUrl && imgUrl.includes("mlstatic.com")) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 1200);
+        const res = await fetch(imgUrl.replace(/^http:\/\//i, "https://"), {
+          method: "GET",
+          headers: { Range: "bytes=0-1" },
+          signal: controller.signal,
+        }).catch(() => null);
+        clearTimeout(timer);
+
+        const lastMod = res?.headers?.get("last-modified");
+        if (lastMod) {
+          const imgDate = new Date(lastMod);
+          if (!isNaN(imgDate.getTime())) {
+            if (!data.listing_created_at) {
+              data.listing_created_at = imgDate.toISOString();
+            } else {
+              const currentEst = new Date(data.listing_created_at);
+              const diffDays = Math.abs(imgDate.getTime() - currentEst.getTime()) / 86400000;
+              // Se a foto foi enviada na mesma época (<= 14 dias) ou antes da estimativa, usa o timestamp exato do Last-Modified
+              if (imgDate.getTime() < currentEst.getTime() || diffDays <= 14) {
+                data.listing_created_at = imgDate.toISOString();
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+    return data;
   }
 
   /**
@@ -584,7 +741,7 @@
 
     // 10. Vendas e Data de Criação
     const salesCount = extractMlSalesCount();
-    const creationDate = extractMlCreationDate();
+    const creationDate = extractMlCreationDate(externalId, thumbnailUrl);
 
     return {
       platform: "mercadolivre",
@@ -786,7 +943,7 @@
    * Dispara a captura para o Service Worker
    */
   async function triggerCapture(myListingId = null) {
-    const data = extractProductData();
+    let data = extractProductData();
     if (!data || !data.current_price) {
       showToast(
         "Não foi possível identificar o preço nesta página. Certifique-se de estar em um anúncio de produto.",
@@ -794,6 +951,8 @@
       );
       return { success: false, error: "Preço não detectado na página" };
     }
+
+    data = await refineMlCreationDateAsync(data);
 
     // Se não foi passado diretamente, verifica no storage se há anúncio selecionado
     if (!myListingId && (chrome?.storage?.local || chrome?.storage?.sync)) {
@@ -1159,14 +1318,16 @@
           let rating = ratingEl ? parseFloat(ratingEl.innerText.replace(",", ".")) : 4.8;
           if (isNaN(rating)) rating = 4.8;
 
-          // Vendas aproximadas
+          // Vendas aproximadas (0 se não houver vendas registradas no card)
           const soldMatch = el.innerText.match(/(\+?\d+(?:[\.,]\d+)?)\s*(mil|k)?\s*vendid/i);
-          let sales_count = 150 + (index * 45);
+          let sales_count = 0;
           if (soldMatch) {
             let num = parseFloat(soldMatch[1].replace("+", "").replace(/\./g, "").replace(",", "."));
             if (soldMatch[2] && (soldMatch[2].toLowerCase().startsWith("mil") || soldMatch[2].toLowerCase() === "k")) num *= 1000;
-            if (!isNaN(num) && num > 0) sales_count = Math.round(num);
+            if (!isNaN(num) && num >= 0) sales_count = Math.round(num);
           }
+
+          const listing_created_at = interpolateMlbCreationDate(external_id, thumbnail);
 
           items.push({
             id: external_id,
@@ -1187,8 +1348,9 @@
             seller_name,
             seller_reputation: "platinum",
             sales_count_approx: sales_count,
+            listing_created_at,
             rating,
-            reviews_count: Math.min(500, Math.round(sales_count * 0.15) + 20),
+            reviews_count: sales_count > 0 ? Math.min(500, Math.round(sales_count * 0.15) + 5) : 0,
             is_already_monitored: false,
             matched_my_listing_id: null,
           });
@@ -1532,8 +1694,14 @@
           platform: isMercadoLivre ? "mercadolivre" : "shopee",
         });
       } else {
-        const data = extractProductData();
-        sendResponse({ success: true, isSearch: false, data });
+        const rawData = extractProductData();
+        refineMlCreationDateAsync(rawData)
+          .then((data) => {
+            sendResponse({ success: true, isSearch: false, data });
+          })
+          .catch(() => {
+            sendResponse({ success: true, isSearch: false, data: rawData });
+          });
       }
       return true;
     }
