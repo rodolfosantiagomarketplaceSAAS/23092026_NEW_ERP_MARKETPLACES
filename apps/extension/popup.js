@@ -48,6 +48,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const listingSearchClear = document.getElementById("listingSearchClear");
   const listingDropdownList = document.getElementById("listingDropdownList");
   const showFloatingBtnCheckbox = document.getElementById("showFloatingBtnCheckbox");
+  const downloadPhotosBtn = document.getElementById("downloadPhotosBtn");
+  const downloadPhotosProgress = document.getElementById("downloadPhotosProgress");
+  const downloadPhotosProgressText = document.getElementById("downloadPhotosProgressText");
 
   let allMyListings = [];
   let activePlatformFilter = "all";
@@ -90,6 +93,8 @@ document.addEventListener("DOMContentLoaded", async () => {
         if (response.isSearch) {
           if (cardSectionTitle) cardSectionTitle.innerText = "Pesquisa de Mercado (Aba Ativa)";
           if (captureNowBtn) captureNowBtn.style.display = "none";
+          if (downloadPhotosBtn) downloadPhotosBtn.style.display = "none";
+          if (downloadPhotosProgress) downloadPhotosProgress.style.display = "none";
           if (syncSearchBtn) syncSearchBtn.style.display = "block";
 
           pageInfoBox.innerHTML = `
@@ -153,6 +158,13 @@ document.addEventListener("DOMContentLoaded", async () => {
             ? formatMoney(currentScrapedData.net_receivable)
             : "Calculando...";
 
+        const pictures =
+          Array.isArray(currentScrapedData.pictures) && currentScrapedData.pictures.length > 0
+            ? currentScrapedData.pictures
+            : [];
+        const photosCountText =
+          pictures.length > 0 ? `${pictures.length} fotos em alta resolução` : "1 foto detectada";
+
         pageInfoBox.innerHTML = `
           <div class="detected-prod">
             <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}</strong>
@@ -162,6 +174,7 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span>Vendedor: <strong>${currentScrapedData.seller_name || "Desconhecido"}</strong></span>
             <span>Vendas: <strong style="color:${salesColor};">${formattedSales}</strong></span>
             <span>Criado em: <strong style="color:#334155;">${formattedDate}</strong></span>
+            <span>Fotos: <strong id="extPhotosCountVal" style="color:#0284C7;">${photosCountText}</strong></span>
             <div style="margin-top:4px; padding-top:4px; border-top:1px dashed #CBD5E1; display:flex; flex-direction:column; gap:2px;">
               <span>Tarifa: <strong id="extSaleFeeVal" style="color:#DC2626;">${initialFeeText}</strong></span>
               <span>Frete: <strong id="extShippingCostVal" style="color:#D97706;">${initialShippingText}</strong></span>
@@ -230,6 +243,12 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         await loadMyListings(currentDetectedPlatform);
         captureNowBtn.style.display = "block";
+        if (downloadPhotosBtn) {
+          downloadPhotosBtn.style.display = "block";
+          const count = pictures.length;
+          downloadPhotosBtn.innerText =
+            count > 0 ? `📸 Baixar Fotos (${count}) em JPG` : "📸 Baixar Fotos do Anúncio (JPG)";
+        }
       });
     } else {
       pageInfoBox.innerHTML = `
@@ -398,6 +417,100 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     );
   });
+
+  // Download de Fotos do Anúncio em JPG na melhor resolução
+  if (downloadPhotosBtn) {
+    downloadPhotosBtn.addEventListener("click", async () => {
+      let photos = currentScrapedData?.pictures || [];
+
+      // Se ainda não carregou as fotos ou veio vazio, busca diretamente via content_script na aba ativa
+      if (photos.length === 0 && activeTab?.id) {
+        if (downloadPhotosProgress) downloadPhotosProgress.style.display = "block";
+        if (downloadPhotosProgressText) downloadPhotosProgressText.innerText = "Localizando fotos na página...";
+        try {
+          const res = await new Promise((resolve) => {
+            chrome.tabs.sendMessage(activeTab.id, { action: "GET_LISTING_IMAGES" }, (r) => {
+              if (chrome.runtime.lastError || !r) return resolve(null);
+              resolve(r);
+            });
+          });
+          if (res?.pictures && Array.isArray(res.pictures) && res.pictures.length > 0) {
+            photos = res.pictures;
+            if (currentScrapedData) currentScrapedData.pictures = photos;
+          }
+        } catch {}
+      }
+
+      if (photos.length === 0) {
+        showFeedback("Nenhuma foto encontrada neste anúncio para download.", "error");
+        return;
+      }
+
+      const externalId = currentScrapedData?.external_id || "Anuncio";
+      const folderName = `Fotos_${externalId}`;
+      const total = photos.length;
+
+      downloadPhotosBtn.disabled = true;
+      if (downloadPhotosProgress) downloadPhotosProgress.style.display = "block";
+
+      let successCount = 0;
+      for (let i = 0; i < total; i++) {
+        if (downloadPhotosProgressText) {
+          downloadPhotosProgressText.innerHTML = `Processando foto <strong>${i + 1} de ${total}</strong> em JPG máxima qualidade...`;
+        }
+
+        try {
+          const res = await new Promise((resolve) => {
+            chrome.runtime.sendMessage(
+              {
+                action: "DOWNLOAD_SINGLE_PHOTO",
+                payload: {
+                  photo: photos[i],
+                  folderName,
+                  index: i + 1,
+                  total,
+                },
+              },
+              (r) => {
+                if (chrome.runtime.lastError) resolve({ success: false, error: chrome.runtime.lastError.message });
+                else resolve(r || { success: false });
+              }
+            );
+          });
+
+          if (res?.success) {
+            successCount++;
+            // Fallback caso download direto pelo browser seja necessário
+            if (res.requiresClientDownload && res.dataUrl) {
+              const a = document.createElement("a");
+              a.href = res.dataUrl;
+              a.download = res.filename.split("/").pop() || `foto_${i + 1}.jpg`;
+              document.body.appendChild(a);
+              a.click();
+              a.remove();
+            }
+          }
+        } catch (err) {
+          console.warn(`Erro ao baixar foto ${i + 1}:`, err);
+        }
+      }
+
+      downloadPhotosBtn.disabled = false;
+      if (successCount > 0) {
+        downloadPhotosBtn.innerText = `📸 Baixar Novamente (${total} fotos em JPG)`;
+        if (downloadPhotosProgressText) {
+          downloadPhotosProgressText.innerHTML = `✅ <strong>${successCount} fotos salvas em JPG na melhor qualidade!</strong><br><span style="font-size:10px; color:#64748B;">Pasta: Downloads/${folderName}</span>`;
+        }
+        showFeedback(`✅ ${successCount} fotos baixadas com sucesso em JPG na pasta Downloads/${folderName}!`, "success");
+      } else {
+        downloadPhotosBtn.innerText = `📸 Tentar Baixar Fotos Novamente`;
+        if (downloadPhotosProgressText) {
+          downloadPhotosProgressText.innerHTML = `❌ Falha ao converter e baixar fotos. Verifique a conexão com a internet.`;
+        }
+        showFeedback("Falha ao baixar as fotos do anúncio.", "error");
+      }
+    });
+  }
 
   // Sincronização em massa de páginas de busca
   if (syncSearchBtn) {

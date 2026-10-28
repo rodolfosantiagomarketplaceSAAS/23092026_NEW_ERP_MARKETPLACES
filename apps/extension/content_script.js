@@ -528,6 +528,215 @@
   }
 
   /**
+   * Extração Completa de Fotos do Anúncio (Mercado Livre e Shopee)
+   * Coleta da Galeria DOM, LD+JSON e Scripts Preload, normalizando para URLs em resolução máxima.
+   */
+  function extractAllListingImages() {
+    const images = [];
+    const seenIds = new Set();
+    const seenUrls = new Set();
+
+    function addImage(rawUrl) {
+      if (!rawUrl || typeof rawUrl !== "string") return;
+      let url = rawUrl.trim();
+      if (url.startsWith("//")) url = "https:" + url;
+      if (url.startsWith("http://")) url = url.replace("http://", "https://");
+      if (!url.startsWith("https://")) return;
+
+      // Filtra sprites, ícones de UI e pixels de rastreamento
+      if (
+        url.includes("pixel.gif") ||
+        url.includes("clear.png") ||
+        url.includes("sprite") ||
+        url.includes("ui-pdp-icon") ||
+        url.includes("pt_logo_large_plus") ||
+        url.includes("logo_mercadolivre") ||
+        url.includes("feedback")
+      ) {
+        return;
+      }
+
+      if (isMercadoLivre) {
+        // Padrão de imagens de produtos no mlstatic:
+        // D_NQ_NP_2X_716942-MLB5147833041_092022-F.webp
+        // D_NQ_NP_716942-MLB5147833041_092022-O.webp
+        // D_716942-MLB5147833041_092022-O.jpg
+        const mlMatch = url.match(
+          /(?:D_NQ_NP_(?:2X_)?|D_)([0-9]+-[A-Za-z0-9]+_[0-9]+|[0-9]+-MLA[0-9]+_[0-9]+|[0-9]+-[A-Z]+[0-9]+_[0-9]+)/i
+        );
+        if (mlMatch) {
+          const photoId = mlMatch[1];
+          if (seenIds.has(photoId)) return;
+          seenIds.add(photoId);
+
+          // Candidatos de altíssima resolução para Mercado Livre:
+          // 1) 2X Zoom (-F) - Maior resolução possível gerada pelo ML (até 1920px)
+          // 2) 2X Original (-O) - Resolução original do upload em 2X
+          // 3) Standard Original (-O)
+          // 4) JPG direto (-O.jpg)
+          const highResUrl = `https://http2.mlstatic.com/D_NQ_NP_2X_${photoId}-F.webp`;
+          const fallback2x = `https://http2.mlstatic.com/D_NQ_NP_2X_${photoId}-O.webp`;
+          const fallbackStd = `https://http2.mlstatic.com/D_NQ_NP_${photoId}-O.webp`;
+          const fallbackJpg = `https://http2.mlstatic.com/D_NQ_NP_2X_${photoId}-O.jpg`;
+          images.push({
+            id: photoId,
+            primaryUrl: highResUrl,
+            fallbacks: [fallback2x, fallbackStd, fallbackJpg, url],
+            originalUrl: url,
+          });
+          return;
+        }
+      } else if (isShopee) {
+        // Padrão de imagens Shopee (susercontent.com e shopee.com.br)
+        if (url.includes("susercontent.com/file/") || url.includes("shopee.com.br/file/")) {
+          const parts = url.split("/file/");
+          if (parts.length > 1) {
+            let hash = parts[1].split(/[?#@]/)[0];
+            hash = hash.replace(/_tn$|_xxhdpi$/, "").replace(/\.(webp|jpg|jpeg|png)$/, "");
+            if (hash && hash.length >= 10) {
+              if (seenIds.has(hash)) return;
+              seenIds.add(hash);
+
+              // URL original descompactada da CDN Shopee (resolução nativa do upload)
+              const highResUrl = `https://down-br.img.susercontent.com/file/${hash}`;
+              images.push({
+                id: hash,
+                primaryUrl: highResUrl,
+                fallbacks: [`https://cf.shopee.com.br/file/${hash}`, url],
+                originalUrl: url,
+              });
+              return;
+            }
+          }
+        }
+      }
+
+      if (!seenUrls.has(url)) {
+        seenUrls.add(url);
+        images.push({
+          id: `img_${images.length + 1}`,
+          primaryUrl: url,
+          fallbacks: [],
+          originalUrl: url,
+        });
+      }
+    }
+
+    // 1. Coleta de Scripts / Preloaded State
+    try {
+      const scripts = document.querySelectorAll("script");
+      for (const script of scripts) {
+        const content = script.textContent || "";
+        if (!content) continue;
+
+        if (isMercadoLivre && (content.includes('"pictures"') || content.includes("__PRELOADED_STATE__"))) {
+          const picRegex = /"pictures"\s*:\s*(\[[^\]]+\])/g;
+          let match;
+          while ((match = picRegex.exec(content)) !== null) {
+            try {
+              const parsed = JSON.parse(match[1]);
+              if (Array.isArray(parsed)) {
+                for (const p of parsed) {
+                  if (p.url) addImage(p.url);
+                  if (p.secure_url) addImage(p.secure_url);
+                  if (p.id) addImage(`https://http2.mlstatic.com/D_NQ_NP_2X_${p.id}-F.webp`);
+                }
+              }
+            } catch {}
+          }
+          const mlMatches = content.match(/https:\/\/http2\.mlstatic\.com\/D_NQ_NP_[^"'\s\)\\,]+/g);
+          if (mlMatches) {
+            for (const u of mlMatches) addImage(u);
+          }
+        }
+
+        if (isShopee && (content.includes('"images"') || content.includes('"image"'))) {
+          const shopeeMatches = content.match(/"(?:images|image)"\s*:\s*(\[[^\]]+\]|"[a-zA-Z0-9_-]+")/g);
+          if (shopeeMatches) {
+            for (const sm of shopeeMatches) {
+              const valMatch = sm.match(/:\s*(.*)/);
+              if (valMatch) {
+                try {
+                  const val = JSON.parse(valMatch[1]);
+                  if (Array.isArray(val)) {
+                    for (const h of val) {
+                      if (typeof h === "string") {
+                        if (h.startsWith("http")) addImage(h);
+                        else addImage(`https://down-br.img.susercontent.com/file/${h}`);
+                      }
+                    }
+                  } else if (typeof val === "string") {
+                    if (val.startsWith("http")) addImage(val);
+                    else addImage(`https://down-br.img.susercontent.com/file/${val}`);
+                  }
+                } catch {}
+              }
+            }
+          }
+        }
+      }
+    } catch {}
+
+    // 2. Coleta de LD+JSON
+    try {
+      const jsonLd = extractFromJsonLd();
+      if (jsonLd?.image) {
+        if (Array.isArray(jsonLd.image)) {
+          for (const u of jsonLd.image) addImage(u);
+        } else {
+          addImage(jsonLd.image);
+        }
+      }
+    } catch {}
+
+    // 3. Coleta da Galeria DOM
+    if (isMercadoLivre) {
+      const zoomEls = document.querySelectorAll(
+        ".ui-pdp-gallery img[data-zoom], img.ui-pdp-image[data-zoom], img[data-zoom]"
+      );
+      zoomEls.forEach((el) => {
+        addImage(el.getAttribute("data-zoom"));
+        addImage(el.getAttribute("data-src"));
+        addImage(el.getAttribute("src"));
+      });
+
+      const galleryImgs = document.querySelectorAll(
+        ".ui-pdp-gallery figure img, .ui-pdp-gallery__figure img, span.ui-pdp-gallery__wrapper img, label.ui-pdp-gallery__label img, .ui-pdp-gallery__thumbnail img, img.ui-pdp-image"
+      );
+      galleryImgs.forEach((el) => {
+        addImage(el.getAttribute("data-zoom"));
+        addImage(el.getAttribute("data-src"));
+        addImage(el.getAttribute("src"));
+      });
+    } else if (isShopee) {
+      const shopeeImgs = document.querySelectorAll(
+        'picture img, div[class*="product-briefing"] img, div[class*="image-carousel"] img, div[class*="carousel"] img'
+      );
+      shopeeImgs.forEach((el) => {
+        addImage(el.getAttribute("src"));
+        addImage(el.getAttribute("data-src"));
+      });
+
+      const bgElements = document.querySelectorAll(
+        'div[style*="down-br.img.susercontent.com"], div[style*="susercontent.com"], div[style*="cf.shopee.com.br"]'
+      );
+      bgElements.forEach((el) => {
+        const style = el.getAttribute("style") || "";
+        const bgMatch = style.match(/url\(["']?([^"')]+)["']?\)/);
+        if (bgMatch) addImage(bgMatch[1]);
+      });
+    }
+
+    // 4. Fallback com OpenGraph se nenhuma foto detectada
+    if (images.length === 0) {
+      const ogImg = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
+      if (ogImg) addImage(ogImg);
+    }
+
+    return images;
+  }
+
+  /**
    * Extração Específica: MERCADO LIVRE (Multicamada)
    */
   function extractMercadoLivre() {
@@ -856,6 +1065,7 @@
       promo_badge: promoBadge,
       permalink,
       thumbnail_url: thumbnailUrl,
+      pictures: extractAllListingImages(),
       sales_count_approx: salesCount,
       listing_created_at: creationDate,
       listing_type: listingType,
@@ -989,6 +1199,7 @@
       promo_badge: promoBadge,
       permalink: normalizeUrl(window.location.href.split("?")[0]),
       thumbnail_url: thumbnailUrl,
+      pictures: extractAllListingImages(),
       sales_count_approx: salesCount,
       listing_created_at: creationDate,
       listing_type: "shopee_padrao",
@@ -1242,6 +1453,42 @@
       });
     };
 
+    // Botão para baixar fotos do anúncio em JPG alta resolução
+    const photoBtn = document.createElement("button");
+    photoBtn.id = "crm-erp-floating-photo-btn";
+    photoBtn.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:5px;">
+        <path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/>
+        <circle cx="12" cy="13" r="4"/>
+      </svg>
+      Baixar Fotos (JPG)
+    `;
+    photoBtn.title = "Baixar todas as fotos do anúncio em JPG na melhor qualidade";
+    photoBtn.style.cssText = `
+      background: transparent;
+      color: #38BDF8;
+      border: none;
+      border-left: 1px solid #334155;
+      padding: 9px 12px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      outline: none;
+      transition: background-color 0.2s;
+    `;
+    photoBtn.onmouseover = () => {
+      photoBtn.style.backgroundColor = "#1E293B";
+    };
+    photoBtn.onmouseout = () => {
+      photoBtn.style.backgroundColor = "transparent";
+    };
+    photoBtn.onclick = () => {
+      triggerDownloadPhotosContentScript();
+    };
+
     // Botão discreto para fechar e desativar o botão flutuante
     const closeBtn = document.createElement("button");
     closeBtn.id = "crm-erp-floating-close";
@@ -1280,8 +1527,40 @@
     };
 
     container.appendChild(btn);
+    container.appendChild(photoBtn);
     container.appendChild(closeBtn);
     document.body.appendChild(container);
+  }
+
+  async function triggerDownloadPhotosContentScript() {
+    const data = extractProductData();
+    const photos = data?.pictures && data.pictures.length > 0 ? data.pictures : extractAllListingImages();
+    if (!photos || photos.length === 0) {
+      showToast("Nenhuma foto encontrada para download neste anúncio.", "error");
+      return;
+    }
+
+    const folderName = `Fotos_${data?.external_id || (isMercadoLivre ? "MercadoLivre" : "Shopee")}`;
+    showToast(`Iniciando download de ${photos.length} fotos em JPG na melhor qualidade...`, "info");
+
+    chrome.runtime.sendMessage(
+      {
+        action: "DOWNLOAD_PHOTOS",
+        payload: {
+          photos,
+          folderName,
+          title: data?.title || "",
+          externalId: data?.external_id || "",
+        },
+      },
+      (res) => {
+        if (chrome.runtime.lastError || !res || !res.success) {
+          showToast(`Falha no download das fotos: ${res?.error || chrome.runtime.lastError?.message || "Erro"}`, "error");
+        } else {
+          showToast(`✓ ${res.downloadedCount} fotos baixadas com sucesso em JPG na pasta Downloads (${folderName})!`, "success");
+        }
+      }
+    );
   }
 
   // ==============================================================================
@@ -1845,6 +2124,20 @@
             sendResponse({ success: true, isSearch: false, data: rawData });
           });
       }
+      return true;
+    }
+
+    if (request.action === "GET_LISTING_IMAGES") {
+      const rawData = extractProductData();
+      const pictures =
+        rawData?.pictures && rawData.pictures.length > 0 ? rawData.pictures : extractAllListingImages();
+      sendResponse({
+        success: true,
+        pictures,
+        title: rawData?.title || "",
+        external_id: rawData?.external_id || "",
+        platform: isMercadoLivre ? "mercadolivre" : "shopee",
+      });
       return true;
     }
 

@@ -730,6 +730,133 @@ async function handleGetCompetitorFees(req) {
   return await res.json();
 }
 
+async function fetchHighResBlob(photo) {
+  const candidates = [
+    photo?.primaryUrl,
+    ...(photo?.fallbacks || []),
+    photo?.originalUrl || photo?.url || (typeof photo === "string" ? photo : null),
+  ].filter(Boolean);
+
+  for (const url of candidates) {
+    try {
+      const res = await fetch(url, { cache: "force-cache" });
+      if (res.ok) {
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("text/html")) continue;
+        const blob = await res.blob();
+        if (blob && blob.size > 1024) {
+          return blob;
+        }
+      }
+    } catch {}
+  }
+  throw new Error("Não foi possível carregar a imagem em nenhuma das resoluções disponíveis.");
+}
+
+async function convertBlobToJpg(blob) {
+  const bitmap = await createImageBitmap(blob);
+  const width = bitmap.width;
+  const height = bitmap.height;
+
+  let jpgBlob;
+  if (typeof OffscreenCanvas !== "undefined") {
+    const canvas = new OffscreenCanvas(width, height);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    jpgBlob = await canvas.convertToBlob({ type: "image/jpeg", quality: 1.0 });
+  } else {
+    throw new Error("OffscreenCanvas não suportado");
+  }
+
+  if (bitmap.close) bitmap.close();
+  return jpgBlob;
+}
+
+async function blobToDataUrl(blob) {
+  if (typeof FileReader !== "undefined") {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+  const buffer = await blob.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    const chunk = bytes.subarray(i, i + chunkSize);
+    binary += String.fromCharCode.apply(null, chunk);
+  }
+  return `data:${blob.type || "image/jpeg"};base64,${btoa(binary)}`;
+}
+
+async function handleDownloadSinglePhoto(payload) {
+  const { photo, folderName = "Fotos_Anuncio", index = 1, total = 1 } = payload || {};
+  const blob = await fetchHighResBlob(photo);
+  const jpgBlob = await convertBlobToJpg(blob);
+  const dataUrl = await blobToDataUrl(jpgBlob);
+
+  const cleanFolder = (folderName || "Fotos_Anuncio").replace(/[\\/:*?"<>|]/g, "_").trim();
+  const indexStr = String(index).padStart(2, "0");
+  const filename = `${cleanFolder}/foto_${indexStr}.jpg`;
+
+  if (chrome.downloads && chrome.downloads.download) {
+    const downloadId = await new Promise((resolve, reject) => {
+      chrome.downloads.download(
+        {
+          url: dataUrl,
+          filename,
+          saveAs: false,
+          conflictAction: "uniquify",
+        },
+        (id) => {
+          if (chrome.runtime.lastError) reject(chrome.runtime.lastError);
+          else resolve(id);
+        }
+      );
+    });
+    return { success: true, downloadId, filename };
+  } else {
+    return { success: true, dataUrl, filename, requiresClientDownload: true };
+  }
+}
+
+async function handleDownloadPhotos(payload) {
+  const { photos, folderName = "Fotos_Anuncio", title = "" } = payload || {};
+  if (!Array.isArray(photos) || photos.length === 0) {
+    return { success: false, error: "Nenhuma foto fornecida para download." };
+  }
+
+  let downloadedCount = 0;
+  const errors = [];
+
+  for (let i = 0; i < photos.length; i++) {
+    try {
+      await handleDownloadSinglePhoto({
+        photo: photos[i],
+        folderName,
+        index: i + 1,
+        total: photos.length,
+      });
+      downloadedCount++;
+    } catch (err) {
+      console.warn(`[Background] Erro na foto ${i + 1}:`, err);
+      errors.push({ index: i + 1, error: err.message });
+    }
+  }
+
+  return {
+    success: downloadedCount > 0,
+    downloadedCount,
+    total: photos.length,
+    errors: errors.length > 0 ? errors : undefined,
+  };
+}
+
 const handlers = {
   ERP_SESSION: (req) => handleErpSession(req),
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
@@ -737,6 +864,8 @@ const handlers = {
   GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),
   GET_COMPETITOR_FEES: (req) => handleGetCompetitorFees(req),
   INSPECT_COMPETITOR_LINK: (req) => handleInspectCompetitorLink(req.payload),
+  DOWNLOAD_SINGLE_PHOTO: (req) => handleDownloadSinglePhoto(req.payload),
+  DOWNLOAD_PHOTOS: (req) => handleDownloadPhotos(req.payload),
   GET_STATUS: async () => {
     const [{ connectionStatus }, config] = await Promise.all([
       chrome.storage.local.get(["connectionStatus"]),
