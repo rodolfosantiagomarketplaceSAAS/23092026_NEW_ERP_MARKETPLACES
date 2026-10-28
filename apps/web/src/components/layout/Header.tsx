@@ -7,10 +7,16 @@ import {
   ChevronDown,
   Building2,
   PlugZap,
+  Download,
   User,
   ShieldCheck,
   AlertCircle,
 } from "lucide-react";
+import {
+  getCurrentUserProfileAndOrg,
+  type UserProfileInfo,
+  type OrganizationInfo,
+} from "@/lib/services/auth";
 
 interface HeaderProps {
   platformName?: string;
@@ -19,6 +25,8 @@ interface HeaderProps {
 export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
   const [selectedOrg, setSelectedOrg] = useState("Carregando loja...");
   const [hasConnectedChannel, setHasConnectedChannel] = useState(false);
+  const [userProfile, setUserProfile] = useState<UserProfileInfo | null>(null);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
@@ -47,11 +55,35 @@ export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
         setHasConnectedChannel(false);
       }
     }
+
+    async function loadAuth() {
+      try {
+        const authData = await getCurrentUserProfileAndOrg();
+        if (isMounted) {
+          setIsAuthenticated(authData.isAuthenticated);
+          setUserProfile(authData.user);
+        }
+      } catch {
+        // Ignora
+      }
+    }
+
     checkIntegrations();
+    loadAuth();
+
     return () => {
       isMounted = false;
     };
   }, []);
+
+  const userInitials = userProfile?.full_name
+    ? userProfile.full_name
+        .split(" ")
+        .map((n) => n[0])
+        .slice(0, 2)
+        .join("")
+        .toUpperCase()
+    : "RS";
 
   return (
     <header className="h-12 bg-white border-b border-[#E2E8F0] px-4 flex items-center justify-between sticky top-0 z-30 shadow-xs">
@@ -70,7 +102,7 @@ export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
       <div className="flex items-center space-x-3 text-xs">
         {/* Status da Extensão Chrome */}
         <Link
-          href="/configuracoes"
+          href="/configuracoes?tab=api"
           title="Extensão pronta para receber capturas. Clique para ver credenciais e configurar."
           className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-medium bg-sky-50 border-sky-200 text-sky-800 hover:bg-sky-100 transition-colors cursor-pointer"
         >
@@ -80,6 +112,17 @@ export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
           <PlugZap className="w-3 h-3 text-sky-600" />
           <span>Extensão Pronta (Local)</span>
         </Link>
+
+        {/* Botão de Download da Extensão Chrome (apenas após login) */}
+        <a
+          href="/api/extension/download"
+          download="erp-marketplaces-extension.zip"
+          title="Baixar pacote compactado da extensão Chrome (.zip) para instalar no seu PC"
+          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border text-[11px] font-semibold bg-emerald-50 border-emerald-300 text-emerald-800 hover:bg-emerald-100 transition-colors cursor-pointer shadow-2xs"
+        >
+          <Download className="w-3.5 h-3.5 text-emerald-700 stroke-[2.2]" />
+          <span>Baixar Extensão (.zip)</span>
+        </a>
 
         {/* Seletor de Organização / Empresa (Reflete status real) */}
         <Link
@@ -113,11 +156,15 @@ export function Header({ platformName = "Mercado Livre" }: HeaderProps) {
         {/* Perfil do Usuário */}
         <div className="flex items-center space-x-2 pl-2 border-l border-[#E2E8F0]">
           <div className="w-7 h-7 rounded-full bg-[#0F172A] text-white flex items-center justify-center font-bold text-[10px]">
-            RS
+            {userInitials}
           </div>
           <div className="hidden md:flex flex-col text-left">
-            <span className="text-[11px] font-semibold text-[#0F172A] leading-tight">Rodolfo S.</span>
-            <span className="text-[10px] text-[#64748B] leading-tight">Admin Master</span>
+            <span className="text-[11px] font-semibold text-[#0F172A] leading-tight">
+              {userProfile?.full_name || "Usuário Master"}
+            </span>
+            <span className="text-[10px] text-[#64748B] leading-tight">
+              {userProfile?.role === "master_admin" ? "Admin Master" : userProfile?.role || "Operador"}
+            </span>
           </div>
         </div>
       </div>

@@ -24,6 +24,7 @@ import {
   Link as LinkIcon,
   Store,
   AlertCircle,
+  Download,
 } from "lucide-react";
 
 interface MlAccount {
@@ -761,6 +762,41 @@ export function ConfiguracoesDashboard() {
       {/* CONTEÚDO 2: EXTENSÃO & CHAVES DE API */}
       {activeTab === "api" && (
         <div className="space-y-4">
+          {/* Card de Download Autenticado da Extensão Chrome */}
+          <div className="bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 border border-indigo-700/50 rounded-lg p-5 text-white shadow-md relative overflow-hidden">
+            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1.5 max-w-2xl">
+                <div className="flex items-center gap-2">
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 flex items-center gap-1">
+                    <ShieldCheck className="w-3 h-3 text-emerald-400" />
+                    Download Autenticado Liberado
+                  </span>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-sky-500/20 text-sky-200 border border-sky-400/30">
+                    Versão 1.1.0 (.ZIP)
+                  </span>
+                </div>
+                <h3 className="text-base font-bold text-white flex items-center gap-2">
+                  <PlugZap className="w-5 h-5 text-sky-400" />
+                  Instalar Extensão no Computador de Trabalho
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Baixe o arquivo compactado (.zip) da extensão para instalar no Google Chrome deste ou de qualquer outro PC onde você for operar o ERP. A extensão captura dados dos concorrentes no Mercado Livre e Shopee e sincroniza com o ERP.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 shrink-0">
+                <a
+                  href="/api/extension/download"
+                  download="erp-marketplaces-extension.zip"
+                  className="px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-slate-950 font-bold text-xs rounded-md shadow-md hover:shadow-lg flex items-center justify-center gap-2 transition-all cursor-pointer"
+                  title="Baixar pacote da extensão (.zip) protegido por login"
+                >
+                  <Download className="w-4 h-4 text-slate-950 stroke-[2.5]" />
+                  <span>Baixar Extensão (.ZIP)</span>
+                </a>
+              </div>
+            </div>
+          </div>
           {/* Banner de Status da Conexão */}
           <div className="bg-white border border-emerald-200 rounded p-4 flex items-center justify-between shadow-2xs">
             <div className="flex items-center space-x-3">
@@ -906,12 +942,12 @@ export function ConfiguracoesDashboard() {
 
             <div className="grid grid-cols-1 md:grid-cols-4 gap-3 pt-1">
               <div className="bg-slate-50 border border-slate-200 p-3 rounded space-y-1.5">
-                <div className="w-5 h-5 rounded-full bg-slate-900 text-white text-[11px] font-bold flex items-center justify-center">
+                <div className="w-5 h-5 rounded-full bg-emerald-600 text-white text-[11px] font-bold flex items-center justify-center">
                   1
                 </div>
-                <div className="text-xs font-bold text-slate-800">Abra Extensões</div>
+                <div className="text-xs font-bold text-slate-800">Baixar Arquivo .ZIP</div>
                 <p className="text-[11px] text-slate-500">
-                  No Chrome, acesse <code>chrome://extensions/</code> e ative a chave <strong>Modo do desenvolvedor</strong> no canto superior direito.
+                  Clique em <strong>Baixar Extensão (.ZIP)</strong> acima para salvar <code>erp-marketplaces-extension.zip</code> neste computador.
                 </p>
               </div>
 
@@ -919,11 +955,9 @@ export function ConfiguracoesDashboard() {
                 <div className="w-5 h-5 rounded-full bg-slate-900 text-white text-[11px] font-bold flex items-center justify-center">
                   2
                 </div>
-                <div className="text-xs font-bold text-slate-800">Carregar Extensão</div>
+                <div className="text-xs font-bold text-slate-800">Extrair Pasta</div>
                 <p className="text-[11px] text-slate-500">
-                  Clique em <strong>Carregar sem compactação</strong> e selecione a pasta:
-                  <br />
-                  <code className="text-[10px] break-all">apps/extension</code>
+                  Clique com botão direito no arquivo baixado e selecione <strong>Extrair tudo...</strong> para uma pasta de sua escolha (ex: Documentos).
                 </p>
               </div>
 
@@ -931,19 +965,19 @@ export function ConfiguracoesDashboard() {
                 <div className="w-5 h-5 rounded-full bg-slate-900 text-white text-[11px] font-bold flex items-center justify-center">
                   3
                 </div>
-                <div className="text-xs font-bold text-slate-800">Configure o Popup</div>
+                <div className="text-xs font-bold text-slate-800">Modo Desenvolvedor</div>
                 <p className="text-[11px] text-slate-500">
-                  Clique no ícone da extensão no Chrome. Preencha a URL <code>{erpUrl}</code> e clique em <strong>Salvar</strong> e <strong>Testar Conexão</strong>.
+                  No Chrome, acesse <code>chrome://extensions/</code> e marque a chave <strong>Modo do desenvolvedor</strong> no topo direito.
                 </p>
               </div>
 
               <div className="bg-slate-50 border border-slate-200 p-3 rounded space-y-1.5">
-                <div className="w-5 h-5 rounded-full bg-slate-900 text-white text-[11px] font-bold flex items-center justify-center">
+                <div className="w-5 h-5 rounded-full bg-indigo-600 text-white text-[11px] font-bold flex items-center justify-center">
                   4
                 </div>
-                <div className="text-xs font-bold text-slate-800">Captura com 1 Clique</div>
+                <div className="text-xs font-bold text-slate-800">Carregar sem Compactação</div>
                 <p className="text-[11px] text-slate-500">
-                  Abra qualquer anúncio no Mercado Livre ou Shopee e clique no botão flutuante <strong>Capturar Concorrente (ERP)</strong>.
+                  Clique em <strong>Carregar sem compactação</strong> e selecione a pasta extraída no Passo 2. A extensão estará pronta e conectada!
                 </p>
               </div>
             </div>

@@ -18,6 +18,7 @@ import {
   User,
   ShieldCheck,
   UserCheck,
+  Download,
 } from "lucide-react";
 import {
   getCurrentUserProfileAndOrg,
@@ -217,6 +218,30 @@ function SidebarContent() {
             );
           })}
         </nav>
+
+        {/* Botão de Download da Extensão Chrome (apenas após login) */}
+        {isAuthenticated && (
+          <div className="px-2 pt-2 border-t border-slate-800/80">
+            <a
+              href="/api/extension/download"
+              download="erp-marketplaces-extension.zip"
+              title="Baixar pacote da extensão Chrome (.zip) para este PC"
+              className={`flex items-center rounded-md px-2.5 py-2 text-xs font-semibold transition-all group bg-emerald-950/40 border border-emerald-500/30 text-emerald-200 hover:bg-emerald-900/60 hover:text-white ${
+                collapsed ? "justify-center" : "justify-between"
+              }`}
+            >
+              <div className="flex items-center space-x-2.5 overflow-hidden">
+                <Download className="w-4 h-4 shrink-0 text-emerald-400 group-hover:text-white transition-transform group-hover:scale-110" />
+                {!collapsed && <span className="truncate">Baixar Extensão</span>}
+              </div>
+              {!collapsed && (
+                <span className="text-[9px] px-1.5 py-0.5 rounded font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                  .ZIP
+                </span>
+              )}
+            </a>
+          </div>
+        )}
       </div>
 
       {/* Rodapé da Sidebar: Usuário Logado & Logout */}

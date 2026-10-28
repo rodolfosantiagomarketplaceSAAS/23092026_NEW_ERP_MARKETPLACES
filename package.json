@@ -10,7 +10,8 @@
     "dev": "npm --workspace=@crm/web run dev",
     "build": "npm --workspace=@crm/web run build",
     "lint": "npm --workspace=@crm/web run lint",
-    "typecheck": "tsc --noEmit -p packages/types/tsconfig.json"
+    "typecheck": "tsc --noEmit -p packages/types/tsconfig.json",
+    "pack:extension": "node scripts/pack-extension.js"
   },
   "devDependencies": {
     "typescript": "^5.4.5"
