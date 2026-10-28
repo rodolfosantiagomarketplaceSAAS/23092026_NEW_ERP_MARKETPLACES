@@ -540,11 +540,29 @@ async function handleInspectCompetitorLink(payload) {
   }
 }
 
+async function handleGetCompetitorFees(req) {
+  const config = await getStoredConfig();
+  const params = new URLSearchParams();
+  if (req.platform) params.set("platform", req.platform);
+  if (req.price) params.set("price", String(req.price));
+  if (req.listing_type) params.set("listing_type", req.listing_type);
+  if (req.category_id) params.set("category_id", req.category_id);
+  if (req.breadcrumb) params.set("breadcrumb", req.breadcrumb);
+  if (req.title) params.set("title", req.title);
+
+  const res = await fetch(`${config.erpUrl}/api/extension/fees?${params.toString()}`, {
+    headers: authHeaders(config.apiToken),
+  });
+  if (!res.ok) throw new Error(`Erro HTTP ${res.status}`);
+  return await res.json();
+}
+
 const handlers = {
   ERP_SESSION: (req) => handleErpSession(req),
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
   SYNC_SEARCH_ITEMS: (req) => handleSyncSearchItems(req.erpUrl, req.payload),
   GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),
+  GET_COMPETITOR_FEES: (req) => handleGetCompetitorFees(req),
   INSPECT_COMPETITOR_LINK: (req) => handleInspectCompetitorLink(req.payload),
   GET_STATUS: async () => {
     const [{ connectionStatus }, config] = await Promise.all([

@@ -743,6 +743,70 @@
     const salesCount = extractMlSalesCount();
     const creationDate = extractMlCreationDate(externalId, thumbnailUrl);
 
+    // 11. Tipo de Anúncio (Clássico vs Premium), Categoria, Tarifa ML e Frete
+    let listingType = "gold_special"; // Clássico por padrão
+    const scriptsText = bodyHtml;
+    const scriptListingTypeMatch = scriptsText.match(/"listing_type_id"\s*:\s*"(gold_pro|gold_special)"/i);
+    if (scriptListingTypeMatch) {
+      listingType = scriptListingTypeMatch[1].toLowerCase();
+    } else {
+      const installEl =
+        document.querySelector(".ui-pdp-price__subtitles") ||
+        document.querySelector(".ui-pdp-installments") ||
+        document.querySelector(".ui-pdp-price");
+      const installText = installEl?.innerText || "";
+      if (/sem\s+juros/i.test(installText) && !/cart[ãa]o\s+mercado\s+pago/i.test(installText)) {
+        listingType = "gold_pro"; // Premium (parcelamento sem juros)
+      }
+    }
+
+    let categoryId = "";
+    const catMatch =
+      scriptsText.match(/"category_id"\s*:\s*"(MLB\d+)"/i) ||
+      scriptsText.match(/"categoryId"\s*:\s*"(MLB\d+)"/i);
+    if (catMatch) {
+      categoryId = catMatch[1];
+    }
+
+    const breadcrumbEls = document.querySelectorAll(".andes-breadcrumb__item, .andes-breadcrumb a");
+    const breadcrumb = Array.from(breadcrumbEls)
+      .map((el) => (el.innerText || "").trim())
+      .filter(Boolean)
+      .join(" > ");
+
+    const isPremium = listingType === "gold_pro";
+    let saleFeePct = isPremium ? 16.5 : 11.5;
+    let saleFeeAmount = currentPrice > 0 ? Number(((currentPrice * saleFeePct) / 100).toFixed(2)) : 0;
+
+    let shippingCost = 0;
+    if (currentPrice > 0) {
+      if (currentPrice < 19) shippingCost = 6.25;
+      else if (currentPrice < 49) shippingCost = 6.5;
+      else if (currentPrice < 79) shippingCost = 10.25;
+      else shippingCost = 19.85;
+    }
+
+    // Se houver informação explícita de Tarifa/Frete já renderizada no DOM, aproveita os valores exatos
+    const pageBodyText = document.body?.innerText || "";
+    const domTarifaMatch = pageBodyText.match(/Tarifa:\s*R\$\s*([\d.,]+)/i);
+    const domFreteMatch = pageBodyText.match(/Frete:\s*R\$\s*([\d.,]+)/i);
+    if (domTarifaMatch) {
+      const parsedT = parseBrlCurrency(domTarifaMatch[1]);
+      if (parsedT > 0 && parsedT < currentPrice) {
+        saleFeeAmount = parsedT;
+        saleFeePct = Number(((saleFeeAmount / currentPrice) * 100).toFixed(1));
+      }
+    }
+    if (domFreteMatch) {
+      const parsedF = parseBrlCurrency(domFreteMatch[1]);
+      if (parsedF > 0 && parsedF < currentPrice) {
+        shippingCost = parsedF;
+      }
+    }
+
+    const netReceivable =
+      currentPrice > 0 ? Number(Math.max(0, currentPrice - saleFeeAmount - shippingCost).toFixed(2)) : 0;
+
     return {
       platform: "mercadolivre",
       external_id: externalId,
@@ -757,6 +821,14 @@
       thumbnail_url: thumbnailUrl,
       sales_count_approx: salesCount,
       listing_created_at: creationDate,
+      listing_type: listingType,
+      listing_type_label: isPremium ? "Premium" : "Clássico",
+      category_id: categoryId || null,
+      breadcrumb: breadcrumb || null,
+      sale_fee_amount: saleFeeAmount,
+      sale_fee_pct: saleFeePct,
+      shipping_cost: shippingCost,
+      net_receivable: netReceivable,
       rating: 4.8,
     };
   }
@@ -859,6 +931,13 @@
     const salesCount = extractShopeeSalesCount();
     const creationDate = extractShopeeCreationDate();
 
+    // 10. Tarifa e Frete Shopee (20% Programa Frete Grátis + R$ 4,00 fixo)
+    const shopeePct = 20;
+    const shopeeFixed = currentPrice >= 8 ? 4.0 : Number((currentPrice * 0.5).toFixed(2));
+    const saleFeeAmount = currentPrice > 0 ? Number(((currentPrice * shopeePct) / 100 + shopeeFixed).toFixed(2)) : 0;
+    const shippingCost = 0;
+    const netReceivable = currentPrice > 0 ? Number(Math.max(0, currentPrice - saleFeeAmount).toFixed(2)) : 0;
+
     return {
       platform: "shopee",
       external_id: externalId,
@@ -873,6 +952,12 @@
       thumbnail_url: thumbnailUrl,
       sales_count_approx: salesCount,
       listing_created_at: creationDate,
+      listing_type: "shopee_padrao",
+      listing_type_label: "Shopee Padrão",
+      sale_fee_amount: saleFeeAmount,
+      sale_fee_pct: shopeePct,
+      shipping_cost: shippingCost,
+      net_receivable: netReceivable,
       rating: 4.7,
     };
   }

@@ -113,7 +113,7 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         currentScrapedData = response.data;
         const formattedPrice = currentScrapedData.current_price
-          ? `R$ ${currentScrapedData.current_price.toFixed(2)}`
+          ? `R$ ${currentScrapedData.current_price.toFixed(2).replace(".", ",")}`
           : "Preço não detectado";
         const salesCount = Number(currentScrapedData.sales_count_approx || 0);
         const formattedSales =
@@ -133,6 +133,26 @@ document.addEventListener("DOMContentLoaded", async () => {
           }
         }
 
+        const formatMoney = (v) =>
+          typeof v === "number" && !isNaN(v) ? `R$ ${v.toFixed(2).replace(".", ",")}` : "—";
+
+        const initialFeeText =
+          currentScrapedData.sale_fee_amount !== undefined
+            ? `${formatMoney(currentScrapedData.sale_fee_amount)} (${currentScrapedData.sale_fee_pct || 11.5}% • ${
+                currentScrapedData.listing_type_label || "Clássico"
+              })`
+            : "Calculando...";
+        const initialShippingText =
+          currentScrapedData.shipping_cost !== undefined
+            ? currentScrapedData.shipping_cost > 0
+              ? formatMoney(currentScrapedData.shipping_cost)
+              : "R$ 0,00 (Comprador / Programa)"
+            : "Calculando...";
+        const initialNetText =
+          currentScrapedData.net_receivable !== undefined
+            ? formatMoney(currentScrapedData.net_receivable)
+            : "Calculando...";
+
         pageInfoBox.innerHTML = `
           <div class="detected-prod">
             <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}</strong>
@@ -142,8 +162,47 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span>Vendedor: <strong>${currentScrapedData.seller_name || "Desconhecido"}</strong></span>
             <span>Vendas: <strong style="color:${salesColor};">${formattedSales}</strong></span>
             <span>Criado em: <strong style="color:#334155;">${formattedDate}</strong></span>
+            <div style="margin-top:4px; padding-top:4px; border-top:1px dashed #CBD5E1; display:flex; flex-direction:column; gap:2px;">
+              <span>Tarifa: <strong id="extSaleFeeVal" style="color:#DC2626;">${initialFeeText}</strong></span>
+              <span>Frete: <strong id="extShippingCostVal" style="color:#D97706;">${initialShippingText}</strong></span>
+              <span>Líquido Concorrente: <strong id="extNetVal" style="color:#059669;">${initialNetText}</strong></span>
+            </div>
           </div>
         `;
+
+        // Refina Tarifa e Frete junto à API Oficial do Mercado Livre via ERP
+        if (currentScrapedData.current_price > 0) {
+          chrome.runtime.sendMessage(
+            {
+              action: "GET_COMPETITOR_FEES",
+              platform: currentDetectedPlatform,
+              price: currentScrapedData.current_price,
+              listing_type: currentScrapedData.listing_type,
+              category_id: currentScrapedData.category_id,
+              breadcrumb: currentScrapedData.breadcrumb,
+              title: currentScrapedData.title,
+            },
+            (feeRes) => {
+              if (chrome.runtime.lastError || !feeRes || !feeRes.success) return;
+              const feeEl = document.getElementById("extSaleFeeVal");
+              const shipEl = document.getElementById("extShippingCostVal");
+              const netEl = document.getElementById("extNetVal");
+
+              if (feeEl && typeof feeRes.sale_fee_amount === "number") {
+                feeEl.innerText = `${formatMoney(feeRes.sale_fee_amount)} (${feeRes.sale_fee_pct}% • ${
+                  feeRes.listing_type_label || "Clássico"
+                })`;
+              }
+              if (shipEl && typeof feeRes.shipping_cost === "number") {
+                shipEl.innerText =
+                  feeRes.shipping_cost > 0 ? formatMoney(feeRes.shipping_cost) : "R$ 0,00 (Comprador / Programa)";
+              }
+              if (netEl && typeof feeRes.net_receivable === "number") {
+                netEl.innerText = formatMoney(feeRes.net_receivable);
+              }
+            }
+          );
+        }
 
         await loadMyListings(currentDetectedPlatform);
         captureNowBtn.style.display = "block";

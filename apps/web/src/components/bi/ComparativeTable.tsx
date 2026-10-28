@@ -50,6 +50,26 @@ function formatSales(sales?: number | null) {
   return `${count.toLocaleString("pt-BR")} venda${count === 1 ? "" : "s"}`;
 }
 
+function estimateCompetitorFees(price: number, platform = "mercadolivre") {
+  if (!price || price <= 0) return { fee: 0, pct: 0, shipping: 0 };
+  if (platform === "shopee") {
+    const pct = 20;
+    const fixed = price >= 8 ? 4.0 : price * 0.5;
+    return {
+      fee: Number(((price * pct) / 100 + fixed).toFixed(2)),
+      pct,
+      shipping: 0,
+    };
+  }
+  const pct = 11.5;
+  const fee = Number(((price * pct) / 100).toFixed(2));
+  let shipping = 19.85;
+  if (price < 19) shipping = 6.25;
+  else if (price < 49) shipping = 6.5;
+  else if (price < 79) shipping = 10.25;
+  return { fee, pct, shipping };
+}
+
 interface ComparativeTableProps {
   groups: ComparativeListingGroup[];
   highlightedIds?: Record<string, boolean>;
@@ -621,6 +641,25 @@ export function ComparativeTable({
                                   />
                                   {formatSales(topComp.sales_count_approx)}
                                 </span>
+                                {(() => {
+                                  const f = estimateCompetitorFees(topComp.current_price, group.my_listing.platform);
+                                  return (
+                                    <>
+                                      <span
+                                        className="inline-flex items-center gap-0.5 text-rose-700 bg-rose-50/90 border border-rose-200 px-1.5 py-0.2 rounded text-[9.5px] font-medium"
+                                        title={`Tarifa estimada do marketplace (${f.pct}%)`}
+                                      >
+                                        Tarifa: R$ {f.fee.toFixed(2).replace(".", ",")}
+                                      </span>
+                                      <span
+                                        className="inline-flex items-center gap-0.5 text-amber-800 bg-amber-50/90 border border-amber-200 px-1.5 py-0.2 rounded text-[9.5px] font-medium"
+                                        title="Custo estimado de envio/frete do vendedor"
+                                      >
+                                        Frete: R$ {f.shipping.toFixed(2).replace(".", ",")}
+                                      </span>
+                                    </>
+                                  );
+                                })()}
                               </div>
 
                               {/* Botão de Atualizar Dados ao lado do comparativo */}
@@ -891,6 +930,25 @@ export function ComparativeTable({
                                       />
                                       {formatSales(comp.sales_count_approx)}
                                     </span>
+                                    {(() => {
+                                      const f = estimateCompetitorFees(comp.current_price, group.my_listing.platform);
+                                      return (
+                                        <>
+                                          <span
+                                            className="inline-flex items-center gap-0.5 text-rose-700 bg-rose-50/90 border border-rose-200 px-1.5 py-0.2 rounded text-[9.5px] font-medium"
+                                            title={`Tarifa estimada do marketplace (${f.pct}%)`}
+                                          >
+                                            Tarifa: R$ {f.fee.toFixed(2).replace(".", ",")}
+                                          </span>
+                                          <span
+                                            className="inline-flex items-center gap-0.5 text-amber-800 bg-amber-50/90 border border-amber-200 px-1.5 py-0.2 rounded text-[9.5px] font-medium"
+                                            title="Custo estimado de envio/frete do vendedor"
+                                          >
+                                            Frete: R$ {f.shipping.toFixed(2).replace(".", ",")}
+                                          </span>
+                                        </>
+                                      );
+                                    })()}
                                   </div>
 
                                   {/* Botão de Atualizar Dados da Sublinha */}
