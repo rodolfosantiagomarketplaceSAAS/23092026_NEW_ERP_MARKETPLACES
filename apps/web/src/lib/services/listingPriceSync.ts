@@ -18,12 +18,18 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
   const supabase = createSupabaseAdminClient();
 
   try {
-    // 1. Busca dados do anúncio próprio
-    const { data: listing, error: listingErr } = await supabase
+    // 1. Busca dados do anúncio próprio (por UUID ou external_id)
+    let query = supabase
       .from("my_listings")
-      .select("id, user_id, organization_id, platform, external_id, current_price, original_price")
-      .eq("id", myListingId)
-      .maybeSingle();
+      .select("id, user_id, platform, external_id, current_price, original_price");
+
+    if (myListingId.includes("-") && myListingId.length === 36) {
+      query = query.eq("id", myListingId);
+    } else {
+      query = query.or(`id.eq.${myListingId},external_id.eq.${myListingId}`);
+    }
+
+    const { data: listing, error: listingErr } = await query.maybeSingle();
 
     if (listingErr || !listing) {
       return { success: false, myListingId, error: "Anúncio próprio não encontrado." };
@@ -42,7 +48,7 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
     let accessToken: string | null = null;
     const scope = {
       userId: listing.user_id,
-      organizationId: listing.organization_id || null,
+      organizationId: null,
     };
     try {
       accessToken = await getActiveMarketplaceToken("mercadolivre", scope);
@@ -124,18 +130,33 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
 
     // Prioridade 1: /seller-promotions/items/{cleanId}?app_version=v2
     if (promoData) {
-      const promoList = Array.isArray(promoData) ? promoData : promoData.results || [];
-      const activePromo = promoList.find(
+      const promoList = (Array.isArray(promoData) ? promoData : promoData.results || []) as any[];
+      const activePromos = promoList.filter(
         (p: any) =>
           (p.status === "started" || p.status === "active" || p.status === "pending" || p.status === "sync_requested") &&
           Number(p.price ?? p.deal_price ?? p.top_deal_price ?? 0) > 0
       );
 
-      if (activePromo) {
-        resolvedCurrentPrice = Number(activePromo.price ?? activePromo.deal_price ?? activePromo.top_deal_price);
-        const promoOrig = Number(activePromo.original_price || basePrice || 0);
-        if (promoOrig > resolvedCurrentPrice) {
-          resolvedOriginalPrice = promoOrig;
+      if (activePromos.length > 0) {
+        // Se houver múltiplas promoções simultâneas (ex: Smart Deal de 119.92 + Desconto Individual de 140.71),
+        // o Mercado Livre sempre aplica o menor preço de venda vigente para o comprador.
+        activePromos.sort((a, b) => {
+          const priceA = Number(a.price ?? a.deal_price ?? a.top_deal_price);
+          const priceB = Number(b.price ?? b.deal_price ?? b.top_deal_price);
+          return priceA - priceB;
+        });
+
+        const bestPromo = activePromos[0];
+        resolvedCurrentPrice = Number(bestPromo.price ?? bestPromo.deal_price ?? bestPromo.top_deal_price);
+
+        const origCandidates = activePromos
+          .map((p) => Number(p.original_price || 0))
+          .filter((op) => op > resolvedCurrentPrice);
+
+        if (origCandidates.length > 0) {
+          resolvedOriginalPrice = Math.max(...origCandidates);
+        } else if (basePrice > resolvedCurrentPrice) {
+          resolvedOriginalPrice = basePrice;
         }
       }
     }

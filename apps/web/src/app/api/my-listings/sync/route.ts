@@ -202,17 +202,28 @@ export async function POST(req: NextRequest) {
           if (promoItemRes.ok) {
             const list = await promoItemRes.json();
             const arr = Array.isArray(list) ? list : list.results || [];
-            const livePromo = arr.find(
+            const activePromos = arr.filter(
               (p: any) =>
                 (p.status === "started" || p.status === "active" || p.status === "pending" || p.status === "sync_requested") &&
-                Number(p.price ?? p.deal_price ?? 0) > 0
+                Number(p.price ?? p.deal_price ?? p.top_deal_price ?? 0) > 0
             );
-            if (livePromo) {
+            if (activePromos.length > 0) {
+              activePromos.sort((a: any, b: any) => {
+                const priceA = Number(a.price ?? a.deal_price ?? a.top_deal_price);
+                const priceB = Number(b.price ?? b.deal_price ?? b.top_deal_price);
+                return priceA - priceB;
+              });
+              const bestPromo = activePromos[0];
+              const bestPrice = Number(bestPromo.price ?? bestPromo.deal_price ?? bestPromo.top_deal_price);
+              const maxOrig = Math.max(
+                ...activePromos.map((p: any) => Number(p.original_price || 0)).filter((op: number) => op > bestPrice),
+                0
+              );
               return {
                 id: itemId,
-                price: Number(livePromo.price ?? livePromo.deal_price),
-                original_price: Number(livePromo.original_price) || null,
-                name: livePromo.name || "Promoção Ativa",
+                price: bestPrice,
+                original_price: maxOrig > 0 ? maxOrig : null,
+                name: bestPromo.name || "Promoção Ativa",
               };
             }
           }

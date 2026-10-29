@@ -287,6 +287,7 @@ export function ComparativeTable({
           text: `✓ Anúncio atualizado com sucesso! Preço: R$ ${Number(json.current_price).toFixed(2)}${json.original_price ? ` (De R$ ${Number(json.original_price).toFixed(2)})` : ""}`,
           type: "success",
         });
+        setTimeout(() => setToastNotification(null), 5000);
       } else {
         if (json?.reauthRequired || res.status === 401 || res.status === 403) {
           alert(
