@@ -249,7 +249,7 @@ export async function refreshMercadoLivreIntegration(integrationId: string): Pro
   }
 }
 
-async function markReauthRequired(integrationId: string, reason: string) {
+export async function markReauthRequired(integrationId: string, reason: string) {
   await createSupabaseAdminClient()
     .from(TABLE)
     .update({ status: "reauth_required", refresh_lock_until: null, last_error: reason })

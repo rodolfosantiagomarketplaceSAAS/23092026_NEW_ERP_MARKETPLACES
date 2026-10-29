@@ -282,8 +282,21 @@ export function ComparativeTable({
         if (onPriceUpdated && json.current_price !== undefined) {
           onPriceUpdated(myListingId, json.current_price, json.original_price);
         }
+        setToastNotification({
+          id: myListingId,
+          text: `✓ Anúncio atualizado com sucesso! Preço: R$ ${Number(json.current_price).toFixed(2)}${json.original_price ? ` (De R$ ${Number(json.original_price).toFixed(2)})` : ""}`,
+          type: "success",
+        });
       } else {
-        alert(json.error || "Não foi possível atualizar o preço do anúncio.");
+        if (json?.reauthRequired || res.status === 401 || res.status === 403) {
+          alert(
+            "⚠️ Conexão do Mercado Livre Expirada!\n\n" +
+              "A autorização da sua conta no Mercado Livre expirou ou foi revogada.\n" +
+              "Acesse 'Configurações & APIs' no menu lateral e clique em 'Reconectar' para atualizar as campanhas e preços."
+          );
+        } else {
+          alert(json?.error || "Não foi possível atualizar o preço do anúncio.");
+        }
       }
     } catch (err) {
       console.error("Erro ao atualizar preço:", err);
@@ -559,6 +572,23 @@ export function ComparativeTable({
                                 />
                                 {formatSales(group.my_listing.sales_count_approx)}
                               </span>
+
+                              {!isRadar && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRefreshSinglePrice(group.my_listing.id)}
+                                  disabled={refreshingPriceId === group.my_listing.id}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9.5px] font-bold bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 transition-all shadow-2xs hover:shadow active:scale-95 disabled:opacity-60 cursor-pointer"
+                                  title="Atualizar preço e campanha promocional ativa deste anúncio no Mercado Livre"
+                                >
+                                  <RefreshCw
+                                    className={`w-2.5 h-2.5 text-amber-700 ${
+                                      refreshingPriceId === group.my_listing.id ? "animate-spin" : ""
+                                    }`}
+                                  />
+                                  <span>{refreshingPriceId === group.my_listing.id ? "Atualizando..." : "Atualizar Dados"}</span>
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -579,10 +609,10 @@ export function ComparativeTable({
                                 type="button"
                                 onClick={() => handleRefreshSinglePrice(group.my_listing.id)}
                                 disabled={refreshingPriceId === group.my_listing.id}
-                                className="opacity-0 group-hover/price:opacity-100 p-0.5 text-slate-400 hover:text-indigo-600 rounded transition-all ml-0.5"
+                                className="p-0.5 text-slate-400 hover:text-amber-700 rounded transition-all ml-0.5"
                                 title="Atualizar preço e promoção do Mercado Livre agora"
                               >
-                                <RefreshCw className={`w-3 h-3 ${refreshingPriceId === group.my_listing.id ? "animate-spin text-indigo-600" : ""}`} />
+                                <RefreshCw className={`w-3 h-3 ${refreshingPriceId === group.my_listing.id ? "animate-spin text-amber-600" : ""}`} />
                               </button>
                             )}
                           </div>

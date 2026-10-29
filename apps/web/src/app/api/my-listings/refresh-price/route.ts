@@ -14,7 +14,14 @@ export async function POST(req: NextRequest) {
 
     const result = await syncSingleMyListingPrice(my_listing_id);
     if (!result.success) {
-      return NextResponse.json({ error: result.error || "Falha ao sincronizar preço." }, { status: 500 });
+      return NextResponse.json(
+        {
+          success: false,
+          reauthRequired: result.reauthRequired,
+          error: result.error || "Falha ao sincronizar preço.",
+        },
+        { status: result.reauthRequired ? 401 : 500 }
+      );
     }
 
     return NextResponse.json({

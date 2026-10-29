@@ -72,7 +72,21 @@ export function BiDashboard() {
     try {
       // 1. Sincroniza catálogo próprio e promoções ativas (Central de Promoções / Black Friday)
       try {
-        await fetch("/api/my-listings/sync", { method: "POST" });
+        const syncRes = await fetch("/api/my-listings/sync", { method: "POST" });
+        const syncJson = await syncRes.json().catch(() => null);
+        if (!syncRes.ok || !syncJson?.success) {
+          if (syncJson?.reauthRequired || syncRes.status === 401 || syncRes.status === 403) {
+            alert(
+              "⚠️ Conexão do Mercado Livre Expirada!\n\n" +
+                "A autorização da sua conta no Mercado Livre expirou ou foi revogada.\n" +
+                "Acesse 'Configurações & APIs' no menu lateral e clique em 'Reconectar' para atualizar as campanhas e preços."
+            );
+            return;
+          }
+          if (syncJson?.error) {
+            console.warn("Aviso ao sincronizar catálogo próprio:", syncJson.error);
+          }
+        }
       } catch (errSync) {
         console.warn("Aviso ao sincronizar catálogo próprio:", errSync);
       }

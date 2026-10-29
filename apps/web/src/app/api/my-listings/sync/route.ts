@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth/context";
-import { getActiveMarketplaceToken, getMarketplaceIntegrations } from "@/lib/services/marketplaceIntegrations";
+import { getActiveMarketplaceToken, getMarketplaceIntegrations, markReauthRequired } from "@/lib/services/marketplaceIntegrations";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +25,17 @@ export async function POST(req: NextRequest) {
     const mlAccount = integrations.find((i) => i.platform === "mercadolivre" && i.status === "online");
 
     if (!mlAccount) {
+      const anyMl = integrations.find((i) => i.platform === "mercadolivre");
+      if (anyMl && anyMl.status === "reauth_required") {
+        return NextResponse.json(
+          {
+            success: false,
+            reauthRequired: true,
+            error: "A autorização da sua conta do Mercado Livre expirou ou foi revogada. Acesse 'Configurações & APIs' e clique em 'Reconectar'.",
+          },
+          { status: 401 }
+        );
+      }
       return NextResponse.json(
         {
           success: false,
@@ -40,9 +51,10 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           success: false,
-          error: "Falha ao obter token de acesso do Mercado Livre. Reconecte a conta em Configurações.",
+          reauthRequired: true,
+          error: "Falha ao obter token de acesso do Mercado Livre. Reconecte a conta em Configurações & APIs.",
         },
-        { status: 400 }
+        { status: 401 }
       );
     }
 
@@ -62,6 +74,20 @@ export async function POST(req: NextRequest) {
       });
 
       if (!searchRes.ok) {
+        if (searchRes.status === 401 || searchRes.status === 403) {
+          await markReauthRequired(
+            mlAccount.id,
+            `Autorização expirada ou revogada pelo Mercado Livre (HTTP ${searchRes.status}). Reconecte a conta.`
+          );
+          return NextResponse.json(
+            {
+              success: false,
+              reauthRequired: true,
+              error: "A autorização da sua conta do Mercado Livre expirou ou foi revogada. Acesse 'Configurações & APIs' no menu lateral e clique em 'Reconectar'.",
+            },
+            { status: 401 }
+          );
+        }
         break;
       }
 
@@ -106,7 +132,7 @@ export async function POST(req: NextRequest) {
       if (userPromosRes.ok) {
         const userPromosData = await userPromosRes.json();
         const activePromos = (userPromosData.results || []).filter(
-          (p: any) => p.status === "started" || p.status === "active"
+          (p: any) => p.status === "started" || p.status === "active" || p.status === "pending"
         );
 
         for (const promo of activePromos) {
@@ -132,11 +158,13 @@ export async function POST(req: NextRequest) {
             if (results.length === 0) break;
 
             for (const pItem of results) {
-              if (pItem.id && Number(pItem.price) > 0 && pItem.status !== "candidate") {
+              const promoPrice = Number(pItem.price ?? pItem.deal_price ?? pItem.suggested_discounted_price ?? 0);
+              const origPrice = Number(pItem.original_price ?? pItem.base_price ?? 0);
+              if (pItem.id && promoPrice > 0 && pItem.status !== "candidate") {
                 promoMap.set(pItem.id, {
-                  price: Number(pItem.price),
-                  original_price: Number(pItem.original_price) || 0,
-                  name: promo.name || "Promoção Ativa",
+                  price: promoPrice,
+                  original_price: origPrice,
+                  name: promo.name || "Campanha Ativa",
                 });
               }
             }
@@ -157,26 +185,42 @@ export async function POST(req: NextRequest) {
       const itemsUrl = `https://api.mercadolibre.com/items?ids=${chunk.join(",")}`;
       const visitsUrl = `https://api.mercadolibre.com/visits/items?ids=${chunk.join(",")}`;
 
-      // Busca dados dos anúncios, dados de visitas oficiais e preço promocional/venda (sale_price) em paralelo
-      const salePricePromises = chunk.map(async (itemId) => {
+      // Busca dados dos anúncios, dados de visitas oficiais e promoções ativas do item em paralelo
+      const itemPromoPromises = chunk.map(async (itemId) => {
         try {
-          const spRes = await fetch(`https://api.mercadolibre.com/items/${itemId}/sale_price`, {
-            headers: {
-              Authorization: `Bearer ${accessToken}`,
-              "User-Agent": "CRM-Marketplaces-ERP/2.0",
-              Accept: "application/json",
-            },
-            cache: "no-store",
-          });
-          if (spRes.ok) {
-            const spData = await spRes.json();
-            return { id: itemId, data: spData };
+          const promoItemRes = await fetch(
+            `https://api.mercadolibre.com/seller-promotions/items/${itemId}?app_version=v2`,
+            {
+              headers: {
+                Authorization: `Bearer ${accessToken}`,
+                "User-Agent": "CRM-Marketplaces-ERP/2.0",
+                Accept: "application/json",
+              },
+              cache: "no-store",
+            }
+          );
+          if (promoItemRes.ok) {
+            const list = await promoItemRes.json();
+            const arr = Array.isArray(list) ? list : list.results || [];
+            const livePromo = arr.find(
+              (p: any) =>
+                (p.status === "started" || p.status === "active" || p.status === "pending" || p.status === "sync_requested") &&
+                Number(p.price ?? p.deal_price ?? 0) > 0
+            );
+            if (livePromo) {
+              return {
+                id: itemId,
+                price: Number(livePromo.price ?? livePromo.deal_price),
+                original_price: Number(livePromo.original_price) || null,
+                name: livePromo.name || "Promoção Ativa",
+              };
+            }
           }
         } catch {}
-        return { id: itemId, data: null };
+        return null;
       });
 
-      const [itemsRes, visitsRes, salePrices] = await Promise.all([
+      const [itemsRes, visitsRes, directPromos] = await Promise.all([
         fetch(itemsUrl, {
           headers: { Authorization: `Bearer ${accessToken}` },
           cache: "no-store",
@@ -185,7 +229,7 @@ export async function POST(req: NextRequest) {
           headers: { Authorization: `Bearer ${accessToken}` },
           cache: "no-store",
         }).catch(() => null),
-        Promise.all(salePricePromises),
+        Promise.all(itemPromoPromises),
       ]);
 
       if (!itemsRes.ok) continue;
@@ -200,14 +244,11 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Mapa de preços de venda vigentes (/items/{id}/sale_price)
-      const salePriceMap = new Map<string, { amount: number; regular_amount: number | null }>();
-      for (const sp of salePrices) {
-        if (sp?.data?.amount !== undefined && sp.data.amount !== null) {
-          salePriceMap.set(sp.id, {
-            amount: Number(sp.data.amount),
-            regular_amount: sp.data.regular_amount ? Number(sp.data.regular_amount) : null,
-          });
+      // Mapa de promoções ativas obtidas diretamente do item (/seller-promotions/items/{id})
+      const directPromoMap = new Map<string, { price: number; original_price: number | null; name: string }>();
+      for (const dp of directPromos) {
+        if (dp && dp.id && dp.price > 0) {
+          directPromoMap.set(dp.id, dp);
         }
       }
 
@@ -231,26 +272,22 @@ export async function POST(req: NextRequest) {
         );
         const itemSku = skuAttr?.value_name || item.seller_custom_field || null;
 
-        // Resolução oficial e precisa de preços:
-        // 1. Prioridade máxima: endpoint oficial /items/{id}/sale_price (reflete promoções ativas, campanhas e descontos individuais)
-        // 2. Segunda prioridade: promoções ativas detectadas na central de promoções do vendedor (seller-promotions)
+        // Resolução oficial e precisa de preços e campanhas:
+        // 1. Prioridade máxima: /seller-promotions/items/{id} (promoção individual ativa na central de promoções)
+        // 2. Segunda prioridade: promoções da lista de campanhas do vendedor (/seller-promotions/users/{seller_id})
         // 3. Fallback: campos originais do anúncio (item.price, item.original_price, item.base_price)
-        const spInfo = salePriceMap.get(item.id);
-        const activePromo = promoMap.get(item.id);
+        const directPromo = directPromoMap.get(item.id);
+        const activePromo = directPromo || promoMap.get(item.id);
 
         let currentPrice = Number(item.price || 0);
         let originalPrice: number | null = null;
 
-        if (spInfo && spInfo.amount > 0) {
-          currentPrice = spInfo.amount;
-          if (spInfo.regular_amount && spInfo.regular_amount > spInfo.amount) {
-            originalPrice = spInfo.regular_amount;
-          }
-        } else if (activePromo && activePromo.price > 0) {
+        if (activePromo && activePromo.price > 0) {
           currentPrice = activePromo.price;
-          originalPrice = activePromo.original_price > activePromo.price
-            ? activePromo.original_price
-            : Number(item.price || item.base_price || 0);
+          originalPrice =
+            activePromo.original_price && activePromo.original_price > activePromo.price
+              ? activePromo.original_price
+              : Number(item.original_price || item.price || item.base_price || 0);
         }
 
         if (!originalPrice) {
