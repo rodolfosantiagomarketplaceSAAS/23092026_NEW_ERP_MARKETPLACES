@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ERP Marketplaces - Coleta de Concorrentes",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Extensão assistida para captura de anúncios concorrentes e download de fotos em alta qualidade (JPG) no Mercado Livre e Shopee.",
   "permissions": [
     "storage",
@@ -48,7 +48,9 @@
         "http://127.0.0.1:*/*",
         "https://*.vercel.app/*"
       ],
-      "js": ["content_script.js"],
+      "js": [
+        "content_script.js"
+      ],
       "run_at": "document_idle"
     }
   ]

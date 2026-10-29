@@ -475,6 +475,90 @@
     .empty-search-state button {
       margin-top: 6px;
     }
+    .photos-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 6px;
+      max-height: 200px;
+      overflow-y: auto;
+      padding: 2px;
+    }
+    .photo-thumb-card {
+      position: relative;
+      border: 1.5px solid #CBD5E1;
+      border-radius: 4px;
+      overflow: hidden;
+      background: #FFFFFF;
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      transition: all 0.15s ease;
+    }
+    .photo-thumb-card:hover {
+      border-color: #0284C7;
+      transform: translateY(-1px);
+      box-shadow: 0 2px 4px rgba(0,0,0,0.06);
+    }
+    .photo-thumb-card.selected {
+      border-color: #0284C7;
+      background-color: #F0F9FF;
+      box-shadow: 0 0 0 1.5px #0284C7;
+    }
+    .photo-thumb-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+    .photo-thumb-badge {
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      font-size: 8px;
+      font-weight: 700;
+      color: #FFFFFF;
+      background: rgba(15, 23, 42, 0.75);
+      padding: 1px 3px;
+      border-radius: 2px;
+      pointer-events: none;
+      line-height: 1;
+    }
+    .photo-thumb-checkbox {
+      position: absolute;
+      top: 2px;
+      right: 2px;
+      width: 14px;
+      height: 14px;
+      accent-color: #0284C7;
+      cursor: pointer;
+      margin: 0;
+      z-index: 2;
+    }
+    .photo-thumb-download-btn {
+      position: absolute;
+      bottom: 2px;
+      right: 2px;
+      background: rgba(15, 23, 42, 0.8);
+      color: #FFFFFF;
+      border: none;
+      border-radius: 3px;
+      width: 18px;
+      height: 18px;
+      padding: 0;
+      font-size: 10px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: background 0.15s;
+      z-index: 2;
+    }
+    .photo-thumb-download-btn:hover {
+      background: #0284C7;
+    }
   </style>
 </head>
 <body>
@@ -563,11 +647,40 @@
     <button id="captureNowBtn" class="btn btn-action" style="display: none;">
       📡 Enviar para Radar de Mercado (ERP)
     </button>
-    <button id="downloadPhotosBtn" class="btn btn-secondary" style="display: none; margin-top: 6px; width: 100%; border: 1.5px solid #0284C7; color: #0369A1; background-color: #F0F9FF; font-weight: 600;">
-      📸 Baixar Fotos do Anúncio (JPG)
-    </button>
-    <div id="downloadPhotosProgress" style="display: none; margin-top: 6px; padding: 6px 8px; border-radius: 4px; background-color: #F8FAFC; border: 1px solid #CBD5E1; font-size: 11px; text-align: center; color: #334155; line-height: 1.4;">
-      <span id="downloadPhotosProgressText">Preparando fotos...</span>
+    <!-- Bloco de Fotos do Anúncio (Baixar Todas ou Escolher) -->
+    <div id="photosActionContainer" style="display: none; margin-top: 6px;">
+      <div style="display: flex; gap: 6px;">
+        <button id="downloadPhotosBtn" class="btn btn-secondary" style="flex: 1.2; border: 1.5px solid #0284C7; color: #0369A1; background-color: #F0F9FF; font-weight: 600; padding: 6px 8px; font-size: 11px;">
+          📸 Baixar Todas (<span id="photosTotalCount">0</span>)
+        </button>
+        <button id="toggleGalleryBtn" type="button" class="btn btn-secondary" style="flex: 1; border: 1.5px solid #CBD5E1; color: #334155; font-weight: 600; padding: 6px 8px; font-size: 11px;" title="Ver fotos e escolher quais baixar">
+          🖼️ Escolher Fotos
+        </button>
+      </div>
+
+      <!-- Galeria Expansível para Seleção de Fotos -->
+      <div id="photosGalleryContainer" style="display: none; margin-top: 6px; padding: 8px; background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+          <span style="font-size: 11px; font-weight: 600; color: #334155;" id="galleryHeaderCount">Escolha as fotos:</span>
+          <div style="display: flex; gap: 6px; align-items: center;">
+            <button type="button" id="selectAllPhotosBtn" class="btn-link-action" style="font-size: 10px; cursor: pointer; color: #0284C7; font-weight: 600;">Todas</button>
+            <span style="color: #CBD5E1; font-size: 10px;">|</span>
+            <button type="button" id="deselectAllPhotosBtn" class="btn-link-action" style="font-size: 10px; color: #64748B; cursor: pointer;">Nenhuma</button>
+          </div>
+        </div>
+
+        <div id="photosGrid" class="photos-grid">
+          <!-- Miniaturas renderizadas dinamicamente via JS -->
+        </div>
+
+        <button id="downloadSelectedPhotosBtn" type="button" class="btn btn-action" style="display: none; margin-top: 8px; width: 100%; font-size: 11px; padding: 6px 8px; font-weight: 600;">
+          ⬇️ Baixar Selecionadas (<span id="selectedPhotosCount">0</span>)
+        </button>
+      </div>
+
+      <div id="downloadPhotosProgress" style="display: none; margin-top: 6px; padding: 6px 8px; border-radius: 4px; background-color: #F8FAFC; border: 1px solid #CBD5E1; font-size: 11px; text-align: center; color: #334155; line-height: 1.4;">
+        <span id="downloadPhotosProgressText">Preparando fotos...</span>
+      </div>
     </div>
     <button id="openErpBtn" class="btn btn-secondary" style="margin-top: 8px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;">
       🌐 Abrir Radar no ERP (/inteligencia)
