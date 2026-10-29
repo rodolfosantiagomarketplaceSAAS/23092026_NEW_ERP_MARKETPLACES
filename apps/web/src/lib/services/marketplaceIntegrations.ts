@@ -47,7 +47,7 @@ interface TokenRow {
 function applyScope<T extends { eq: Function; is: Function }>(query: T, scope: IntegrationScope): T {
   return scope.organizationId
     ? query.eq("organization_id", scope.organizationId)
-    : query.eq("user_id", scope.userId).is("organization_id", null);
+    : query.eq("user_id", scope.userId);
 }
 
 async function resolveScope(scope?: IntegrationScope): Promise<IntegrationScope | null> {

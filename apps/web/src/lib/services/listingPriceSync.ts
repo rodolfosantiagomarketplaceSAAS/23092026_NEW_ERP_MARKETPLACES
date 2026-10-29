@@ -1,5 +1,6 @@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { getActiveMarketplaceToken, markReauthRequired } from "@/lib/services/marketplaceIntegrations";
+import { decryptSecret } from "@/lib/security/crypto";
 
 export interface SyncPriceResult {
   success: boolean;
@@ -46,14 +47,43 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
 
     // 2. Busca token do Mercado Livre
     let accessToken: string | null = null;
-    const scope = {
-      userId: listing.user_id,
-      organizationId: null,
-    };
     try {
-      accessToken = await getActiveMarketplaceToken("mercadolivre", scope);
+      // 2.1 Tenta obter via contexto autenticado da sessão atual
+      accessToken = await getActiveMarketplaceToken("mercadolivre");
     } catch {
       accessToken = null;
+    }
+
+    if (!accessToken && listing.user_id) {
+      try {
+        accessToken = await getActiveMarketplaceToken("mercadolivre", {
+          userId: listing.user_id,
+          organizationId: null,
+        });
+      } catch {
+        accessToken = null;
+      }
+    }
+
+    // 2.2 Fallback de contingência: consulta diretamente a integração ativa mais recente no banco
+    if (!accessToken) {
+      let intQuery = supabase
+        .from("marketplace_integrations")
+        .select("access_token")
+        .eq("platform", "mercadolivre")
+        .eq("is_active", true)
+        .order("updated_at", { ascending: false });
+
+      if (listing.user_id) {
+        intQuery = intQuery.eq("user_id", listing.user_id);
+      }
+
+      const { data: intRow } = await intQuery.limit(1).maybeSingle();
+      if (intRow?.access_token) {
+        try {
+          accessToken = decryptSecret(intRow.access_token);
+        } catch {}
+      }
     }
 
     if (!accessToken) {
@@ -92,11 +122,20 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
       }).catch(() => null),
     ]);
 
+    const itemData = itemRes ? await itemRes.json().catch(() => null) : null;
+    const promoData = promoRes && promoRes.ok ? await promoRes.json().catch(() => null) : null;
+    const pricesData = pricesRes && pricesRes.ok ? await pricesRes.json().catch(() => null) : null;
+
     // Detecção de token expirado ou revogado pelo ML
-    if (
-      (itemRes && (itemRes.status === 401 || itemRes.status === 403)) ||
-      (promoRes && (promoRes.status === 401 || promoRes.status === 403))
-    ) {
+    // IMPORTANTE: Só consideramos inválido se a chamada do item falhar com 401 ou 403 PolicyAgent.
+    // Se o item retornou 200, o token está 100% válido.
+    const isTokenRevoked =
+      itemRes &&
+      (itemRes.status === 401 ||
+        (itemRes.status === 403 &&
+          (itemData?.code === "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" || itemData?.blocked_by === "PolicyAgent")));
+
+    if (isTokenRevoked) {
       // Localiza a integração correspondente para marcar reauth_required
       const { data: intRow } = await supabase
         .from("marketplace_integrations")
@@ -119,10 +158,6 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
         error: "Autorização da conta do Mercado Livre expirou. Reconecte em Configurações & APIs.",
       };
     }
-
-    const itemData = itemRes && itemRes.ok ? await itemRes.json() : null;
-    const promoData = promoRes && promoRes.ok ? await promoRes.json() : null;
-    const pricesData = pricesRes && pricesRes.ok ? await pricesRes.json() : null;
 
     let basePrice = Number(itemData?.price || listing.current_price || 0);
     let resolvedCurrentPrice = basePrice;
