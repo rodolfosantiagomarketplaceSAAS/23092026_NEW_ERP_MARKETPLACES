@@ -2314,163 +2314,15 @@
   }
 
   /**
-   * Envia os dados e anúncios da loja do concorrente para o ERP
+   * Envia payload da loja diretamente ao ERP (via background worker ou fetch direto)
    */
-  async function sendStoreToErp(overrideUrl = null, segment = "Acessórios Automotivos", isFollowing = true) {
-    const syncBtn = document.getElementById("crm-sync-store-btn");
-    let items = extractAllSearchItems();
-    if (items.length === 0) {
-      throw new Error("Nenhum anúncio localizado na loja do concorrente.");
-    }
-
-    const totalExpected = extractTotalResultsCount() || items.length;
-    const storeName = extractStoreName();
-    const sellerId = extractSellerId();
-    const storeUrl = extractStoreUrl();
-    const erpUrl = await resolveErpUrl(overrideUrl);
-    const platform = "mercadolivre";
-
-    // Paginação automática de múltiplas páginas para capturar todos os anúncios da loja
-    if (isMercadoLivre && totalExpected > items.length) {
-      const seenIds = new Set(items.map((i) => i.external_id));
-      let page = 1;
-      const maxPages = 20; // Limite de até 20 páginas (~1.000 anúncios)
-
-      function findNextPageUrl(sourceDoc, pageNum) {
-        const selectors = [
-          "li.andes-pagination__button--next a",
-          "a.andes-pagination__link[title*='Seguinte']",
-          "a.andes-pagination__link[title*='Próxim']",
-          "a.andes-pagination__link[title*='seguinte' i]",
-          "a.andes-pagination__link[title*='próxim' i]",
-          "a[title*='Página seguinte']",
-          "a[title*='Página próxima']",
-          ".andes-pagination__button--next a",
-          "a[class*='pagination__next']",
-          "li[class*='pagination__button--next'] a",
-          "a[rel='next']",
-        ];
-        for (const sel of selectors) {
-          const el = sourceDoc.querySelector(sel);
-          if (el) {
-            let h = el.getAttribute("href") || el.href;
-            if (h) {
-              if (h.startsWith("/")) h = `${window.location.origin}${h}`;
-              return h;
-            }
-          }
-        }
-        // Gera o link estrutural padrão do Mercado Livre (_Desde_)
-        const offset = (pageNum - 1) * 48 + 1;
-        try {
-          const u = new URL(storeUrl);
-          let p = u.pathname.replace(/\/$/, "");
-          if (p.includes("_Desde_")) {
-            p = p.replace(/_Desde_\d+/, `_Desde_${offset}`);
-          } else {
-            p = `${p}/_Desde_${offset}`;
-          }
-          u.pathname = p;
-          return u.toString();
-        } catch {
-          return null;
-        }
-      }
-
-      async function fetchPageContent(targetUrl) {
-        // Tenta 1: via Background Service Worker (evita CORS e restrições)
-        try {
-          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
-            const bgResp = await new Promise((resolve) => {
-              chrome.runtime.sendMessage({ action: "FETCH_PAGE_HTML", url: targetUrl }, (r) => {
-                if (chrome.runtime.lastError || !r || !r.success || !r.html) {
-                  return resolve(null);
-                }
-                resolve(r.html);
-              });
-            });
-            if (bgResp && bgResp.length > 500 && !bgResp.includes("suspicious-traffic-frontend")) {
-              return bgResp;
-            }
-          }
-        } catch {}
-
-        // Tenta 2: fetch com credenciais incluídas
-        try {
-          const resp = await fetch(targetUrl, { credentials: "include" });
-          if (resp.ok) {
-            const text = await resp.text();
-            if (text.length > 500 && !text.includes("suspicious-traffic-frontend")) {
-              return text;
-            }
-          }
-        } catch {}
-
-        return null;
-      }
-
-      let currentDoc = document;
-      while (page < maxPages && items.length < totalExpected) {
-        page++;
-        const nextUrl = findNextPageUrl(currentDoc, page);
-        if (!nextUrl) break;
-
-        if (syncBtn) {
-          syncBtn.innerText = `Capturando pág. ${page} (${items.length}/${totalExpected} anúncios)...`;
-        }
-
-        try {
-          const html = await fetchPageContent(nextUrl);
-          if (!html) break;
-
-          const doc = new DOMParser().parseFromString(html, "text/html");
-          const pageItems = extractAllSearchItems(doc);
-          let newAdded = 0;
-          for (const it of pageItems) {
-            if (!seenIds.has(it.external_id)) {
-              seenIds.add(it.external_id);
-              items.push(it);
-              newAdded++;
-            }
-          }
-          if (newAdded === 0) break;
-          currentDoc = doc;
-          // Pausa suave de 200ms para respeitar a carga de rede
-          await new Promise((r) => setTimeout(r, 200));
-        } catch (pageErr) {
-          console.warn("[ERP Extractor] Interrompida paginação da loja:", pageErr);
-          break;
-        }
-      }
-    }
-
-    if (syncBtn) {
-      syncBtn.innerText = `Enviando ${items.length} anúncios ao ERP...`;
-    }
-
-    const payload = {
-      platform,
-      store_name: storeName,
-      seller_id: sellerId,
-      store_url: storeUrl,
-      segment: segment || "Acessórios Automotivos",
-      is_following: isFollowing,
-      seller_reputation: "platinum",
-      total_listings: totalExpected > items.length ? totalExpected : items.length,
-      items,
-    };
-
+  async function sendStorePayloadToErp(erpUrl, payload) {
     let result = null;
-
     try {
       if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
         result = await new Promise((resolve, reject) => {
           chrome.runtime.sendMessage(
-            {
-              action: "SYNC_STORE_ITEMS",
-              erpUrl,
-              payload,
-            },
+            { action: "SYNC_STORE_ITEMS", erpUrl, payload },
             (response) => {
               if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
               if (response && response.success) return resolve(response);
@@ -2491,14 +2343,14 @@
       });
 
       if (!response.ok) {
-        throw new Error(`Erro HTTP ${response.status} ao sincronizar loja com ${erpUrl}`);
+        throw new Error(`Erro HTTP ${response.status} ao sincronizar loja com o ERP`);
       }
 
       const json = await response.json();
       result = {
         success: true,
-        count: items.length,
-        storeName,
+        count: payload.items?.length || 0,
+        storeName: payload.store_name,
         erpUrl,
         redirectUrl: "/inteligencia?tab=lojas",
         ...json,
@@ -2509,11 +2361,280 @@
   }
 
   /**
+   * Encontra a URL da próxima página de resultados da loja (DOM + Offset ML)
+   */
+  function findNextPageUrl(nextPageNum) {
+    const selectors = [
+      "li.andes-pagination__button--next a",
+      "li.andes-pagination__button--next span a",
+      "a.andes-pagination__link[title*='Seguinte']",
+      "a.andes-pagination__link[title*='Próxim']",
+      "a.andes-pagination__link[title*='seguinte' i]",
+      "a.andes-pagination__link[title*='próxim' i]",
+      "a[title*='Página seguinte']",
+      "a[title*='Página próxima']",
+      "a[title*='Siguiente']",
+      ".andes-pagination__button--next a",
+      "a[class*='pagination__next']",
+      "li[class*='pagination__button--next'] a",
+      "a[rel='next']",
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el) {
+        let h = el.getAttribute("href") || el.href;
+        if (h && !h.startsWith("#") && !h.startsWith("javascript:")) {
+          if (h.startsWith("/")) h = `${window.location.origin}${h}`;
+          return h;
+        }
+      }
+    }
+
+    // Fallback matemático pelo offset do Mercado Livre (_Desde_)
+    const offset = (nextPageNum - 1) * 48 + 1;
+    try {
+      const u = new URL(window.location.href);
+      let p = u.pathname.replace(/\/$/, "");
+      if (p.includes("_Desde_")) {
+        p = p.replace(/_Desde_\d+/, `_Desde_${offset}`);
+      } else {
+        p = `${p}/_Desde_${offset}`;
+      }
+      u.pathname = p;
+      return u.toString();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Executa etapa da varredura automática entre páginas
+   */
+  async function handleStoreCrawlStep(crawl) {
+    // Expira após 5 minutos de inatividade
+    if (Date.now() - crawl.startedAt > 5 * 60 * 1000) {
+      await chrome.storage.local.remove("crm_store_crawl");
+      injectStoreSyncFloatingBar();
+      return;
+    }
+
+    renderCrawlProgressBar(crawl);
+
+    // Aguarda cards carregarem na página atual
+    await new Promise((r) => setTimeout(r, 600));
+
+    const pageItems = extractAllSearchItems();
+    const seenIds = new Set((crawl.accumulatedItems || []).map((i) => i.external_id));
+    let newItemsCount = 0;
+    for (const it of pageItems) {
+      if (!seenIds.has(it.external_id)) {
+        seenIds.add(it.external_id);
+        crawl.accumulatedItems.push(it);
+        newItemsCount++;
+      }
+    }
+
+    const erpUrl = await resolveErpUrl();
+    const payload = {
+      platform: "mercadolivre",
+      store_name: crawl.storeName,
+      seller_id: crawl.sellerId,
+      store_url: crawl.storeUrl,
+      segment: crawl.segment || "Acessórios Automotivos",
+      is_following: true,
+      seller_reputation: "platinum",
+      total_listings: crawl.totalExpected,
+      items: crawl.accumulatedItems,
+    };
+
+    try {
+      await sendStorePayloadToErp(erpUrl, payload);
+    } catch (err) {
+      console.warn("[Crawler] Erro ao sincronizar lote:", err);
+    }
+
+    updateCrawlProgressUI(crawl);
+
+    const isFinished =
+      crawl.accumulatedItems.length >= crawl.totalExpected ||
+      crawl.currentPage >= 20 ||
+      (newItemsCount === 0 && crawl.currentPage > 1);
+
+    if (!isFinished) {
+      const nextUrl = findNextPageUrl(crawl.currentPage + 1);
+      if (nextUrl) {
+        crawl.currentPage++;
+        await chrome.storage.local.set({ crm_store_crawl: crawl });
+        const statusEl = document.getElementById("crm-crawler-status");
+        if (statusEl) {
+          statusEl.innerText = `Avançando para página ${crawl.currentPage}...`;
+        }
+        setTimeout(() => {
+          window.location.href = nextUrl;
+        }, 800);
+        return;
+      }
+    }
+
+    // Finalizado
+    await chrome.storage.local.remove("crm_store_crawl");
+    renderCrawlFinishedSuccess(crawl, erpUrl);
+  }
+
+  function renderCrawlProgressBar(crawl) {
+    if (document.getElementById("crm-crawler-bar")) return;
+    const bar = document.createElement("div");
+    bar.id = "crm-crawler-bar";
+    bar.style.position = "fixed";
+    bar.style.top = "16px";
+    bar.style.left = "50%";
+    bar.style.transform = "translateX(-50%)";
+    bar.style.zIndex = "9999999";
+    bar.style.backgroundColor = "#0F172A";
+    bar.style.color = "#FFFFFF";
+    bar.style.border = "2px solid #6366F1";
+    bar.style.borderRadius = "14px";
+    bar.style.padding = "12px 22px";
+    bar.style.boxShadow = "0 10px 40px rgba(0,0,0,0.6)";
+    bar.style.display = "flex";
+    bar.style.alignItems = "center";
+    bar.style.gap = "18px";
+    bar.style.fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+    bar.style.fontSize = "13px";
+
+    const totalPages = Math.ceil(crawl.totalExpected / 48) || 1;
+    const pct = Math.min(100, Math.round(((crawl.accumulatedItems?.length || 0) / crawl.totalExpected) * 100));
+
+    bar.innerHTML = `
+      <div style="display:flex;align-items:center;gap:10px;">
+        <div style="width:12px;height:12px;border-radius:50%;background:#10B981;box-shadow:0 0 10px #10B981;"></div>
+        <div>
+          <div style="font-weight:700;color:#F8FAFC;">Varredura Automática: ${crawl.storeName}</div>
+          <div id="crm-crawler-status" style="font-size:11px;color:#94A3B8;">Página ${crawl.currentPage} de ~${totalPages} • <strong style="color:#60A5FA;">${crawl.accumulatedItems?.length || 0} de ${crawl.totalExpected}</strong> coletados</div>
+        </div>
+      </div>
+      <div style="width:160px;height:8px;background:#1E293B;border-radius:4px;overflow:hidden;border:1px solid #334155;">
+        <div id="crm-crawler-fill" style="width:${pct}%;height:100%;background:linear-gradient(90deg, #4F46E5, #3B82F6);transition:width 0.3s ease;"></div>
+      </div>
+      <button id="crm-cancel-crawl-btn" style="background:#EF4444;color:#FFFFFF;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;">
+        ✕ Cancelar
+      </button>
+    `;
+
+    document.body.appendChild(bar);
+
+    const cancelBtn = document.getElementById("crm-cancel-crawl-btn");
+    if (cancelBtn) {
+      cancelBtn.onclick = async () => {
+        await chrome.storage.local.remove("crm_store_crawl");
+        bar.remove();
+        alert("Varredura cancelada. Os anúncios já coletados foram preservados no ERP.");
+      };
+    }
+  }
+
+  function updateCrawlProgressUI(crawl) {
+    const statusEl = document.getElementById("crm-crawler-status");
+    const fillEl = document.getElementById("crm-crawler-fill");
+    const totalPages = Math.ceil(crawl.totalExpected / 48) || 1;
+    const pct = Math.min(100, Math.round(((crawl.accumulatedItems?.length || 0) / crawl.totalExpected) * 100));
+    if (statusEl) {
+      statusEl.innerHTML = `Página ${crawl.currentPage} de ~${totalPages} • <strong style="color:#60A5FA;">${crawl.accumulatedItems?.length || 0} de ${crawl.totalExpected}</strong> coletados`;
+    }
+    if (fillEl) {
+      fillEl.style.width = `${pct}%`;
+    }
+  }
+
+  function renderCrawlFinishedSuccess(crawl, erpUrl) {
+    const existing = document.getElementById("crm-crawler-bar");
+    if (existing) existing.remove();
+
+    const bar = document.createElement("div");
+    bar.id = "crm-crawler-finished-bar";
+    bar.style.position = "fixed";
+    bar.style.top = "16px";
+    bar.style.left = "50%";
+    bar.style.transform = "translateX(-50%)";
+    bar.style.zIndex = "9999999";
+    bar.style.backgroundColor = "#0F172A";
+    bar.style.color = "#FFFFFF";
+    bar.style.border = "2px solid #10B981";
+    bar.style.borderRadius = "14px";
+    bar.style.padding = "14px 22px";
+    bar.style.boxShadow = "0 10px 40px rgba(0,0,0,0.6)";
+    bar.style.display = "flex";
+    bar.style.alignItems = "center";
+    bar.style.gap = "18px";
+    bar.style.fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+    bar.style.fontSize = "13px";
+
+    bar.innerHTML = `
+      <span style="font-size:22px;">🎉</span>
+      <div>
+        <div style="font-weight:700;color:#10B981;font-size:14px;">Varredura Concluída com Sucesso!</div>
+        <div style="font-size:12px;color:#E2E8F0;">Todos os <strong>${crawl.accumulatedItems?.length || 0} anúncios</strong> da loja &quot;${crawl.storeName}&quot; foram salvos no ERP.</div>
+      </div>
+      <a href="${erpUrl}/inteligencia?tab=lojas" target="_blank" style="background:#10B981;color:#FFFFFF;text-decoration:none;border-radius:8px;padding:8px 16px;font-size:12px;font-weight:700;display:inline-block;">
+        Ver Loja no ERP →
+      </a>
+      <button id="crm-close-crawler-finished" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:16px;margin-left:4px;">✕</button>
+    `;
+
+    document.body.appendChild(bar);
+
+    const closeBtn = document.getElementById("crm-close-crawler-finished");
+    if (closeBtn) {
+      closeBtn.onclick = () => bar.remove();
+    }
+  }
+
+  /**
+   * Envia apenas os anúncios visíveis da página atual da loja para o ERP
+   */
+  async function sendStoreToErp(overrideUrl = null, segment = "Acessórios Automotivos", isFollowing = true) {
+    const items = extractAllSearchItems();
+    if (items.length === 0) {
+      throw new Error("Nenhum anúncio localizado na loja do concorrente.");
+    }
+
+    const totalExpected = extractTotalResultsCount() || items.length;
+    const storeName = extractStoreName();
+    const sellerId = extractSellerId();
+    const storeUrl = extractStoreUrl();
+    const erpUrl = await resolveErpUrl(overrideUrl);
+
+    const payload = {
+      platform: "mercadolivre",
+      store_name: storeName,
+      seller_id: sellerId,
+      store_url: storeUrl,
+      segment: segment || "Acessórios Automotivos",
+      is_following: isFollowing,
+      seller_reputation: "platinum",
+      total_listings: totalExpected > items.length ? totalExpected : items.length,
+      items,
+    };
+
+    return await sendStorePayloadToErp(erpUrl, payload);
+  }
+
+  /**
    * Injeta barra de sincronização quando estiver na página de loja/vendedor concorrente
    */
-  function injectStoreSyncFloatingBar() {
+  async function injectStoreSyncFloatingBar() {
     if (!isStorePage()) return;
-    if (document.getElementById("crm-marketplaces-store-bar")) return;
+    if (document.getElementById("crm-marketplaces-store-bar") || document.getElementById("crm-crawler-bar")) return;
+
+    // Se houver uma sessão de varredura automática ativa, continua o fluxo
+    try {
+      const crawlStorage = await chrome.storage.local.get("crm_store_crawl");
+      const crawl = crawlStorage?.crm_store_crawl;
+      if (crawl && crawl.active) {
+        handleStoreCrawlStep(crawl);
+        return;
+      }
+    } catch {}
 
     const items = extractAllSearchItems();
     const storeName = extractStoreName();
@@ -2542,13 +2663,17 @@
     bar.style.border = "1px solid #4338CA";
     bar.style.transition = "all 0.2s ease";
 
+    const buttonLabel = totalCount > items.length
+      ? `🚀 Iniciar Varredura de Todos os ${totalCount} Anúncios`
+      : `📥 Capturar Loja (${totalCount} anúncios) para o ERP`;
+
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="background:linear-gradient(135deg, #4F46E5, #6366F1);color:#FFFFFF;padding:3px 8px;border-radius:6px;font-weight:700;font-size:10px;">🏪 CONCORRENTE DETECTADO</span>
         <span style="font-weight:600;color:#F8FAFC;">${storeName} • <strong>${countText}</strong></span>
       </div>
       <button id="crm-sync-store-btn" style="background:linear-gradient(135deg, #4338CA, #6366F1);color:#FFFFFF;border:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;transition:opacity 0.2s;">
-        📥 Capturar Loja (${totalCount} anúncios) para o ERP
+        ${buttonLabel}
       </button>
       <button id="crm-close-store-bar" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1;padding:0 4px;margin-left:4px;">
         ✕
@@ -2563,11 +2688,52 @@
     const syncBtn = document.getElementById("crm-sync-store-btn");
     if (syncBtn) {
       syncBtn.onclick = async () => {
-        syncBtn.innerText = "Capturando loja e anúncios...";
+        syncBtn.innerText = "Iniciando varredura da loja...";
         syncBtn.style.opacity = "0.7";
         syncBtn.disabled = true;
 
         try {
+          if (totalCount > items.length) {
+            // Inicia crawl de múltiplas páginas com navegação real
+            const crawl = {
+              active: true,
+              storeName,
+              storeUrl: extractStoreUrl(),
+              sellerId: extractSellerId(),
+              totalExpected: totalCount,
+              currentPage: 1,
+              accumulatedItems: items,
+              startedAt: Date.now(),
+              segment: "Acessórios Automotivos",
+            };
+
+            const erpUrl = await resolveErpUrl();
+            const payload = {
+              platform: "mercadolivre",
+              store_name: storeName,
+              seller_id: crawl.sellerId,
+              store_url: crawl.storeUrl,
+              segment: "Acessórios Automotivos",
+              is_following: true,
+              seller_reputation: "platinum",
+              total_listings: totalCount,
+              items,
+            };
+
+            await sendStorePayloadToErp(erpUrl, payload);
+            await chrome.storage.local.set({ crm_store_crawl: crawl });
+
+            const nextUrl = findNextPageUrl(2);
+            if (nextUrl) {
+              syncBtn.innerText = `Pág. 1 salva (${items.length}/${totalCount}). Avançando...`;
+              setTimeout(() => {
+                window.location.href = nextUrl;
+              }, 700);
+              return;
+            }
+          }
+
+          // Loja de 1 página só:
           const res = await sendStoreToErp();
           bar.innerHTML = `
             <div style="display:flex;align-items:center;gap:8px;">
@@ -2722,6 +2888,16 @@
         }, 1500);
       }
     }, 1000);
+  }
+
+  // Se estiver em modo de varredura ativa de loja, retoma a captura imediatamente
+  if (typeof chrome !== "undefined" && chrome.storage?.local) {
+    chrome.storage.local.get("crm_store_crawl").then((res) => {
+      const crawl = res?.crm_store_crawl;
+      if (crawl && crawl.active) {
+        handleStoreCrawlStep(crawl);
+      }
+    }).catch(() => {});
   }
 
   // Aguarda DOM estabilizar e injeta os botões corretos

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ERP Marketplaces - Coleta de Concorrentes",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Extensão assistida para captura de anúncios concorrentes, lojas completas e download de fotos em alta qualidade (JPG) no Mercado Livre e Shopee.",
   "permissions": [
     "storage",
