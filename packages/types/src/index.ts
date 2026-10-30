@@ -382,6 +382,9 @@ export interface CompetitorStoreListing {
   reviews_count: number;
   estimated_sale_fee?: number;
   estimated_net?: number;
+  estimated_shipping?: number | null;
+  listing_type?: string | null;
+  is_catalog?: boolean;
   last_scraped_at: string;
   created_at: string;
   updated_at: string;
@@ -408,6 +411,9 @@ export const competitorStoreSyncItemSchema = z.object({
   reviews_count: z.number().int().nonnegative().optional().default(0),
   estimated_sale_fee: z.number().nonnegative().optional().default(0),
   estimated_net: z.number().nonnegative().optional().default(0),
+  estimated_shipping: z.number().nonnegative().nullable().optional(),
+  listing_type: z.string().nullable().optional(),
+  is_catalog: z.boolean().optional().default(false),
 });
 
 export const competitorStoreSyncSchema = z.object({

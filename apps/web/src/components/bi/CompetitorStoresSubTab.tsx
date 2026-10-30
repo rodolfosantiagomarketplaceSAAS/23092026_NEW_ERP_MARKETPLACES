@@ -35,6 +35,35 @@ import { EditCompetitorModal } from "./EditCompetitorModal";
 import { AddCompetitorStoreModal } from "./AddCompetitorStoreModal";
 import { PairFromSearchModal } from "./PairFromSearchModal";
 
+
+function getSafeListingUrl(item: CompetitorStoreListing): string {
+  let url = (item.permalink || "").trim();
+
+  // Desempacota URL de cliques patrocinados (Mercado Clics)
+  if (url.includes("click1.mercadolivre.com.br") || url.includes("/mclics/")) {
+    try {
+      const u = new URL(url);
+      const target = u.searchParams.get("url") || u.searchParams.get("tu");
+      if (target) url = decodeURIComponent(target);
+    } catch {}
+  }
+
+  // Se o link apontar erroneamente para a loja ou estiver quebrado, reconstrói pelo external_id
+  const isStoreLink = url.includes("/pagina/") || url.includes("/loja/") || url.includes("/perfil/");
+  if ((!url || isStoreLink || !url.startsWith("http")) && item.external_id) {
+    if (item.external_id.startsWith("MLB")) {
+      const numDigits = item.external_id.replace(/\D/g, "");
+      if (item.is_catalog || numDigits.length <= 8) {
+        url = "https://www.mercadolivre.com.br/p/" + item.external_id;
+      } else {
+        url = "https://produto.mercadolivre.com.br/" + item.external_id;
+      }
+    }
+  }
+
+  return url || ("https://produto.mercadolivre.com.br/" + item.external_id);
+}
+
 export function CompetitorStoresSubTab() {
   // Navegação Interna: Lojas vs Anúncios
   const [activeView, setActiveView] = useState<"stores" | "listings">("stores");
@@ -661,7 +690,18 @@ export function CompetitorStoresSubTab() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {listings.map((item) => {
+                    {// Deduplica anúncios na visualização
+                    (() => {
+                      const seen = new Set<string>();
+                      const uniqueListings = listings.filter((item) => {
+                        const key = (item.store_id || "") + "_" + (item.external_id || item.id);
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                      });
+                      return uniqueListings;
+                    })().map((item) => {
+                      const safeUrl = getSafeListingUrl(item);
                       // Formata data e calcula novidade
                       let createdDateText = "—";
                       let isRecent = false;
@@ -696,13 +736,14 @@ export function CompetitorStoresSubTab() {
                           {/* Título & Badges */}
                           <td className="py-2.5 px-3">
                             <a
-                              href={item.permalink}
+                              href={safeUrl}
                               target="_blank"
-                              rel="noreferrer"
-                              className="font-bold text-slate-900 hover:text-indigo-600 transition-colors line-clamp-2 leading-tight"
-                              title={item.title}
+                              rel="noopener noreferrer"
+                              className="font-bold text-slate-900 hover:text-indigo-600 transition-colors line-clamp-2 leading-tight group/link inline-flex items-center gap-1.5"
+                              title={`Abrir "${item.title}" no Mercado Livre (nova aba)`}
                             >
-                              {item.title}
+                              <span>{item.title}</span>
+                              <ExternalLink className="w-3.5 h-3.5 text-slate-400 group-hover/link:text-indigo-600 shrink-0 opacity-70 group-hover/link:opacity-100 transition-opacity" />
                             </a>
                             <div className="flex flex-wrap items-center gap-1.5 mt-1">
                               <span className="font-mono text-[10px] text-slate-400">
@@ -758,11 +799,18 @@ export function CompetitorStoresSubTab() {
                                 ? `+${item.sales_count_approx.toLocaleString("pt-BR")}`
                                 : "Sem vendas"}
                             </div>
-                            {item.sales_count_approx >= 1000 && (
+                            {item.is_catalog ? (
+                              <span
+                                className="text-[9px] font-bold bg-purple-100 text-purple-800 px-1.5 py-0.2 rounded-md mt-0.5 inline-block"
+                                title="Vendas acumuladas globais do catálogo do Mercado Livre (disputa de Buy Box)"
+                              >
+                                📦 Catálogo ML
+                              </span>
+                            ) : item.sales_count_approx >= 1000 ? (
                               <span className="text-[9px] font-bold bg-emerald-100 text-emerald-800 px-1.5 py-0.2 rounded-md mt-0.5 inline-block">
                                 🔥 Best Seller
                               </span>
-                            )}
+                            ) : null}
                           </td>
 
                           {/* Preço Atual */}
@@ -779,12 +827,30 @@ export function CompetitorStoresSubTab() {
 
                           {/* Líquido Concorrente */}
                           <td className="py-2.5 px-3 text-right">
-                            <div className="font-bold text-emerald-700">
-                              R$ {(item.estimated_net || item.current_price * 0.8).toFixed(2).replace(".", ",")}
-                            </div>
-                            <div className="text-[10px] text-slate-400">
-                              Tarifa: R$ {(item.estimated_sale_fee || item.current_price * 0.165).toFixed(2).replace(".", ",")}
-                            </div>
+                            {(() => {
+                              const fee = item.estimated_sale_fee || Number((item.current_price * 0.165).toFixed(2));
+                              const net = item.estimated_net || Number((item.current_price * 0.8).toFixed(2));
+                              const shipping = item.estimated_shipping !== undefined && item.estimated_shipping !== null
+                                ? item.estimated_shipping
+                                : Math.max(0, Number((item.current_price - fee - net).toFixed(2)));
+
+                              return (
+                                <div
+                                  className="cursor-help"
+                                  title={`Preço: R$ ${item.current_price.toFixed(2).replace(".", ",")} | (-) Tarifa ML: R$ ${fee.toFixed(2).replace(".", ",")}${shipping > 0 ? ` | (-) Frete Grátis: R$ ${shipping.toFixed(2).replace(".", ",")}` : ""} => Líquido Estimado: R$ ${net.toFixed(2).replace(".", ",")}`}
+                                >
+                                  <div className="font-bold text-emerald-700">
+                                    R$ {net.toFixed(2).replace(".", ",")}
+                                  </div>
+                                  <div className="text-[10px] text-slate-500 flex flex-col items-end gap-0.5 mt-0.5 leading-tight">
+                                    <span>Tarifa: -R$ {fee.toFixed(2).replace(".", ",")}</span>
+                                    {shipping > 0 && (
+                                      <span className="text-blue-600 font-medium">Frete: -R$ {shipping.toFixed(2).replace(".", ",")}</span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })()}
                           </td>
 
                           {/* Ação: Criar Meu Anúncio a partir Deste */}

@@ -1694,6 +1694,36 @@
     return window.location.origin + window.location.pathname;
   }
 
+  function extractTotalResultsCount(rootDoc = document) {
+    const selectors = [
+      ".ui-search-search-result__quantity-results",
+      ".ui-search-results-total",
+      "[class*='quantity-results']",
+      ".ui-search-sidebar__title",
+      "[class*='results-total']",
+      ".ui-search-filter-dl",
+    ];
+    for (const sel of selectors) {
+      const el = rootDoc.querySelector(sel);
+      if (el && el.innerText) {
+        const m = el.innerText.match(/(\d[\d\.]*)\s+resultados?/i);
+        if (m) {
+          const val = parseInt(m[1].replace(/\./g, ""), 10);
+          if (!isNaN(val) && val > 0) return val;
+        }
+      }
+    }
+    const headerEl = rootDoc.querySelector(".ui-search-view-options, .ui-search-main, header, aside, .ui-search-layout");
+    if (headerEl && headerEl.innerText) {
+      const m = headerEl.innerText.match(/(\d[\d\.]*)\s+resultados?/i);
+      if (m) {
+        const val = parseInt(m[1].replace(/\./g, ""), 10);
+        if (!isNaN(val) && val > 0) return val;
+      }
+    }
+    return null;
+  }
+
   function isSearchListingPage() {
     // Se for um anúncio individual de produto, NUNCA é página de busca
     if (isProductPage()) {
@@ -1741,12 +1771,25 @@
     return document.title.split("|")[0].split("-")[0].trim() || "Produtos Pesquisados";
   }
 
-  function extractAllSearchItems() {
+  function extractAllSearchItems(rootDoc = document) {
     const items = [];
+    const seenIds = new Set();
+    const seenPermalinks = new Set();
+
     if (isMercadoLivre) {
-      const elements = document.querySelectorAll(
-        "li.ui-search-layout__item, div.poly-card, div.ui-search-result, div[class*='poly-card'], div.ui-search-result__wrapper, .shops__item, [data-component='poly-card'], .item-card, .promotion-item, .carousel__item"
-      );
+      // Seleciona os cards reais evitando capturar simultaneamente container pai e filhos
+      const rawElements = Array.from(rootDoc.querySelectorAll(
+        "li.ui-search-layout__item, div.poly-card, div.ui-search-result, .shops__item, [data-component='poly-card'], .item-card, .promotion-item, .carousel__item"
+      ));
+
+      // Descarta LI se houver poly-card interno (processará o poly-card diretamente)
+      const elements = rawElements.filter((el) => {
+        if (el.tagName === "LI" && el.querySelector("div.poly-card, div.ui-search-result__wrapper")) {
+          return false;
+        }
+        return true;
+      });
+
       elements.forEach((el, index) => {
         try {
           const imgEl = el.querySelector("img");
@@ -1761,26 +1804,76 @@
             }
           }
 
-          // Busca link e título com suporte a novos polycards
+          // Busca título garantindo que não seja badge de vendedor ou frete
           const titleEl = el.querySelector(
-            "a.poly-component__title, .poly-component__title a, .poly-component__title, h2.poly-box a, h2 a, a.ui-search-item__group__element, [class*='title'] a, h2.ui-search-item__title, .ui-search-item__title"
+            "a.poly-component__title, .poly-component__title a, h2.poly-box a, h2 a, a.ui-search-item__group__element, [class*='title'] a, h2.ui-search-item__title, .ui-search-item__title, .poly-component__title"
           );
           let title = titleEl ? (titleEl.innerText || titleEl.textContent || "").trim() : (imgEl?.alt || "").trim();
           if (!title) return;
 
-          let linkEl = (titleEl && titleEl.tagName === "A")
-            ? titleEl
-            : el.querySelector("a.poly-component__title, a[href*='mercadolivre.com.br'], a[href*='/MLB-'], a[href*='/p/MLB'], a.ui-search-link");
+          // 1. Extração segura do link do produto (prioridade absoluta para a tag <a> do produto, nunca do vendedor)
+          let linkEl = null;
+          if (titleEl) {
+            if (titleEl.tagName === "A" && titleEl.href && !titleEl.href.includes("/pagina/") && !titleEl.href.includes("/perfil/") && !titleEl.href.includes("/loja/")) {
+              linkEl = titleEl;
+            } else {
+              const aInside = titleEl.querySelector("a");
+              if (aInside && aInside.href && !aInside.href.includes("/pagina/") && !aInside.href.includes("/perfil/") && !aInside.href.includes("/loja/")) {
+                linkEl = aInside;
+              }
+            }
+          }
+          if (!linkEl) {
+            linkEl = el.querySelector(
+              "a.poly-component__title, a[href*='/p/MLB'], a[href*='/MLB-'], a[href*='produto.mercadolivre.com.br/MLB'], a.ui-search-link"
+            );
+          }
+          if (!linkEl) {
+            const allLinks = Array.from(el.querySelectorAll("a[href*='MLB']"));
+            linkEl = allLinks.find(a => !a.href.includes("/pagina/") && !a.href.includes("/perfil/") && !a.href.includes("/loja/")) || null;
+          }
           if (!linkEl) linkEl = el.querySelector("a");
           if (!linkEl || !linkEl.href) return;
 
-          const permalink = linkEl.href.split("#")[0];
+          let rawHref = linkEl.href;
+          // Se for link patrocinado do Mercado Clics (click1.mercadolivre.com.br), desempacota a URL real do produto
+          if (rawHref.includes("click1.mercadolivre.com.br") || rawHref.includes("/mclics/")) {
+            try {
+              const u = new URL(rawHref);
+              const target = u.searchParams.get("url") || u.searchParams.get("tu");
+              if (target) rawHref = decodeURIComponent(target);
+            } catch {}
+          }
+
+          let permalink = rawHref.split("#")[0];
+          const isCatalog = permalink.includes("/p/MLB") || permalink.includes("/p/");
+          const sellerId = extractSellerId();
+
+          // Se for produto de catálogo (/p/MLB...), inclui ou preserva o seller_id para abrir direto na Buy Box do concorrente
+          try {
+            const u = new URL(permalink);
+            if (isCatalog && sellerId && !u.search.includes("seller_id")) {
+              u.searchParams.set("pdp_filters", `seller_id:${sellerId}`);
+              permalink = u.toString();
+            } else if (!isCatalog) {
+              // Limpa parâmetros transitórios de busca que quebram links externos
+              permalink = `${u.origin}${u.pathname}`;
+            }
+          } catch {}
+
+          const cleanLink = permalink.split("?")[0].replace(/\/+$/, "");
 
           const widMatch =
             permalink.match(/(MLB-?\d+)/i) ||
             el.innerHTML.match(/wid=(MLB\d+)/i) ||
             permalink.match(/\/p\/(MLB\d+)/i);
           const external_id = widMatch ? widMatch[1].replace("-", "") : `MLB${Date.now()}_${index}`;
+
+          // DEDUPLICAÇÃO ESTRITA: impede duplicação do mesmo anúncio no card/página
+          if (seenIds.has(external_id)) return;
+          if (cleanLink && seenPermalinks.has(cleanLink)) return;
+          seenIds.add(external_id);
+          if (cleanLink) seenPermalinks.add(cleanLink);
 
           // Preço Atual
           let current_price = 0;
@@ -1841,6 +1934,21 @@
 
           const listing_created_at = interpolateMlbCreationDate(external_id, thumbnail);
 
+          // Estima taxa de venda e frete grátis preliminares
+          const resolvedListingType = is_full ? "gold_pro" : "gold_special";
+          const feePct = resolvedListingType === "gold_pro" ? 0.17 : 0.12;
+          const fixedFee = current_price < 79 ? 6.0 : 0;
+          const estFee = Number(((current_price * feePct) + fixedFee).toFixed(2));
+          let estShipping = 0;
+          if (current_price >= 79) {
+            if (current_price < 100) estShipping = 13.65;
+            else if (current_price < 120) estShipping = 16.85;
+            else if (current_price < 150) estShipping = 18.65;
+            else if (current_price < 200) estShipping = 20.45;
+            else estShipping = 22.45;
+          }
+          const estNet = Math.max(0, Number((current_price - estFee - estShipping).toFixed(2)));
+
           items.push({
             id: external_id,
             platform: "mercadolivre",
@@ -1854,7 +1962,7 @@
             is_full_or_flex: is_full,
             promo_badge,
             campaign_type: promo_badge ? "Campanha ML" : null,
-            listing_type: is_full ? "premium" : "classico",
+            listing_type: resolvedListingType,
             permalink,
             thumbnail_url: thumbnail,
             seller_name,
@@ -1865,6 +1973,10 @@
             reviews_count: sales_count > 0 ? Math.min(500, Math.round(sales_count * 0.15) + 5) : 0,
             is_already_monitored: false,
             matched_my_listing_id: null,
+            is_catalog: isCatalog,
+            estimated_sale_fee: estFee,
+            estimated_shipping: estShipping,
+            estimated_net: estNet,
           });
         } catch (e) {
           console.warn("[ERP Extractor] Erro em item ML:", e);
@@ -2196,16 +2308,59 @@
    * Envia os dados e anúncios da loja do concorrente para o ERP
    */
   async function sendStoreToErp(overrideUrl = null, segment = "Acessórios Automotivos", isFollowing = true) {
-    const items = extractAllSearchItems();
+    const syncBtn = document.getElementById("crm-sync-store-btn");
+    let items = extractAllSearchItems();
     if (items.length === 0) {
       throw new Error("Nenhum anúncio localizado na loja do concorrente.");
     }
 
+    const totalExpected = extractTotalResultsCount() || items.length;
     const storeName = extractStoreName();
     const sellerId = extractSellerId();
     const storeUrl = extractStoreUrl();
     const erpUrl = await resolveErpUrl(overrideUrl);
     const platform = "mercadolivre";
+
+    // Paginação automática de múltiplas páginas para capturar todos os anúncios da loja
+    if (isMercadoLivre && totalExpected > items.length) {
+      const seenIds = new Set(items.map((i) => i.external_id));
+      let nextLink = document.querySelector(
+        ".andes-pagination__button--next a, a[title='Seguinte'], a[title='Próxima'], a[class*='pagination__next']"
+      );
+      let nextUrl = nextLink ? nextLink.href : null;
+      let page = 1;
+      const maxPages = 15; // Limite de até 15 páginas (~750 anúncios)
+
+      while (nextUrl && page < maxPages && items.length < totalExpected) {
+        page++;
+        if (syncBtn) {
+          syncBtn.innerText = `Capturando pág. ${page} (${items.length}/${totalExpected} anúncios)...`;
+        }
+        try {
+          const resp = await fetch(nextUrl, { credentials: "same-origin" });
+          if (!resp.ok) break;
+          const html = await resp.text();
+          const doc = new DOMParser().parseFromString(html, "text/html");
+          const pageItems = extractAllSearchItems(doc);
+          let newAdded = 0;
+          for (const it of pageItems) {
+            if (!seenIds.has(it.external_id)) {
+              seenIds.add(it.external_id);
+              items.push(it);
+              newAdded++;
+            }
+          }
+          if (newAdded === 0) break;
+          const nextBtnDoc = doc.querySelector(
+            ".andes-pagination__button--next a, a[title='Seguinte'], a[title='Próxima'], a[class*='pagination__next']"
+          );
+          nextUrl = nextBtnDoc ? nextBtnDoc.href : null;
+        } catch (pageErr) {
+          console.warn("[ERP Extractor] Interrompida paginação da loja:", pageErr);
+          break;
+        }
+      }
+    }
 
     const payload = {
       platform,
@@ -2215,6 +2370,7 @@
       segment: segment || "Acessórios Automotivos",
       is_following: isFollowing,
       seller_reputation: "platinum",
+      total_listings: totalExpected > items.length ? totalExpected : items.length,
       items,
     };
 
@@ -2275,6 +2431,11 @@
 
     const items = extractAllSearchItems();
     const storeName = extractStoreName();
+    const totalCount = extractTotalResultsCount() || items.length;
+
+    const countText = totalCount > items.length
+      ? `${totalCount} anúncios (${items.length} nesta página)`
+      : `${totalCount} anúncios`;
 
     const bar = document.createElement("div");
     bar.id = "crm-marketplaces-store-bar";
@@ -2298,10 +2459,10 @@
     bar.innerHTML = `
       <div style="display:flex;align-items:center;gap:8px;">
         <span style="background:linear-gradient(135deg, #4F46E5, #6366F1);color:#FFFFFF;padding:3px 8px;border-radius:6px;font-weight:700;font-size:10px;">🏪 CONCORRENTE DETECTADO</span>
-        <span style="font-weight:600;color:#F8FAFC;">${storeName} • <strong>${items.length} anúncios</strong></span>
+        <span style="font-weight:600;color:#F8FAFC;">${storeName} • <strong>${countText}</strong></span>
       </div>
       <button id="crm-sync-store-btn" style="background:linear-gradient(135deg, #4338CA, #6366F1);color:#FFFFFF;border:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;transition:opacity 0.2s;">
-        📥 Capturar Loja para o ERP
+        📥 Capturar Loja (${totalCount} anúncios) para o ERP
       </button>
       <button id="crm-close-store-bar" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1;padding:0 4px;margin-left:4px;">
         ✕

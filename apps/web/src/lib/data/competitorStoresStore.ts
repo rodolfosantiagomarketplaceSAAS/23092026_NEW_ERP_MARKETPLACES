@@ -465,6 +465,7 @@ export function upsertMemoryStoreScrape(
     is_following?: boolean;
     seller_reputation?: string;
     notes?: string | null;
+    total_listings?: number;
   },
   items: Array<{
     external_id: string;
@@ -484,6 +485,9 @@ export function upsertMemoryStoreScrape(
     reviews_count?: number;
     estimated_sale_fee?: number;
     estimated_net?: number;
+    estimated_shipping?: number | null;
+    is_catalog?: boolean;
+    listing_type?: string | null;
   }>,
   userId = "user_default"
 ): { store: CompetitorStore; listingsCount: number } {
@@ -494,10 +498,28 @@ export function upsertMemoryStoreScrape(
     (s) => s.store_url.split("?")[0].replace(/\/+$/, "") === cleanUrl || (storeData.seller_id && s.seller_id === storeData.seller_id)
   );
 
+  // Deduplica itens por external_id
+  const seenIds = new Set<string>();
+  const uniqueItems = items.filter((it) => {
+    if (!it.external_id) return true;
+    if (seenIds.has(it.external_id)) return false;
+    seenIds.add(it.external_id);
+    return true;
+  });
+
   const nowIso = new Date().toISOString();
-  const totalSales = items.reduce((acc, i) => acc + (i.sales_count_approx || 0), 0);
-  const totalPrice = items.reduce((acc, i) => acc + (i.current_price || 0), 0);
-  const avgTicket = items.length > 0 ? Number((totalPrice / items.length).toFixed(2)) : 0;
+  // Vendas diretas da loja (não infla com 100k de catálogo global)
+  const totalSales = uniqueItems.reduce((acc, i) => {
+    if (i.is_catalog) {
+      return acc + Math.min(i.sales_count_approx || 0, 50);
+    }
+    return acc + (i.sales_count_approx || 0);
+  }, 0);
+  const totalPrice = uniqueItems.reduce((acc, i) => acc + (i.current_price || 0), 0);
+  const avgTicket = uniqueItems.length > 0 ? Number((totalPrice / uniqueItems.length).toFixed(2)) : 0;
+  const totalListings = storeData.total_listings && storeData.total_listings > 0
+    ? storeData.total_listings
+    : uniqueItems.length;
 
   if (store) {
     store.store_name = storeData.store_name || store.store_name;
@@ -508,7 +530,7 @@ export function upsertMemoryStoreScrape(
     if (typeof storeData.is_following === "boolean") {
       store.is_following = storeData.is_following;
     }
-    store.total_listings = items.length;
+    store.total_listings = totalListings;
     store.total_sales_approx = totalSales;
     store.avg_ticket = avgTicket;
     store.last_scraped_at = nowIso;
@@ -526,7 +548,7 @@ export function upsertMemoryStoreScrape(
       is_following: storeData.is_following !== undefined ? storeData.is_following : true,
       seller_reputation: storeData.seller_reputation || "platinum",
       notes: storeData.notes || null,
-      total_listings: items.length,
+      total_listings: totalListings,
       total_sales_approx: totalSales,
       avg_ticket: avgTicket,
       last_scraped_at: nowIso,
@@ -539,8 +561,8 @@ export function upsertMemoryStoreScrape(
   // Remove existing listings for this store from memory to replace with fresh ones
   memoryStoreListings = memoryStoreListings.filter((l) => l.store_id !== store!.id);
 
-  // Add fresh listings
-  for (const item of items) {
+  // Add fresh unique listings
+  for (const item of uniqueItems) {
     const listingCreatedAt = item.listing_created_at || new Date().toISOString();
     const isNew = isListingNew(listingCreatedAt);
 
@@ -567,6 +589,9 @@ export function upsertMemoryStoreScrape(
       reviews_count: item.reviews_count || 0,
       estimated_sale_fee: item.estimated_sale_fee || 0,
       estimated_net: item.estimated_net || 0,
+      estimated_shipping: item.estimated_shipping ?? null,
+      is_catalog: !!item.is_catalog,
+      listing_type: item.listing_type || null,
       last_scraped_at: nowIso,
       created_at: nowIso,
       updated_at: nowIso,
@@ -576,7 +601,7 @@ export function upsertMemoryStoreScrape(
   }
 
   saveToDisk();
-  return { store, listingsCount: items.length };
+  return { store, listingsCount: uniqueItems.length };
 }
 
 function isListingNew(createdAtStr?: string | null): boolean {
