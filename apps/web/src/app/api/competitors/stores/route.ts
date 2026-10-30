@@ -41,12 +41,8 @@ export async function GET(req: NextRequest) {
 
       const { data, error } = await query;
       if (!error && Array.isArray(data)) {
-        if (data.length > 0) {
-          stores = data;
-        } else {
-          // If DB has 0 records, respect persisted cache (which tracks deletions)
-          stores = getMemoryStores();
-        }
+        // Se a consulta no banco funcionou, respeita fielmente os dados (inclusive lista vazia se o usuário excluiu lojas)
+        stores = data;
       } else {
         stores = getMemoryStores();
       }

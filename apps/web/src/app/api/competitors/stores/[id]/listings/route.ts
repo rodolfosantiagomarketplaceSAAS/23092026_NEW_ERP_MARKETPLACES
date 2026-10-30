@@ -33,11 +33,8 @@ export async function GET(
 
       const { data, error } = await query;
       if (!error && Array.isArray(data)) {
-        if (data.length > 0) {
-          listings = data;
-        } else {
-          listings = getMemoryStoreListings(id);
-        }
+        // Se a consulta no banco funcionou, respeita fielmente os dados (inclusive lista vazia)
+        listings = data;
       } else {
         listings = getMemoryStoreListings(id);
       }
