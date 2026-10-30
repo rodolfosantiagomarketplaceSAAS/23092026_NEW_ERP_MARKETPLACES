@@ -39,9 +39,67 @@ export async function POST(req: NextRequest) {
       userId = "demo-user-id";
     }
 
-    // 2. Parse & Validate Payload
-    const body = await req.json();
-    const parseResult = competitorStoreSyncSchema.safeParse(body);
+    // 2. Parse & Validate Payload defensively
+    const rawBody = await req.json();
+    const rawItems = Array.isArray(rawBody?.items) ? rawBody.items : [];
+    const sanitizedItems = rawItems
+      .filter((it: any) => it && (it.external_id || it.permalink || it.title))
+      .map((it: any, idx: number) => {
+        const extId = (it.external_id || "").trim() || `ITEM_${Date.now()}_${idx}`;
+        const price =
+          typeof it.current_price === "number"
+            ? it.current_price
+            : parseFloat(String(it.current_price || "0").replace(/[^0-9.,]/g, "").replace(",", ".")) || 1.0;
+        const origPrice = it.original_price
+          ? typeof it.original_price === "number"
+            ? it.original_price
+            : parseFloat(String(it.original_price).replace(/[^0-9.,]/g, "").replace(",", "."))
+          : null;
+        const discPct = it.discount_pct ? Number(it.discount_pct) : null;
+        const sales =
+          typeof it.sales_count_approx === "number"
+            ? it.sales_count_approx
+            : parseInt(String(it.sales_count_approx || "0").replace(/\D/g, ""), 10) || 0;
+        const rating =
+          typeof it.rating === "number" ? it.rating : parseFloat(String(it.rating || "5")) || 5.0;
+        const reviews =
+          typeof it.reviews_count === "number"
+            ? it.reviews_count
+            : parseInt(String(it.reviews_count || "0").replace(/\D/g, ""), 10) || 0;
+
+        return {
+          external_id: extId,
+          title: (it.title || "Anúncio do Concorrente").trim(),
+          current_price: price > 0 ? price : 1.0,
+          original_price: origPrice && origPrice > 0 ? origPrice : null,
+          discount_pct: discPct,
+          sales_count_approx: sales,
+          listing_created_at: it.listing_created_at || null,
+          shipping_type: it.shipping_type || (it.is_full ? "ml_full" : "padrao"),
+          is_full: !!it.is_full,
+          is_free_shipping: !!it.is_free_shipping,
+          promo_badge: it.promo_badge || null,
+          permalink: it.permalink || `https://produto.mercadolivre.com.br/${extId}`,
+          thumbnail_url: it.thumbnail_url || null,
+          rating: Math.min(5, Math.max(0, rating)),
+          reviews_count: reviews,
+          estimated_sale_fee: typeof it.estimated_sale_fee === "number" ? it.estimated_sale_fee : 0,
+          estimated_net: typeof it.estimated_net === "number" ? it.estimated_net : 0,
+        };
+      });
+
+    const sanitizedBody = {
+      ...rawBody,
+      platform: rawBody?.platform || "mercadolivre",
+      store_name: (rawBody?.store_name || "Loja Concorrente").trim(),
+      store_url: (rawBody?.store_url || "https://www.mercadolivre.com.br").trim(),
+      segment: (rawBody?.segment || "Geral").trim(),
+      is_following: rawBody?.is_following !== undefined ? !!rawBody.is_following : true,
+      seller_reputation: rawBody?.seller_reputation || "platinum",
+      items: sanitizedItems,
+    };
+
+    const parseResult = competitorStoreSyncSchema.safeParse(sanitizedBody);
 
     if (!parseResult.success) {
       console.warn("[API Store Sync] Erro de validação Zod:", parseResult.error.flatten().fieldErrors);

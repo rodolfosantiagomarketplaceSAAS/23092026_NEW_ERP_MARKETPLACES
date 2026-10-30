@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
-import { getMemoryStores, upsertMemoryStoreScrape } from "@/lib/data/competitorStoresStore";
+import { getMemoryStores, hasDiskCache, upsertMemoryStoreScrape } from "@/lib/data/competitorStoresStore";
 import { resolveRequestUser } from "@/lib/extension/auth";
 
 export const dynamic = "force-dynamic";
@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     } = await supabaseAuth.auth.getUser();
 
     const supabase = createSupabaseAdminClient();
-    let stores = [];
+    let stores: any[] = [];
 
     // Try Supabase first
     try {
@@ -40,8 +40,13 @@ export async function GET(req: NextRequest) {
       }
 
       const { data, error } = await query;
-      if (!error && data && data.length > 0) {
-        stores = data;
+      if (!error && Array.isArray(data)) {
+        if (data.length > 0) {
+          stores = data;
+        } else {
+          // If DB has 0 records, respect persisted cache (which tracks deletions)
+          stores = getMemoryStores();
+        }
       } else {
         stores = getMemoryStores();
       }

@@ -1,4 +1,57 @@
 import type { CompetitorStore, CompetitorStoreListing } from "@crm/types";
+import fs from "fs";
+import path from "path";
+
+const CACHE_DIR = path.join(process.cwd(), ".cache");
+const CACHE_FILE = path.join(CACHE_DIR, "competitor_stores_cache.json");
+let isInitialized = false;
+
+export function hasDiskCache(): boolean {
+  try {
+    return fs.existsSync(CACHE_FILE);
+  } catch {
+    return false;
+  }
+}
+
+function loadFromDisk() {
+  if (isInitialized) return;
+  isInitialized = true;
+  try {
+    if (fs.existsSync(CACHE_FILE)) {
+      const content = fs.readFileSync(CACHE_FILE, "utf-8");
+      if (content.trim()) {
+        const data = JSON.parse(content);
+        if (Array.isArray(data?.stores)) {
+          memoryStores = data.stores;
+        }
+        if (Array.isArray(data?.listings)) {
+          memoryStoreListings = data.listings;
+        }
+      }
+    } else {
+      // First boot: persist the initial seed demo stores
+      saveToDisk();
+    }
+  } catch (err) {
+    console.warn("[Stores Cache] Falha ao carregar cache do disco:", err);
+  }
+}
+
+function saveToDisk() {
+  try {
+    if (!fs.existsSync(CACHE_DIR)) {
+      fs.mkdirSync(CACHE_DIR, { recursive: true });
+    }
+    fs.writeFileSync(
+      CACHE_FILE,
+      JSON.stringify({ stores: memoryStores, listings: memoryStoreListings }, null, 2),
+      "utf-8"
+    );
+  } catch (err) {
+    console.warn("[Stores Cache] Falha ao salvar cache no disco:", err);
+  }
+}
 
 // In-memory persistent cache for instant loading & offline/fallback mode
 let memoryStores: CompetitorStore[] = [
@@ -350,14 +403,17 @@ let memoryStoreListings: CompetitorStoreListing[] = [
 ];
 
 export function getMemoryStores(userId?: string): CompetitorStore[] {
+  loadFromDisk();
   return [...memoryStores];
 }
 
 export function getMemoryStoreById(id: string): CompetitorStore | null {
+  loadFromDisk();
   return memoryStores.find((s) => s.id === id) || null;
 }
 
 export function getMemoryStoreListings(storeId?: string): CompetitorStoreListing[] {
+  loadFromDisk();
   if (storeId && storeId !== "all") {
     return memoryStoreListings.filter((l) => l.store_id === storeId);
   }
@@ -368,6 +424,7 @@ export function updateMemoryStore(
   id: string,
   updates: Partial<Pick<CompetitorStore, "segment" | "is_following" | "store_name" | "notes">>
 ): CompetitorStore | null {
+  loadFromDisk();
   const idx = memoryStores.findIndex((s) => s.id === id);
   if (idx === -1) return null;
 
@@ -384,14 +441,17 @@ export function updateMemoryStore(
     );
   }
 
+  saveToDisk();
   return memoryStores[idx];
 }
 
 export function deleteMemoryStore(id: string): boolean {
+  loadFromDisk();
   const initialLen = memoryStores.length;
   memoryStores = memoryStores.filter((s) => s.id !== id);
   memoryStoreListings = memoryStoreListings.filter((l) => l.store_id !== id);
-  return memoryStores.length < initialLen;
+  saveToDisk();
+  return true;
 }
 
 export function upsertMemoryStoreScrape(
@@ -427,6 +487,7 @@ export function upsertMemoryStoreScrape(
   }>,
   userId = "user_default"
 ): { store: CompetitorStore; listingsCount: number } {
+  loadFromDisk();
   // Normalize URL
   const cleanUrl = storeData.store_url.trim().split("?")[0].replace(/\/+$/, "");
   let store = memoryStores.find(
@@ -514,6 +575,7 @@ export function upsertMemoryStoreScrape(
     });
   }
 
+  saveToDisk();
   return { store, listingsCount: items.length };
 }
 

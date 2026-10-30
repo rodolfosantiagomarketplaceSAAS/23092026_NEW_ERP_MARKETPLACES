@@ -84,6 +84,7 @@ export async function DELETE(
 
     try {
       const supabase = createSupabaseAdminClient();
+      await supabase.from("competitor_store_listings").delete().eq("store_id", id);
       await supabase.from("competitor_stores").delete().eq("id", id);
     } catch (dbErr) {
       console.warn("[API Stores DELETE] DB note:", dbErr);

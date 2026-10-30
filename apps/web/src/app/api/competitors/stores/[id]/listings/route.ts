@@ -32,8 +32,12 @@ export async function GET(
       }
 
       const { data, error } = await query;
-      if (!error && data && data.length > 0) {
-        listings = data;
+      if (!error && Array.isArray(data)) {
+        if (data.length > 0) {
+          listings = data;
+        } else {
+          listings = getMemoryStoreListings(id);
+        }
       } else {
         listings = getMemoryStoreListings(id);
       }

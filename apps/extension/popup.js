@@ -155,40 +155,40 @@ document.addEventListener("DOMContentLoaded", async () => {
                     return;
                   }
 
-                  try {
-                    const currentErpUrl = normalizeErpUrl(erpUrlInput?.value);
-                    const syncApiRes = await fetch(`${currentErpUrl}/api/competitors/stores/sync`, {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}),
-                      },
-                      body: JSON.stringify({
-                        platform: "mercadolivre",
-                        store_name: response.storeName,
-                        seller_id: response.sellerId || null,
-                        store_url: response.storeUrl,
-                        segment: segmentVal,
-                        is_following: isFollowingVal,
-                        items: storeRes.items || [],
-                      }),
-                    });
+                  const currentErpUrl = normalizeErpUrl(erpUrlInput?.value);
+                  const payload = {
+                    platform: "mercadolivre",
+                    store_name: response.storeName,
+                    seller_id: response.sellerId || null,
+                    seller_nickname: response.sellerNickname || response.storeName,
+                    store_url: response.storeUrl,
+                    segment: segmentVal,
+                    is_following: isFollowingVal,
+                    items: storeRes.items || [],
+                  };
 
-                    const resJson = await syncApiRes.json();
-                    if (syncApiRes.ok && resJson.success) {
-                      showFeedback(`✅ Loja sincronizada com ${resJson.listings_count} anúncios no ERP!`, false);
+                  chrome.runtime.sendMessage(
+                    {
+                      action: "SYNC_STORE_ITEMS",
+                      erpUrl: currentErpUrl,
+                      payload,
+                    },
+                    (syncRes) => {
+                      if (chrome.runtime.lastError || !syncRes || !syncRes.success) {
+                        const errMsg = syncRes?.error || chrome.runtime.lastError?.message || "Falha ao enviar ao ERP.";
+                        showFeedback(errMsg, true);
+                        syncStoreBtn.disabled = false;
+                        syncStoreBtn.innerText = `🏬 Capturar Loja (${response.itemsCount} anúncios) para o ERP`;
+                        return;
+                      }
+
+                      showFeedback(`✅ Loja sincronizada com ${syncRes.count || syncRes.listings_count || payload.items.length} anúncios no ERP!`, false);
                       syncStoreBtn.innerText = "✅ Sincronizado com Sucesso!";
                       setTimeout(() => {
                         window.open(`${currentErpUrl}/inteligencia?tab=lojas`, "_blank");
                       }, 1000);
-                    } else {
-                      showFeedback(resJson.error || "Falha ao enviar ao ERP.", true);
-                      syncStoreBtn.disabled = false;
                     }
-                  } catch (netErr) {
-                    showFeedback("Erro de rede ao conectar com o ERP.", true);
-                    syncStoreBtn.disabled = false;
-                  }
+                  );
                 }
               );
             };
@@ -359,6 +359,96 @@ document.addEventListener("DOMContentLoaded", async () => {
           if (photosTotalCount) photosTotalCount.innerText = count > 0 ? String(count) : "";
           downloadPhotosBtn.innerText =
             count > 0 ? `📸 Baixar Todas (${count})` : "📸 Baixar Fotos";
+        }
+
+        // Suporte a captura do concorrente direto na página de anúncio (PDP)
+        const pdpStoreBox = document.getElementById("pdpStoreBox");
+        const pdpSellerNameText = document.getElementById("pdpSellerNameText");
+        const pdpSellerRepBadge = document.getElementById("pdpSellerRepBadge");
+        const pdpCaptureStoreBtn = document.getElementById("pdpCaptureStoreBtn");
+        const pdpOpenStoreUrlBtn = document.getElementById("pdpOpenStoreUrlBtn");
+
+        if (pdpStoreBox && currentScrapedData.seller_name && currentDetectedPlatform === "mercadolivre") {
+          pdpStoreBox.style.display = "block";
+          if (pdpSellerNameText) pdpSellerNameText.innerText = currentScrapedData.seller_name;
+          if (pdpSellerRepBadge) {
+            pdpSellerRepBadge.innerText = (currentScrapedData.seller_reputation || "platinum").toUpperCase();
+          }
+          if (pdpOpenStoreUrlBtn) {
+            const storeUrl = currentScrapedData.seller_store_url;
+            if (storeUrl) {
+              pdpOpenStoreUrlBtn.style.display = "block";
+              pdpOpenStoreUrlBtn.onclick = () => {
+                window.open(storeUrl, "_blank");
+              };
+            } else {
+              pdpOpenStoreUrlBtn.style.display = "none";
+            }
+          }
+          if (pdpCaptureStoreBtn) {
+            pdpCaptureStoreBtn.onclick = () => {
+              pdpCaptureStoreBtn.disabled = true;
+              pdpCaptureStoreBtn.innerText = "⏳ Espionando e enviando ao ERP...";
+
+              const currentErpUrl = normalizeErpUrl(erpUrlInput?.value);
+              const storePayload = {
+                platform: "mercadolivre",
+                store_name: currentScrapedData.seller_name,
+                seller_id: currentScrapedData.seller_id || null,
+                seller_nickname: currentScrapedData.seller_name,
+                store_url: currentScrapedData.seller_store_url || currentScrapedData.permalink || window.location.href,
+                segment: "Acessórios Automotivos",
+                is_following: true,
+                seller_reputation: currentScrapedData.seller_reputation || "platinum",
+                items: [
+                  {
+                    external_id: currentScrapedData.external_id,
+                    title: currentScrapedData.title,
+                    current_price: currentScrapedData.current_price,
+                    original_price: currentScrapedData.original_price,
+                    discount_pct: currentScrapedData.discount_pct || null,
+                    sales_count_approx: currentScrapedData.sales_count_approx || 0,
+                    listing_created_at: currentScrapedData.listing_created_at || null,
+                    shipping_type: currentScrapedData.shipping_type || "padrao",
+                    is_full: currentScrapedData.shipping_type === "ml_full",
+                    is_free_shipping: currentScrapedData.shipping_cost === 0,
+                    promo_badge: currentScrapedData.promo_badge,
+                    permalink: currentScrapedData.permalink,
+                    thumbnail_url: currentScrapedData.thumbnail_url,
+                    rating: currentScrapedData.rating || 5.0,
+                    reviews_count: 0,
+                    estimated_sale_fee: currentScrapedData.sale_fee_amount || 0,
+                    estimated_net: currentScrapedData.net_receivable || 0,
+                  },
+                ],
+              };
+
+              chrome.runtime.sendMessage(
+                {
+                  action: "SYNC_STORE_ITEMS",
+                  erpUrl: currentErpUrl,
+                  payload: storePayload,
+                },
+                (syncRes) => {
+                  if (chrome.runtime.lastError || !syncRes || !syncRes.success) {
+                    const err = syncRes?.error || chrome.runtime.lastError?.message || "Falha ao enviar concorrente.";
+                    showFeedback(err, true);
+                    pdpCaptureStoreBtn.disabled = false;
+                    pdpCaptureStoreBtn.innerText = "🏬 Espionar Loja deste Concorrente no ERP";
+                    return;
+                  }
+
+                  showFeedback(`✅ Concorrente "${currentScrapedData.seller_name}" adicionado ao Espião com sucesso!`, false);
+                  pdpCaptureStoreBtn.innerText = "✅ Concorrente Adicionado ao ERP!";
+                  setTimeout(() => {
+                    window.open(`${currentErpUrl}/inteligencia?tab=lojas`, "_blank");
+                  }, 1000);
+                }
+              );
+            };
+          }
+        } else if (pdpStoreBox) {
+          pdpStoreBox.style.display = "none";
         }
       });
     } else {
@@ -926,6 +1016,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       chrome.runtime.sendMessage({ action: "GET_STATUS" }, (status) => {
         const erpUrl = normalizeErpUrl(status?.erpUrl || erpUrlInput?.value);
         chrome.tabs.create({ url: `${erpUrl}/inteligencia` });
+      });
+    });
+  }
+
+  // Abrir Espião de Concorrentes no ERP
+  const openCompetitorsErpBtn = document.getElementById("openCompetitorsErpBtn");
+  if (openCompetitorsErpBtn) {
+    openCompetitorsErpBtn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ action: "GET_STATUS" }, (status) => {
+        const erpUrl = normalizeErpUrl(status?.erpUrl || erpUrlInput?.value);
+        chrome.tabs.create({ url: `${erpUrl}/inteligencia?tab=lojas` });
       });
     });
   }

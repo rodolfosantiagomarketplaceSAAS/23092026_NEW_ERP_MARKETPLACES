@@ -859,15 +859,30 @@
 
     // 5. Vendedor e Reputação
     let sellerName = jsonLd?.seller_name || "";
+    let sellerStoreUrl = null;
+    let sellerId = null;
+
     const sellerLink =
       document.querySelector(".ui-pdp-seller__link-trigger") ||
       document.querySelector(".ui-seller-info a") ||
       document.querySelector(".ui-seller-info__status-info .ui-seller-info__title") ||
       document.querySelector(".ui-seller-data-header__title") ||
-      document.querySelector('a[href*="/perfil/"]');
+      document.querySelector('a[href*="/perfil/"]') ||
+      document.querySelector('a[href*="/pagina/"]') ||
+      document.querySelector('a[href*="/loja/"]') ||
+      document.querySelector('a[href*="_CustId_"]');
 
     if (sellerLink && sellerLink.innerText.trim()) {
       sellerName = sellerLink.innerText.trim();
+    }
+
+    if (sellerLink && (sellerLink.href || sellerLink.getAttribute("href"))) {
+      const rawHref = sellerLink.href || sellerLink.getAttribute("href");
+      if (rawHref && !rawHref.startsWith("javascript:")) {
+        sellerStoreUrl = rawHref.split("?")[0];
+        const matchCust = rawHref.match(/_CustId_(\d+)/i);
+        if (matchCust) sellerId = matchCust[1];
+      }
     }
 
     if (!sellerName) {
@@ -1061,6 +1076,8 @@
       original_price: originalPrice,
       seller_name: sellerName,
       seller_reputation: sellerReputation,
+      seller_store_url: sellerStoreUrl,
+      seller_id: sellerId,
       shipping_type: shippingType,
       promo_badge: promoBadge,
       permalink,
@@ -1195,6 +1212,8 @@
       original_price: originalPrice,
       seller_name: sellerName,
       seller_reputation: sellerReputation,
+      seller_store_url: sellerStoreUrl,
+      seller_id: sellerId,
       shipping_type: shippingType,
       promo_badge: promoBadge,
       permalink: normalizeUrl(window.location.href.split("?")[0]),
@@ -1605,19 +1624,27 @@
 
   function isStorePage() {
     if (isProductPage()) return false;
-    if (!isMercadoLivre) return false;
 
-    const url = window.location.href;
-    const path = window.location.pathname;
+    const host = window.location.hostname.toLowerCase();
+    const url = window.location.href.toLowerCase();
+    const path = window.location.pathname.toLowerCase();
+
+    // MercadoShops e subdomínios oficiais de lojas (eshops / lojas)
+    if (host.includes("mercadoshops.com.br") || host.startsWith("eshops.") || host.startsWith("loja.")) {
+      return true;
+    }
+
+    if (!isMercadoLivre) return false;
 
     return (
       path.startsWith("/pagina/") ||
       path.startsWith("/loja/") ||
       path.startsWith("/perfil/") ||
-      url.includes("/_CustId_") ||
-      window.location.hostname.startsWith("loja.") ||
+      url.includes("/_custid_") ||
+      url.includes("seller_id=") ||
+      url.includes("client_id=") ||
       document.querySelector(
-        ".ui-seller-data-header__title, .official-store-header, .store-info, [class*='seller-profile'], [class*='brand-header']"
+        ".ui-seller-data-header__title, .official-store-header, .store-info, [class*='seller-profile'], [class*='brand-header'], [class*='seller-header'], .brand-title, .ui-seller-data-header"
       ) !== null
     );
   }
@@ -1718,7 +1745,7 @@
     const items = [];
     if (isMercadoLivre) {
       const elements = document.querySelectorAll(
-        "li.ui-search-layout__item, div.poly-card, div.ui-search-result, div[class*='poly-card'], div.ui-search-result__wrapper"
+        "li.ui-search-layout__item, div.poly-card, div.ui-search-result, div[class*='poly-card'], div.ui-search-result__wrapper, .shops__item, [data-component='poly-card'], .item-card, .promotion-item, .carousel__item"
       );
       elements.forEach((el, index) => {
         try {

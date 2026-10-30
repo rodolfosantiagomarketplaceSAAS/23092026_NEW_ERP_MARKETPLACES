@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ERP Marketplaces - ConexÃ£o</title>
+  <title>ERP Marketplaces - Conexão</title>
   <style>
     * {
       box-sizing: border-box;
@@ -214,7 +214,7 @@
     details.card summary::-webkit-details-marker { display: none; }
     details.card[open] summary { margin-bottom: 8px; }
 
-    /* Barra de Produto / Combobox AvanÃ§ado */
+    /* Barra de Produto / Combobox Avançado */
     .product-picker-header {
       display: flex;
       align-items: center;
@@ -565,7 +565,7 @@
   <div class="header">
     <div class="logo-area">
       <span class="badge-icon">ERP</span>
-      <span class="title">InteligÃªncia de Mercado</span>
+      <span class="title">Inteligência de Mercado</span>
     </div>
     <div id="statusBadge" class="status-badge offline">
       <span class="status-dot"></span>
@@ -574,18 +574,18 @@
   </div>
   <div id="userLine" class="user-line"></div>
 
-  <!-- Aviso de conexÃ£o automÃ¡tica -->
+  <!-- Aviso de conexão automática -->
   <div id="connectBanner" class="connect-banner">
-    <strong>ExtensÃ£o desconectada.</strong><br>
-    <span id="connectReason">Abra o ERP logado e a conexÃ£o Ã© feita automaticamente.</span>
-    <button id="connectBtn" class="btn btn-primary">ð Conectar ao ERP automaticamente</button>
+    <strong>Extensão desconectada.</strong><br>
+    <span id="connectReason">Abra o ERP logado e a conexão é feita automaticamente.</span>
+    <button id="connectBtn" class="btn btn-primary">🔗 Conectar ao ERP automaticamente</button>
   </div>
 
-  <!-- CartÃ£o: Pareamento no AnÃºncio Atual -->
+  <!-- Cartão: Pareamento no Anúncio Atual -->
   <div class="card" id="pairingCard">
-    <div class="card-title" id="cardSectionTitle">AnÃºncio Atual (Aba Ativa)</div>
+    <div class="card-title" id="cardSectionTitle">Anúncio Atual (Aba Ativa)</div>
     <div id="pageInfoBox" class="info-box">
-      Detectando anÃºncio na pÃ¡gina...
+      Detectando anúncio na página...
     </div>
 
     <!-- Bloco de Configuração de Loja Concorrente (Mercado Livre) -->
@@ -605,15 +605,15 @@
       🏬 Capturar Loja & Anúncios para o ERP
     </button>
 
-    <!-- BotÃ£o para PÃ¡ginas de Pesquisa (Mercado Livre / Shopee) -->
+    <!-- Botão para Páginas de Pesquisa (Mercado Livre / Shopee) -->
     <button id="syncSearchBtn" class="btn btn-action" style="display: none; background-color: #4F46E5; margin-bottom: 6px;">
-      ð Sincronizar Pesquisa com ERP
+      🚀 Sincronizar Pesquisa com ERP
     </button>
 
-    <!-- Seletor de AnÃºncio PrÃ³prio com Barra de Busca Inteligente -->
+    <!-- Seletor de Anúncio Próprio com Barra de Busca Inteligente -->
     <div class="form-group" id="listingSelectContainer" style="display: none;">
       <div class="product-picker-header">
-        <label for="listingSearchInput" style="margin-bottom: 0; font-weight: 600;">Vincular a um AnÃºncio PrÃ³prio:</label>
+        <label for="listingSearchInput" style="margin-bottom: 0; font-weight: 600;">Vincular a um Anúncio Próprio:</label>
         <span id="listingCountBadge" class="listing-count-badge">Carregando...</span>
       </div>
 
@@ -624,30 +624,30 @@
         <button type="button" class="platform-chip" data-platform="shopee">Shopee</button>
       </div>
 
-      <!-- Card Visual do AnÃºncio Selecionado -->
+      <!-- Card Visual do Anúncio Selecionado -->
       <div id="selectedListingCard" class="selected-listing-card radar-mode">
         <div class="selected-card-top">
-          <span class="selected-sku-tag" id="selectedSkuTag">ð¡ MODO RADAR</span>
-          <span class="selected-price-tag" id="selectedPriceTag">Sem vÃ­nculo direto</span>
+          <span class="selected-sku-tag" id="selectedSkuTag">📡 MODO RADAR</span>
+          <span class="selected-price-tag" id="selectedPriceTag">Sem vínculo direto</span>
         </div>
-        <div class="selected-title" id="selectedTitleText">Radar de Mercado (Monitorar sem anÃºncio prÃ³prio)</div>
+        <div class="selected-title" id="selectedTitleText">Radar de Mercado (Monitorar sem anúncio próprio)</div>
         <div class="selected-card-actions">
           <button type="button" class="btn-link-action" id="btnToggleDropdown">
-            ð Buscar / Trocar AnÃºncio
+            🔍 Buscar / Trocar Anúncio
           </button>
           <button type="button" class="btn-link-action danger" id="btnResetToRadar" style="display: none;">
-            â Voltar para Radar
+            ✕ Voltar para Radar
           </button>
         </div>
       </div>
 
-      <!-- Barra de Produto (Busca RÃ¡pida) -->
+      <!-- Barra de Produto (Busca Rápida) -->
       <div class="search-box-wrapper" id="searchBoxWrapper" style="display: none;">
         <svg class="search-icon-svg" viewBox="0 0 20 20" fill="currentColor">
           <path fill-rule="evenodd" d="M8 4a4 4 0 100 8 4 4 0 000-8zM2 8a6 6 0 1110.89 3.476l4.817 4.817a1 1 0 01-1.414 1.414l-4.816-4.816A6 6 0 012 8z" clip-rule="evenodd" />
         </svg>
-        <input type="text" id="listingSearchInput" class="search-input-field" placeholder="Buscar por tÃ­tulo, SKU ou ID..." autocomplete="off">
-        <button type="button" id="listingSearchClear" class="search-clear-btn" title="Limpar busca">â</button>
+        <input type="text" id="listingSearchInput" class="search-input-field" placeholder="Buscar por título, SKU ou ID..." autocomplete="off">
+        <button type="button" id="listingSearchClear" class="search-clear-btn" title="Limpar busca">✕</button>
       </div>
 
       <!-- Lista Suspensa de Resultados Filtrados -->
@@ -655,27 +655,27 @@
 
       <!-- Select oculto nativo mantido para compatibilidade total com scripts existentes -->
       <select id="myListingSelect" style="display: none;">
-        <option value="">ð¡ Radar de Mercado (Monitorar sem anÃºncio prÃ³prio)</option>
+        <option value="">📡 Radar de Mercado (Monitorar sem anúncio próprio)</option>
       </select>
 
       <div id="listingHint" style="font-size: 10px; color: #64748B; margin-top: 4px; line-height: 1.3;"></div>
     </div>
 
     <button id="captureNowBtn" class="btn btn-action" style="display: none;">
-      ð¡ Enviar para Radar de Mercado (ERP)
+      📡 Enviar para Radar de Mercado (ERP)
     </button>
-    <!-- Bloco de Fotos do AnÃºncio (Baixar Todas ou Escolher) -->
+    <!-- Bloco de Fotos do Anúncio (Baixar Todas ou Escolher) -->
     <div id="photosActionContainer" style="display: none; margin-top: 6px;">
       <div style="display: flex; gap: 6px;">
         <button id="downloadPhotosBtn" class="btn btn-secondary" style="flex: 1.2; border: 1.5px solid #0284C7; color: #0369A1; background-color: #F0F9FF; font-weight: 600; padding: 6px 8px; font-size: 11px;">
-          ð¸ Baixar Todas (<span id="photosTotalCount">0</span>)
+          📸 Baixar Todas (<span id="photosTotalCount">0</span>)
         </button>
         <button id="toggleGalleryBtn" type="button" class="btn btn-secondary" style="flex: 1; border: 1.5px solid #CBD5E1; color: #334155; font-weight: 600; padding: 6px 8px; font-size: 11px;" title="Ver fotos e escolher quais baixar">
-          ð¼ï¸ Escolher Fotos
+          🖼️ Escolher Fotos
         </button>
       </div>
 
-      <!-- Galeria ExpansÃ­vel para SeleÃ§Ã£o de Fotos -->
+      <!-- Galeria Expansível para Seleção de Fotos -->
       <div id="photosGalleryContainer" style="display: none; margin-top: 6px; padding: 8px; background: #FFFFFF; border: 1px solid #CBD5E1; border-radius: 6px;">
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
           <span style="font-size: 11px; font-weight: 600; color: #334155;" id="galleryHeaderCount">Escolha as fotos:</span>
@@ -691,7 +691,7 @@
         </div>
 
         <button id="downloadSelectedPhotosBtn" type="button" class="btn btn-action" style="display: none; margin-top: 8px; width: 100%; font-size: 11px; padding: 6px 8px; font-weight: 600;">
-          â¬ï¸ Baixar Selecionadas (<span id="selectedPhotosCount">0</span>)
+          ⬇️ Baixar Selecionadas (<span id="selectedPhotosCount">0</span>)
         </button>
       </div>
 
@@ -699,38 +699,62 @@
         <span id="downloadPhotosProgressText">Preparando fotos...</span>
       </div>
     </div>
+    <!-- Bloco Espião de Concorrentes: Detectado em anúncio individual (PDP) -->
+    <div id="pdpStoreBox" style="display: none; margin-top: 10px; padding: 10px; background: #EEF2FF; border: 1.5px solid #C7D2FE; border-radius: 6px;">
+      <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px;">
+        <span style="font-size: 11px; font-weight: 700; color: #3730A3; display: flex; align-items: center; gap: 4px;">
+          🏬 Espião de Concorrentes
+        </span>
+        <span id="pdpSellerRepBadge" style="font-size: 9px; font-weight: 700; background: #4338CA; color: #FFFFFF; padding: 2px 6px; border-radius: 3px;">PLATINUM</span>
+      </div>
+      <div style="font-size: 11px; color: #1E293B; margin-bottom: 8px;">
+        Vendedor: <strong id="pdpSellerNameText" style="color: #312E81;">—</strong>
+      </div>
+      <div style="display: flex; gap: 6px; flex-direction: column;">
+        <button id="pdpCaptureStoreBtn" type="button" class="btn" style="background: linear-gradient(135deg, #4338CA, #6366F1); color: #FFFFFF; font-weight: 600; font-size: 11px; padding: 7px 10px; box-shadow: 0 2px 4px rgba(79, 70, 229, 0.25);">
+          🏬 Espionar Loja deste Concorrente no ERP
+        </button>
+        <button id="pdpOpenStoreUrlBtn" type="button" class="btn btn-secondary" style="font-size: 10px; padding: 5px 8px; color: #4338CA; border-color: #C7D2FE; background: #FFFFFF;">
+          🌐 Abrir Loja Completa no Mercado Livre
+        </button>
+      </div>
+    </div>
+
     <button id="openErpBtn" class="btn btn-secondary" style="margin-top: 8px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px;">
-      ð Abrir Radar no ERP (/inteligencia)
+      🌐 Abrir Radar no ERP (/inteligencia)
+    </button>
+    <button id="openCompetitorsErpBtn" class="btn btn-secondary" style="margin-top: 6px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 6px; color: #4338CA; border-color: #C7D2FE;">
+      🏬 Abrir Espião de Concorrentes (/inteligencia?tab=lojas)
     </button>
   </div>
 
-  <!-- OpÃ§Ã£o: BotÃ£o Flutuante nos AnÃºncios -->
+  <!-- Opção: Botão Flutuante nos Anúncios -->
   <div class="card" style="padding: 10px 12px; margin-bottom: 10px;">
     <div style="display: flex; align-items: center; justify-content: space-between;">
       <div>
         <label for="showFloatingBtnCheckbox" style="margin: 0; font-weight: 600; cursor: pointer; color: #1E293B;">
-          BotÃ£o flutuante na pÃ¡gina
+          Botão flutuante na página
         </label>
         <span style="font-size: 10px; color: #64748B; display: block; margin-top: 1px;">
-          Exibir aba fixa nos anÃºncios (desativado por padrÃ£o)
+          Exibir aba fixa nos anúncios (desativado por padrão)
         </span>
       </div>
       <input type="checkbox" id="showFloatingBtnCheckbox" style="width: 16px; height: 16px; cursor: pointer;">
     </div>
   </div>
 
-  <!-- CartÃ£o: ConfiguraÃ§Ãµes avanÃ§adas (opcional) -->
+  <!-- Cartão: Configurações avançadas (opcional) -->
   <details class="card" id="advancedConfig">
-    <summary class="card-title">âï¸ ConfiguraÃ§Ãµes avanÃ§adas</summary>
+    <summary class="card-title">⚙️ Configurações avançadas</summary>
     <div class="form-group">
       <label for="erpUrl">URL da API / SaaS:</label>
       <input type="text" id="erpUrl" placeholder="http://localhost:3000">
       <div style="display: flex; gap: 6px; margin-top: 6px;">
         <button type="button" id="btnSetLocalhost" class="btn btn-secondary" style="font-size: 10px; padding: 3px 6px;">
-          â¡ Localhost (3000)
+          ⚡ Localhost (3000)
         </button>
         <button type="button" id="btnSetVercel" class="btn btn-secondary" style="font-size: 10px; padding: 3px 6px;">
-          âï¸ Vercel ProduÃ§Ã£o
+          ☁️ Vercel Produção
         </button>
       </div>
     </div>
@@ -740,7 +764,7 @@
     </div>
 
     <div class="actions-grid">
-      <button id="testBtn" class="btn btn-secondary">Testar ConexÃ£o</button>
+      <button id="testBtn" class="btn btn-secondary">Testar Conexão</button>
       <button id="saveBtn" class="btn btn-primary">Salvar</button>
     </div>
   </details>
