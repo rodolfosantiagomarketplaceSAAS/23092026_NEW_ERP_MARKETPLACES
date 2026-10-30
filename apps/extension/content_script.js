@@ -1833,13 +1833,22 @@
             linkEl = allLinks.find(a => !a.href.includes("/pagina/") && !a.href.includes("/perfil/") && !a.href.includes("/loja/")) || null;
           }
           if (!linkEl) linkEl = el.querySelector("a");
-          if (!linkEl || !linkEl.href) return;
+          if (!linkEl) return;
 
-          let rawHref = linkEl.href;
+          let rawHref = linkEl.getAttribute("href") || linkEl.href || "";
+          if (!rawHref) return;
+          if (rawHref.startsWith("//")) {
+            rawHref = `https:${rawHref}`;
+          } else if (rawHref.startsWith("/")) {
+            rawHref = `https://produto.mercadolivre.com.br${rawHref}`;
+          } else if (!rawHref.startsWith("http://") && !rawHref.startsWith("https://")) {
+            rawHref = `https://produto.mercadolivre.com.br/${rawHref}`;
+          }
+
           // Se for link patrocinado do Mercado Clics (click1.mercadolivre.com.br), desempacota a URL real do produto
           if (rawHref.includes("click1.mercadolivre.com.br") || rawHref.includes("/mclics/")) {
             try {
-              const u = new URL(rawHref);
+              const u = new URL(rawHref, "https://www.mercadolivre.com.br");
               const target = u.searchParams.get("url") || u.searchParams.get("tu");
               if (target) rawHref = decodeURIComponent(target);
             } catch {}
@@ -1851,7 +1860,7 @@
 
           // Se for produto de catálogo (/p/MLB...), inclui ou preserva o seller_id para abrir direto na Buy Box do concorrente
           try {
-            const u = new URL(permalink);
+            const u = new URL(permalink, "https://www.mercadolivre.com.br");
             if (isCatalog && sellerId && !u.search.includes("seller_id")) {
               u.searchParams.set("pdp_filters", `seller_id:${sellerId}`);
               permalink = u.toString();
@@ -2324,22 +2333,96 @@
     // Paginação automática de múltiplas páginas para capturar todos os anúncios da loja
     if (isMercadoLivre && totalExpected > items.length) {
       const seenIds = new Set(items.map((i) => i.external_id));
-      let nextLink = document.querySelector(
-        ".andes-pagination__button--next a, a[title='Seguinte'], a[title='Próxima'], a[class*='pagination__next']"
-      );
-      let nextUrl = nextLink ? nextLink.href : null;
       let page = 1;
-      const maxPages = 15; // Limite de até 15 páginas (~750 anúncios)
+      const maxPages = 20; // Limite de até 20 páginas (~1.000 anúncios)
 
-      while (nextUrl && page < maxPages && items.length < totalExpected) {
+      function findNextPageUrl(sourceDoc, pageNum) {
+        const selectors = [
+          "li.andes-pagination__button--next a",
+          "a.andes-pagination__link[title*='Seguinte']",
+          "a.andes-pagination__link[title*='Próxim']",
+          "a.andes-pagination__link[title*='seguinte' i]",
+          "a.andes-pagination__link[title*='próxim' i]",
+          "a[title*='Página seguinte']",
+          "a[title*='Página próxima']",
+          ".andes-pagination__button--next a",
+          "a[class*='pagination__next']",
+          "li[class*='pagination__button--next'] a",
+          "a[rel='next']",
+        ];
+        for (const sel of selectors) {
+          const el = sourceDoc.querySelector(sel);
+          if (el) {
+            let h = el.getAttribute("href") || el.href;
+            if (h) {
+              if (h.startsWith("/")) h = `${window.location.origin}${h}`;
+              return h;
+            }
+          }
+        }
+        // Gera o link estrutural padrão do Mercado Livre (_Desde_)
+        const offset = (pageNum - 1) * 48 + 1;
+        try {
+          const u = new URL(storeUrl);
+          let p = u.pathname.replace(/\/$/, "");
+          if (p.includes("_Desde_")) {
+            p = p.replace(/_Desde_\d+/, `_Desde_${offset}`);
+          } else {
+            p = `${p}/_Desde_${offset}`;
+          }
+          u.pathname = p;
+          return u.toString();
+        } catch {
+          return null;
+        }
+      }
+
+      async function fetchPageContent(targetUrl) {
+        // Tenta 1: via Background Service Worker (evita CORS e restrições)
+        try {
+          if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+            const bgResp = await new Promise((resolve) => {
+              chrome.runtime.sendMessage({ action: "FETCH_PAGE_HTML", url: targetUrl }, (r) => {
+                if (chrome.runtime.lastError || !r || !r.success || !r.html) {
+                  return resolve(null);
+                }
+                resolve(r.html);
+              });
+            });
+            if (bgResp && bgResp.length > 500 && !bgResp.includes("suspicious-traffic-frontend")) {
+              return bgResp;
+            }
+          }
+        } catch {}
+
+        // Tenta 2: fetch com credenciais incluídas
+        try {
+          const resp = await fetch(targetUrl, { credentials: "include" });
+          if (resp.ok) {
+            const text = await resp.text();
+            if (text.length > 500 && !text.includes("suspicious-traffic-frontend")) {
+              return text;
+            }
+          }
+        } catch {}
+
+        return null;
+      }
+
+      let currentDoc = document;
+      while (page < maxPages && items.length < totalExpected) {
         page++;
+        const nextUrl = findNextPageUrl(currentDoc, page);
+        if (!nextUrl) break;
+
         if (syncBtn) {
           syncBtn.innerText = `Capturando pág. ${page} (${items.length}/${totalExpected} anúncios)...`;
         }
+
         try {
-          const resp = await fetch(nextUrl, { credentials: "same-origin" });
-          if (!resp.ok) break;
-          const html = await resp.text();
+          const html = await fetchPageContent(nextUrl);
+          if (!html) break;
+
           const doc = new DOMParser().parseFromString(html, "text/html");
           const pageItems = extractAllSearchItems(doc);
           let newAdded = 0;
@@ -2351,15 +2434,18 @@
             }
           }
           if (newAdded === 0) break;
-          const nextBtnDoc = doc.querySelector(
-            ".andes-pagination__button--next a, a[title='Seguinte'], a[title='Próxima'], a[class*='pagination__next']"
-          );
-          nextUrl = nextBtnDoc ? nextBtnDoc.href : null;
+          currentDoc = doc;
+          // Pausa suave de 200ms para respeitar a carga de rede
+          await new Promise((r) => setTimeout(r, 200));
         } catch (pageErr) {
           console.warn("[ERP Extractor] Interrompida paginação da loja:", pageErr);
           break;
         }
       }
+    }
+
+    if (syncBtn) {
+      syncBtn.innerText = `Enviando ${items.length} anúncios ao ERP...`;
     }
 
     const payload = {

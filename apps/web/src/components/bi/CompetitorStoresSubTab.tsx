@@ -829,15 +829,31 @@ export function CompetitorStoresSubTab() {
                           <td className="py-2.5 px-3 text-right">
                             {(() => {
                               const fee = item.estimated_sale_fee || Number((item.current_price * 0.165).toFixed(2));
-                              const net = item.estimated_net || Number((item.current_price * 0.8).toFixed(2));
-                              const shipping = item.estimated_shipping !== undefined && item.estimated_shipping !== null
+                              const hasFreeShip = item.is_free_shipping || item.current_price >= 79;
+                              
+                              let shipping = item.estimated_shipping !== undefined && item.estimated_shipping !== null
                                 ? item.estimated_shipping
-                                : Math.max(0, Number((item.current_price - fee - net).toFixed(2)));
+                                : null;
+
+                              if ((shipping === null || shipping === 0) && hasFreeShip) {
+                                if (item.current_price < 19) shipping = 5.65;
+                                else if (item.current_price < 49) shipping = 6.85;
+                                else if (item.current_price < 79) shipping = 10.25;
+                                else if (item.current_price < 100) shipping = 13.65;
+                                else if (item.current_price < 120) shipping = 16.85;
+                                else if (item.current_price < 150) shipping = 18.65;
+                                else if (item.current_price < 200) shipping = 20.45;
+                                else shipping = 22.45;
+                              } else if (shipping === null) {
+                                shipping = Math.max(0, Number((item.current_price - fee - (item.estimated_net || 0)).toFixed(2)));
+                              }
+
+                              const net = Math.max(0, Number((item.current_price - fee - shipping).toFixed(2)));
 
                               return (
                                 <div
                                   className="cursor-help"
-                                  title={`Preço: R$ ${item.current_price.toFixed(2).replace(".", ",")} | (-) Tarifa ML: R$ ${fee.toFixed(2).replace(".", ",")}${shipping > 0 ? ` | (-) Frete Grátis: R$ ${shipping.toFixed(2).replace(".", ",")}` : ""} => Líquido Estimado: R$ ${net.toFixed(2).replace(".", ",")}`}
+                                  title={`Preço: R$ ${item.current_price.toFixed(2).replace(".", ",")} | (-) Tarifa ML: R$ ${fee.toFixed(2).replace(".", ",")}${shipping > 0 ? ` | (-) Frete: R$ ${shipping.toFixed(2).replace(".", ",")}` : ""} => Líquido Estimado: R$ ${net.toFixed(2).replace(".", ",")}`}
                                 >
                                   <div className="font-bold text-emerald-700">
                                     R$ {net.toFixed(2).replace(".", ",")}

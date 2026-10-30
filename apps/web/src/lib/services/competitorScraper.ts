@@ -51,7 +51,8 @@ export function estimateCompetitorFeesAndShipping(
   price: number,
   platform = "mercadolivre",
   listingType?: string | null,
-  externalId?: string | null
+  externalId?: string | null,
+  isFreeShipping?: boolean | null
 ): Required<CompetitorFeeMetadata> {
   if (!price || price <= 0) {
     return {
@@ -83,7 +84,10 @@ export function estimateCompetitorFeesAndShipping(
   const pct = isS10Category14 ? 14 : resolvedType === "gold_pro" ? 17 : 12;
   const fixedFee = price < 79 ? 6.0 : 0;
   const fee = Number(((price * pct) / 100 + fixedFee).toFixed(2));
-  const shipping = price < 79 ? 0 : estimateMlShippingByPrice(price);
+
+  // Frete: se tem frete grátis marcado OU se o preço >= 79 (obrigatório no ML) OU se não for explicitamente falso
+  const hasFreeShipping = isFreeShipping === true || (isFreeShipping !== false && price >= 79) || isFreeShipping === undefined;
+  const shipping = hasFreeShipping ? estimateMlShippingByPrice(price) : 0;
 
   return {
     listing_type: resolvedType,

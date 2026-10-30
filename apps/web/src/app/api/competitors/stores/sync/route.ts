@@ -145,9 +145,17 @@ export async function POST(req: NextRequest) {
       const listingType = item.listing_type || (item.is_full ? "gold_pro" : "gold_special");
 
       if (!fee || fee <= 0 || !net || net <= 0) {
-        const est = estimateCompetitorFeesAndShipping(item.current_price, platform, listingType, item.external_id);
+        const est = estimateCompetitorFeesAndShipping(
+          item.current_price,
+          platform,
+          listingType,
+          item.external_id,
+          item.is_free_shipping
+        );
         fee = fee && fee > 0 ? fee : est.sale_fee_amount || Number((item.current_price * 0.165).toFixed(2));
-        shippingCost = shippingCost !== null ? shippingCost : (est.shipping_cost || 0);
+        shippingCost = shippingCost !== null && shippingCost > 0
+          ? shippingCost
+          : (est.shipping_cost || 0);
         net = Math.max(0, Number((item.current_price - fee - (shippingCost || 0)).toFixed(2)));
       }
       return {

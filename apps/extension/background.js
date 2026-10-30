@@ -879,6 +879,24 @@ const handlers = {
   INSPECT_COMPETITOR_LINK: (req) => handleInspectCompetitorLink(req.payload),
   DOWNLOAD_SINGLE_PHOTO: (req) => handleDownloadSinglePhoto(req.payload),
   DOWNLOAD_PHOTOS: (req) => handleDownloadPhotos(req.payload),
+  FETCH_PAGE_HTML: async (req) => {
+    try {
+      const resp = await fetch(req.url, {
+        method: "GET",
+        headers: {
+          "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+          "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+          "Upgrade-Insecure-Requests": "1"
+        },
+        credentials: "include"
+      });
+      if (!resp.ok) return { success: false, status: resp.status };
+      const html = await resp.text();
+      return { success: true, html };
+    } catch (err) {
+      return { success: false, error: err.message };
+    }
+  },
   GET_STATUS: async () => {
     const [{ connectionStatus }, config] = await Promise.all([
       chrome.storage.local.get(["connectionStatus"]),
