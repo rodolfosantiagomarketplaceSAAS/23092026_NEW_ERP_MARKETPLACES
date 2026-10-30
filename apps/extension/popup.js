@@ -91,11 +91,108 @@ document.addEventListener("DOMContentLoaded", async () => {
     // 3. Se estiver em página de produto/busca do marketplace, extrai dados
     if (currentDetectedPlatform && activeTab?.id) {
       chrome.tabs.sendMessage(activeTab.id, { action: "GET_PAGE_DATA" }, async (response) => {
-        if (chrome.runtime.lastError || !response || (!response.data && !response.isSearch)) {
+        if (chrome.runtime.lastError || !response || (!response.data && !response.isSearch && !response.isStore)) {
           pageInfoBox.innerHTML = `
             <strong>Marketplace Detectado:</strong> ${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}<br>
             <span style="color:#64748B;">Abra uma busca ou a página de um anúncio para capturar concorrentes.</span>
           `;
+          return;
+        }
+
+        // Se for página de Loja/Vendedor Concorrente
+        if (response.isStore) {
+          if (cardSectionTitle) cardSectionTitle.innerText = "Loja de Concorrente Detectada (Aba Ativa)";
+          if (captureNowBtn) captureNowBtn.style.display = "none";
+          if (downloadPhotosBtn) downloadPhotosBtn.style.display = "none";
+          if (photosActionContainer) photosActionContainer.style.display = "none";
+          if (photosGalleryContainer) photosGalleryContainer.style.display = "none";
+          if (downloadPhotosProgress) downloadPhotosProgress.style.display = "none";
+          if (syncSearchBtn) syncSearchBtn.style.display = "none";
+          if (listingSelectContainer) listingSelectContainer.style.display = "none";
+
+          const storeConfigBox = document.getElementById("storeConfigBox");
+          const syncStoreBtn = document.getElementById("syncStoreBtn");
+          if (storeConfigBox) storeConfigBox.style.display = "block";
+          if (syncStoreBtn) {
+            syncStoreBtn.style.display = "block";
+            syncStoreBtn.innerText = `🏬 Capturar Loja (${response.itemsCount} anúncios) para o ERP`;
+          }
+
+          pageInfoBox.innerHTML = `
+            <div class="detected-prod">
+              <strong style="color: #4338CA;">🏬 Loja de Concorrente — Mercado Livre</strong>
+              <span>Loja / Vendedor: <strong style="color:#1e293b; font-size: 13px;">${response.storeName || "Loja Oficial"}</strong></span>
+              <span>Anúncios na Página: <strong style="color:#4F46E5;">${response.itemsCount} anúncios</strong></span>
+              <span>Link da Loja: <a href="${response.storeUrl}" target="_blank" style="color:#2563EB; font-size:10px; word-break:break-all;">${response.storeUrl}</a></span>
+              <span style="color:#475569; font-size:10px; margin-top:3px;">
+                💡 Ao capturar, todos os produtos, vendas, datas de criação e preços serão salvos na aba <strong>Inteligência de Negócios &gt; Espião de Concorrentes</strong> no ERP!
+              </span>
+            </div>
+          `;
+
+          if (syncStoreBtn) {
+            syncStoreBtn.onclick = async () => {
+              const segInput = document.getElementById("storeSegmentInput");
+              const followCheck = document.getElementById("storeFollowCheckbox");
+              const segmentVal = (segInput?.value || "Acessórios Automotivos").trim();
+              const isFollowingVal = followCheck ? followCheck.checked : true;
+
+              syncStoreBtn.disabled = true;
+              syncStoreBtn.innerText = "⏳ Extraindo anúncios e enviando ao ERP...";
+
+              chrome.tabs.sendMessage(
+                activeTab.id,
+                {
+                  action: "SYNC_STORE_FROM_POPUP",
+                  segment: segmentVal,
+                  is_following: isFollowingVal,
+                },
+                async (storeRes) => {
+                  if (chrome.runtime.lastError || !storeRes || !storeRes.success) {
+                    showFeedback("Erro ao capturar anúncios da loja.", true);
+                    syncStoreBtn.disabled = false;
+                    syncStoreBtn.innerText = `🏬 Capturar Loja (${response.itemsCount} anúncios) para o ERP`;
+                    return;
+                  }
+
+                  try {
+                    const currentErpUrl = normalizeErpUrl(erpUrlInput?.value);
+                    const syncApiRes = await fetch(`${currentErpUrl}/api/competitors/stores/sync`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}),
+                      },
+                      body: JSON.stringify({
+                        platform: "mercadolivre",
+                        store_name: response.storeName,
+                        seller_id: response.sellerId || null,
+                        store_url: response.storeUrl,
+                        segment: segmentVal,
+                        is_following: isFollowingVal,
+                        items: storeRes.items || [],
+                      }),
+                    });
+
+                    const resJson = await syncApiRes.json();
+                    if (syncApiRes.ok && resJson.success) {
+                      showFeedback(`✅ Loja sincronizada com ${resJson.listings_count} anúncios no ERP!`, false);
+                      syncStoreBtn.innerText = "✅ Sincronizado com Sucesso!";
+                      setTimeout(() => {
+                        window.open(`${currentErpUrl}/inteligencia?tab=lojas`, "_blank");
+                      }, 1000);
+                    } else {
+                      showFeedback(resJson.error || "Falha ao enviar ao ERP.", true);
+                      syncStoreBtn.disabled = false;
+                    }
+                  } catch (netErr) {
+                    showFeedback("Erro de rede ao conectar com o ERP.", true);
+                    syncStoreBtn.disabled = false;
+                  }
+                }
+              );
+            };
+          }
           return;
         }
 

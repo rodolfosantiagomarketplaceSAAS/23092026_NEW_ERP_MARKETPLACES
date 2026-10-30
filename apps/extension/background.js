@@ -153,6 +153,18 @@ async function handleSyncSearchItems(rawErpUrl, payload) {
   };
 }
 
+async function handleSyncStoreItems(rawErpUrl, payload) {
+  const { data, erpUrl } = await postToErp("/api/competitors/stores/sync", payload, { erpUrl: rawErpUrl });
+  return {
+    success: true,
+    count: payload.items?.length || 0,
+    storeName: payload.store_name,
+    erpUrl,
+    redirectUrl: "/inteligencia?tab=lojas",
+    ...data,
+  };
+}
+
 async function handleGetMyListings(platform, query = "") {
   const config = await getStoredConfig();
   const params = new URLSearchParams();
@@ -861,6 +873,7 @@ const handlers = {
   ERP_SESSION: (req) => handleErpSession(req),
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
   SYNC_SEARCH_ITEMS: (req) => handleSyncSearchItems(req.erpUrl, req.payload),
+  SYNC_STORE_ITEMS: (req) => handleSyncStoreItems(req.erpUrl, req.payload),
   GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),
   GET_COMPETITOR_FEES: (req) => handleGetCompetitorFees(req),
   INSPECT_COMPETITOR_LINK: (req) => handleInspectCompetitorLink(req.payload),

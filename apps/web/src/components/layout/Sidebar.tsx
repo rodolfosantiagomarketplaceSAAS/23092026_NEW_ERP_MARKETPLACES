@@ -9,6 +9,7 @@ import {
   Radio,
   ShoppingCart,
   TrendingUp,
+  Store,
   Settings,
   ChevronLeft,
   ChevronRight,
@@ -60,6 +61,9 @@ function SidebarContent() {
 
   const isSuperAdmin = profile?.email?.toLowerCase() === "rodolfo.mecatronica@gmail.com";
   const isRadar = pathname === "/inteligencia" && searchParams?.get("tab") === "radar";
+  const isLojas =
+    pathname === "/inteligencia" &&
+    (searchParams?.get("tab") === "lojas" || searchParams?.get("tab") === "concorrentes");
 
   const menuItems = [
     {
@@ -79,6 +83,12 @@ function SidebarContent() {
       href: "/inteligencia?tab=radar",
       icon: Radio,
       badge: "1:N",
+    },
+    {
+      label: "Espião de Concorrentes",
+      href: "/inteligencia?tab=lojas",
+      icon: Store,
+      badge: "NOVO",
     },
     {
       label: "Vendas & Pedidos",
@@ -172,8 +182,10 @@ function SidebarContent() {
             let isActive = false;
             if (item.href === "/inteligencia?tab=radar") {
               isActive = isRadar;
+            } else if (item.href === "/inteligencia?tab=lojas") {
+              isActive = isLojas;
             } else if (item.href === "/inteligencia") {
-              isActive = (pathname === "/inteligencia" || pathname === "/") && !isRadar;
+              isActive = (pathname === "/inteligencia" || pathname === "/") && !isRadar && !isLojas;
             } else {
               isActive = pathname === item.href;
             }

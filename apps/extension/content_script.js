@@ -1603,6 +1603,70 @@
     return false;
   }
 
+  function isStorePage() {
+    if (isProductPage()) return false;
+    if (!isMercadoLivre) return false;
+
+    const url = window.location.href;
+    const path = window.location.pathname;
+
+    return (
+      path.startsWith("/pagina/") ||
+      path.startsWith("/loja/") ||
+      path.startsWith("/perfil/") ||
+      url.includes("/_CustId_") ||
+      window.location.hostname.startsWith("loja.") ||
+      document.querySelector(
+        ".ui-seller-data-header__title, .official-store-header, .store-info, [class*='seller-profile'], [class*='brand-header']"
+      ) !== null
+    );
+  }
+
+  function extractStoreName() {
+    const storeTitleEl = document.querySelector(
+      ".ui-seller-data-header__title, .official-store-header h1, h1.store-header__title, .store-info__title, .header-store__title, h1.brand-title, .ui-pdp-seller__link-trigger, .ui-seller-data-header__brand-title"
+    );
+    if (storeTitleEl && storeTitleEl.innerText.trim()) {
+      return storeTitleEl.innerText.replace(/^(Loja|Vendido por|Oficial)\s*:?/i, "").trim();
+    }
+
+    // Se tiver /pagina/<loja>
+    const matchPagina = window.location.pathname.match(/\/pagina\/([^/?#]+)/i);
+    if (matchPagina) {
+      return decodeURIComponent(matchPagina[1]).replace(/[-_]/g, " ").toUpperCase();
+    }
+
+    // Se tiver /loja/<loja>
+    const matchLoja = window.location.pathname.match(/\/loja\/([^/?#]+)/i);
+    if (matchLoja) {
+      return decodeURIComponent(matchLoja[1]).replace(/[-_]/g, " ").toUpperCase();
+    }
+
+    // Se tiver /perfil/<loja>
+    const matchPerfil = window.location.pathname.match(/\/perfil\/([^/?#]+)/i);
+    if (matchPerfil) {
+      return decodeURIComponent(matchPerfil[1]).replace(/[-_]/g, " ").toUpperCase();
+    }
+
+    // Document Title
+    const titlePart = document.title.split("|")[0].split("-")[0].trim();
+    return titlePart || "Loja Concorrente Mercado Livre";
+  }
+
+  function extractSellerId() {
+    const matchCustId = window.location.href.match(/_CustId_(\d+)/i);
+    if (matchCustId) return matchCustId[1];
+
+    const metaCust = document.querySelector('meta[name="seller-id"], input[name="seller_id"]');
+    if (metaCust) return metaCust.getAttribute("content") || metaCust.value;
+
+    return null;
+  }
+
+  function extractStoreUrl() {
+    return window.location.origin + window.location.pathname;
+  }
+
   function isSearchListingPage() {
     // Se for um anúncio individual de produto, NUNCA é página de busca
     if (isProductPage()) {
@@ -2101,14 +2165,184 @@
     }
   }
 
+  /**
+   * Envia os dados e anúncios da loja do concorrente para o ERP
+   */
+  async function sendStoreToErp(overrideUrl = null, segment = "Acessórios Automotivos", isFollowing = true) {
+    const items = extractAllSearchItems();
+    if (items.length === 0) {
+      throw new Error("Nenhum anúncio localizado na loja do concorrente.");
+    }
+
+    const storeName = extractStoreName();
+    const sellerId = extractSellerId();
+    const storeUrl = extractStoreUrl();
+    const erpUrl = await resolveErpUrl(overrideUrl);
+    const platform = "mercadolivre";
+
+    const payload = {
+      platform,
+      store_name: storeName,
+      seller_id: sellerId,
+      store_url: storeUrl,
+      segment: segment || "Acessórios Automotivos",
+      is_following: isFollowing,
+      seller_reputation: "platinum",
+      items,
+    };
+
+    let result = null;
+
+    try {
+      if (typeof chrome !== "undefined" && chrome.runtime?.sendMessage) {
+        result = await new Promise((resolve, reject) => {
+          chrome.runtime.sendMessage(
+            {
+              action: "SYNC_STORE_ITEMS",
+              erpUrl,
+              payload,
+            },
+            (response) => {
+              if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
+              if (response && response.success) return resolve(response);
+              return reject(new Error(response?.error || "Falha no background worker"));
+            }
+          );
+        });
+      }
+    } catch (bgErr) {
+      console.warn("[AutoSync Store] Tentando fetch direto após worker:", bgErr);
+    }
+
+    if (!result) {
+      const response = await fetch(`${erpUrl}/api/competitors/stores/sync`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Erro HTTP ${response.status} ao sincronizar loja com ${erpUrl}`);
+      }
+
+      const json = await response.json();
+      result = {
+        success: true,
+        count: items.length,
+        storeName,
+        erpUrl,
+        redirectUrl: "/inteligencia?tab=lojas",
+        ...json,
+      };
+    }
+
+    return result;
+  }
+
+  /**
+   * Injeta barra de sincronização quando estiver na página de loja/vendedor concorrente
+   */
+  function injectStoreSyncFloatingBar() {
+    if (!isStorePage()) return;
+    if (document.getElementById("crm-marketplaces-store-bar")) return;
+
+    const items = extractAllSearchItems();
+    const storeName = extractStoreName();
+
+    const bar = document.createElement("div");
+    bar.id = "crm-marketplaces-store-bar";
+    bar.style.position = "fixed";
+    bar.style.bottom = "24px";
+    bar.style.right = "24px";
+    bar.style.zIndex = "999999";
+    bar.style.backgroundColor = "#0F172A";
+    bar.style.color = "#FFFFFF";
+    bar.style.borderRadius = "12px";
+    bar.style.padding = "12px 18px";
+    bar.style.boxShadow = "0 8px 30px rgba(0, 0, 0, 0.4)";
+    bar.style.fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif";
+    bar.style.fontSize = "12px";
+    bar.style.display = "flex";
+    bar.style.alignItems = "center";
+    bar.style.gap = "14px";
+    bar.style.border = "1px solid #4338CA";
+    bar.style.transition = "all 0.2s ease";
+
+    bar.innerHTML = `
+      <div style="display:flex;align-items:center;gap:8px;">
+        <span style="background:linear-gradient(135deg, #4F46E5, #6366F1);color:#FFFFFF;padding:3px 8px;border-radius:6px;font-weight:700;font-size:10px;">🏪 CONCORRENTE DETECTADO</span>
+        <span style="font-weight:600;color:#F8FAFC;">${storeName} • <strong>${items.length} anúncios</strong></span>
+      </div>
+      <button id="crm-sync-store-btn" style="background:linear-gradient(135deg, #4338CA, #6366F1);color:#FFFFFF;border:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;transition:opacity 0.2s;">
+        📥 Capturar Loja para o ERP
+      </button>
+      <button id="crm-close-store-bar" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1;padding:0 4px;margin-left:4px;">
+        ✕
+      </button>
+    `;
+
+    document.body.appendChild(bar);
+
+    const closeBtn = document.getElementById("crm-close-store-bar");
+    if (closeBtn) closeBtn.onclick = () => bar.remove();
+
+    const syncBtn = document.getElementById("crm-sync-store-btn");
+    if (syncBtn) {
+      syncBtn.onclick = async () => {
+        syncBtn.innerText = "Capturando loja e anúncios...";
+        syncBtn.style.opacity = "0.7";
+        syncBtn.disabled = true;
+
+        try {
+          const res = await sendStoreToErp();
+          bar.innerHTML = `
+            <div style="display:flex;align-items:center;gap:8px;">
+              <span style="color:#10B981;font-weight:700;font-size:14px;">✓</span>
+              <span style="font-weight:600;color:#F8FAFC;">${res.count} anúncios da loja &quot;${storeName}&quot; sincronizados no ERP!</span>
+            </div>
+            <a href="${res.erpUrl}${res.redirectUrl}" target="_blank" style="background-color:#10B981;color:#FFFFFF;text-decoration:none;border-radius:8px;padding:8px 14px;font-size:11px;font-weight:700;display:inline-block;">
+              Analisar Concorrente no ERP →
+            </a>
+            <button id="crm-close-store-bar-2" style="background:transparent;border:none;color:#94A3B8;cursor:pointer;font-size:16px;line-height:1;padding:0 4px;margin-left:4px;">
+              ✕
+            </button>
+          `;
+          const closeBtn2 = document.getElementById("crm-close-store-bar-2");
+          if (closeBtn2) closeBtn2.onclick = () => bar.remove();
+        } catch (err) {
+          console.error(err);
+          alert(`Falha ao sincronizar loja com o ERP: ${err.message}`);
+          syncBtn.innerText = "Tentar Novamente";
+          syncBtn.disabled = false;
+          syncBtn.style.opacity = "1";
+        }
+      };
+    }
+  }
+
   // Listener para requisições vindas do popup
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "GET_PAGE_DATA") {
+      if (isStorePage()) {
+        const searchItems = extractAllSearchItems();
+        sendResponse({
+          success: true,
+          isStore: true,
+          isSearch: false,
+          storeName: extractStoreName(),
+          storeUrl: extractStoreUrl(),
+          sellerId: extractSellerId(),
+          itemsCount: searchItems.length,
+          platform: "mercadolivre",
+        });
+        return true;
+      }
       const isSearch = isSearchListingPage();
       if (isSearch) {
         const searchItems = extractAllSearchItems();
         sendResponse({
           success: true,
+          isStore: false,
           isSearch: true,
           query: extractSearchQuery(),
           itemsCount: searchItems.length,
@@ -2118,12 +2352,28 @@
         const rawData = extractProductData();
         refineMlCreationDateAsync(rawData)
           .then((data) => {
-            sendResponse({ success: true, isSearch: false, data });
+            sendResponse({ success: true, isStore: false, isSearch: false, data });
           })
           .catch(() => {
-            sendResponse({ success: true, isSearch: false, data: rawData });
+            sendResponse({ success: true, isStore: false, isSearch: false, data: rawData });
           });
       }
+      return true;
+    }
+
+    if (request.action === "SYNC_STORE_FROM_POPUP") {
+      const storeName = extractStoreName();
+      const storeUrl = extractStoreUrl();
+      const sellerId = extractSellerId();
+      const items = extractAllSearchItems();
+      sendResponse({
+        success: true,
+        storeName,
+        storeUrl,
+        sellerId,
+        items,
+        platform: "mercadolivre",
+      });
       return true;
     }
 
@@ -2202,7 +2452,9 @@
 
   // Aguarda DOM estabilizar e injeta os botões corretos
   setTimeout(() => {
-    if (isSearchListingPage()) {
+    if (isStorePage()) {
+      injectStoreSyncFloatingBar();
+    } else if (isSearchListingPage()) {
       injectSearchSyncFloatingBar();
     } else {
       injectFloatingButton();
@@ -2215,7 +2467,9 @@
     if (window.location.href !== lastUrl) {
       lastUrl = window.location.href;
       setTimeout(() => {
-        if (isSearchListingPage()) {
+        if (isStorePage()) {
+          injectStoreSyncFloatingBar();
+        } else if (isSearchListingPage()) {
           injectSearchSyncFloatingBar();
         } else {
           injectFloatingButton();

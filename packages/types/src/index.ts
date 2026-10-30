@@ -336,3 +336,111 @@ export const repricingRuleSchema = z.object({
 
 export type RepricingRuleInput = z.infer<typeof repricingRuleSchema>;
 
+// ==============================================================================
+// 7. ESPIÃO DE LOJAS & CONCORRENTES DO MERCADO LIVRE (STORE INTELLIGENCE)
+// ==============================================================================
+export interface CompetitorStore {
+  id: string;
+  user_id: string;
+  platform: MarketplacePlatform;
+  store_name: string;
+  seller_id: string | null;
+  seller_nickname: string | null;
+  store_url: string;
+  segment: string; // Ex: 'Acessórios Automotivos', 'Eletrônicos', 'Moda', 'Ferramentas'
+  is_following: boolean;
+  seller_reputation: SellerReputation | string;
+  notes?: string | null;
+  total_listings: number;
+  total_sales_approx: number;
+  avg_ticket: number;
+  last_scraped_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CompetitorStoreListing {
+  id: string;
+  store_id: string;
+  user_id: string;
+  platform: MarketplacePlatform;
+  external_id: string; // MLB...
+  title: string;
+  current_price: number;
+  original_price?: number | null;
+  discount_pct?: number | null;
+  sales_count_approx: number;
+  listing_created_at?: string | null;
+  is_new_listing?: boolean;
+  shipping_type: ShippingBadge | string;
+  is_full: boolean;
+  is_free_shipping: boolean;
+  promo_badge?: string | null;
+  permalink: string;
+  thumbnail_url?: string | null;
+  rating: number;
+  reviews_count: number;
+  estimated_sale_fee?: number;
+  estimated_net?: number;
+  last_scraped_at: string;
+  created_at: string;
+  updated_at: string;
+  // Campos auxiliares calculados para UI
+  store_name?: string;
+  store_segment?: string;
+}
+
+export const competitorStoreSyncItemSchema = z.object({
+  external_id: z.string().min(1),
+  title: z.string().min(1),
+  current_price: z.number().positive(),
+  original_price: z.number().positive().nullable().optional(),
+  discount_pct: z.number().nullable().optional(),
+  sales_count_approx: z.number().int().nonnegative().optional().default(0),
+  listing_created_at: z.string().nullable().optional(),
+  shipping_type: z.string().default("padrao"),
+  is_full: z.boolean().default(false),
+  is_free_shipping: z.boolean().default(false),
+  promo_badge: z.string().nullable().optional(),
+  permalink: z.string().min(1),
+  thumbnail_url: z.string().nullable().optional(),
+  rating: z.number().min(0).max(5).optional().default(5.0),
+  reviews_count: z.number().int().nonnegative().optional().default(0),
+  estimated_sale_fee: z.number().nonnegative().optional().default(0),
+  estimated_net: z.number().nonnegative().optional().default(0),
+});
+
+export const competitorStoreSyncSchema = z.object({
+  platform: z.enum(["mercadolivre", "shopee"]).default("mercadolivre"),
+  store_name: z.string().min(1),
+  seller_id: z.string().nullable().optional(),
+  seller_nickname: z.string().nullable().optional(),
+  store_url: z.string().min(1),
+  segment: z.string().optional().default("Geral"),
+  is_following: z.boolean().optional().default(true),
+  seller_reputation: z.string().optional().default("platinum"),
+  notes: z.string().nullable().optional(),
+  items: z.array(competitorStoreSyncItemSchema),
+});
+
+export type CompetitorStoreSyncInput = z.infer<typeof competitorStoreSyncSchema>;
+export type CompetitorStoreSyncItemInput = z.infer<typeof competitorStoreSyncItemSchema>;
+
+export const cloneListingToCatalogSchema = z.object({
+  competitor_listing_id: z.string().optional(),
+  external_id: z.string().min(1),
+  title: z.string().min(1),
+  suggested_price: z.number().positive(),
+  cost_price: z.number().nonnegative().optional().default(0),
+  sku: z.string().min(1),
+  platform: z.enum(["mercadolivre", "shopee"]).default("mercadolivre"),
+  thumbnail_url: z.string().nullable().optional(),
+  permalink: z.string().optional(),
+  shipping_type: z.string().default("padrao"),
+  listing_type: z.string().default("gold_special"),
+  available_quantity: z.number().int().positive().default(10),
+});
+
+export type CloneListingToCatalogInput = z.infer<typeof cloneListingToCatalogSchema>;
+
+

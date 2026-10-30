@@ -5,22 +5,25 @@ import { useSearchParams, useRouter } from "next/navigation";
 import { Header } from "@/components/layout/Header";
 import { BiDashboard } from "@/components/bi/BiDashboard";
 import { MarketSearchSubTab } from "@/components/bi/MarketSearchSubTab";
-import { Radio, Search, Sparkles } from "lucide-react";
+import { CompetitorStoresSubTab } from "@/components/bi/CompetitorStoresSubTab";
+import { Radio, Search, Store, Sparkles } from "lucide-react";
 
 function InteligenciaContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const initialTab = searchParams.get("tab") === "radar" ? "radar" : "pesquisa";
-  const [activeSubTab, setActiveSubTab] = useState<"radar" | "pesquisa">(initialTab);
+  const rawTab = searchParams.get("tab");
+  const initialTab =
+    rawTab === "radar" ? "radar" : rawTab === "lojas" || rawTab === "concorrentes" ? "lojas" : "pesquisa";
+  const [activeSubTab, setActiveSubTab] = useState<"radar" | "pesquisa" | "lojas">(initialTab);
 
   useEffect(() => {
     const tabParam = searchParams.get("tab");
-    if (tabParam === "radar" || tabParam === "pesquisa") {
-      setActiveSubTab(tabParam);
+    if (tabParam === "radar" || tabParam === "pesquisa" || tabParam === "lojas" || tabParam === "concorrentes") {
+      setActiveSubTab(tabParam === "concorrentes" ? "lojas" : (tabParam as any));
     }
   }, [searchParams]);
 
-  const handleSelectTab = (tab: "radar" | "pesquisa") => {
+  const handleSelectTab = (tab: "radar" | "pesquisa" | "lojas") => {
     setActiveSubTab(tab);
     router.replace(`/inteligencia?tab=${tab}`, { scroll: false });
   };
@@ -40,7 +43,9 @@ function InteligenciaContent() {
                 </span>
               </h1>
               <p className="text-xs text-slate-500 mt-0.5">
-                {activeSubTab === "pesquisa"
+                {activeSubTab === "lojas"
+                  ? "Espião de lojas concorrentes no Mercado Livre: extração via extensão, análise de datas de criação, vendas e clonagem de anúncios."
+                  : activeSubTab === "pesquisa"
                   ? "Pesquisa ativa de produtos com raio-X estatístico, campanhas, melhores preços e pareamento 1-clique."
                   : "Monitoramento 1:N de anúncios concorrentes pareados com atualização em tempo real (Supabase Realtime)."}
               </p>
@@ -48,6 +53,22 @@ function InteligenciaContent() {
 
             {/* Seletor de Subabas Estilizado */}
             <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold self-start sm:self-auto shadow-2xs">
+              <button
+                type="button"
+                onClick={() => handleSelectTab("lojas")}
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 ${
+                  activeSubTab === "lojas"
+                    ? "bg-white text-indigo-700 shadow-sm font-bold"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <Store className="w-4 h-4 text-indigo-600" />
+                <span>Espião de Concorrentes</span>
+                <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.2 rounded-full font-black">
+                  NOVO
+                </span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => handleSelectTab("pesquisa")}
@@ -80,7 +101,9 @@ function InteligenciaContent() {
           </div>
 
           {/* Renderização Condicional da Subaba Ativa */}
-          {activeSubTab === "pesquisa" ? (
+          {activeSubTab === "lojas" ? (
+            <CompetitorStoresSubTab />
+          ) : activeSubTab === "pesquisa" ? (
             <MarketSearchSubTab />
           ) : (
             <BiDashboard />
