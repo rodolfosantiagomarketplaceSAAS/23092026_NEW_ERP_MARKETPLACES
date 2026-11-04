@@ -25,6 +25,7 @@ export default async function CatalogoPage() {
   const { data: dbMyListings } = await supabase
     .from("my_listings")
     .select("*, products (sku, cost_price)")
+    .neq("status", "closed")
     .order("created_at", { ascending: false });
 
   const myListings: MyListingItem[] =

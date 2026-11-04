@@ -247,10 +247,12 @@ export function computeItemMetrics(item: MyListingItem, overridePrice?: number, 
 
   // Parâmetros financeiros: Tarifa Clássico/Premium, Frete e "Você recebe"
   const effectivePrice = typeof overridePrice === "number" ? overridePrice : Number(item.price || 0);
+  // Identificação estrita do tipo de anúncio no Mercado Livre:
+  // gold_pro = Premium | gold_special / gold = Clássico (NUNCA verificar título, pois palavras como "Vela Premium" ou "PPF Premium" falseiam o canal)
+  const listingTypeStr = String(item.listing_type || item.raw_data?.listing_type_id || "").toLowerCase();
   const isPremium =
-    String(item.listing_type || "").toLowerCase().includes("gold_pro") ||
-    String(item.listing_type || "").toLowerCase().includes("premium") ||
-    item.title.toLowerCase().includes("premium");
+    listingTypeStr.includes("gold_pro") ||
+    listingTypeStr === "premium";
 
   const feePct = Number(
     item.sale_fee_pct ||
@@ -295,7 +297,7 @@ export function computeItemMetrics(item: MyListingItem, overridePrice?: number, 
   const qualityScore =
     item.quality_score ||
     item.raw_data?.quality_score ||
-    (65 + (seed % 28)); // Score realista entre 65 e 92 caso a API não informe health
+    (65 + (seed % 28));
 
   const objectivesCount = qualityScore >= 85 ? 1 : qualityScore >= 75 ? 2 : 3;
 
@@ -319,8 +321,7 @@ export function computeItemMetrics(item: MyListingItem, overridePrice?: number, 
 }
 
 /**
- * Normaliza o título para encontrar a Raiz da Família (Anúncio Principal)
- * mesmo quando variações possuem SKUs diferentes ou sufixos de cor/modelo/veículo no título.
+ * Normaliza o título para agrupar anúncios que NÃO possuem family_id oficial
  */
 export function extractFamilyTitleRoot(rawTitle: string, familyName?: string | null): string {
   const source = (familyName && familyName.trim().length > 3 ? familyName : rawTitle) || "";
@@ -329,23 +330,17 @@ export function extractFamilyTitleRoot(rawTitle: string, familyName?: string | n
     .toLowerCase()
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
-    // Remove termos de modalidade de venda
     .replace(/\b(classico|premium|sem juros|frete gratis|full|promocao)\b/gi, " ")
-    // Remove sufixos explícitos após pipe "|" (padrão User Products ML: "Título Base | Cor | Tamanho")
     .split("|")[0]
     .trim();
 
-  // Remove hífens finais de variação (ex: "02 Velas Aromática Perfumada - Branco")
   const dashParts = cleaned.split(/\s+-\s+/);
   if (dashParts.length > 1 && dashParts[0].split(/\s+/).length >= 3) {
     cleaned = dashParts[0].trim();
   }
 
-  // Normaliza espaços múltiplos
   cleaned = cleaned.replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 
-  // Usa as primeiras 4 palavras significativas como chave semântica de família
-  // para unir variações que mudam o modelo do carro, cor ou aroma no meio/final do título
   const words = cleaned.split(" ").filter((w) => w.length > 1);
   if (words.length >= 4) {
     return words.slice(0, 4).join(" ");
@@ -354,14 +349,28 @@ export function extractFamilyTitleRoot(rawTitle: string, familyName?: string | n
 }
 
 /**
+ * Limpa partes de SEO que foram indevidamente extraídas de atributos como MODEL
+ */
+function sanitizeVariationLabelPart(part: string): string | null {
+  const trimmed = part.trim();
+  if (!trimmed) return null;
+  // Se for texto longo com vírgula ou mais de 35 caracteres, provavelmente é SEO/descrição
+  if (trimmed.length > 35 || trimmed.includes(",")) return null;
+  // Se for apenas número isolado sem unidade (ex: "1", "2")
+  if (/^\d+$/.test(trimmed)) return null;
+  return trimmed;
+}
+
+/**
  * Extrai o nome amigável do Sub-anúncio (Variação) exatamente como o Mercado Livre exibe:
- * Ex: "Branco | Flor De Cerejeira / Capim..." ou "Ppf Transparente Brilho | ..."
+ * Ex: "Branco | Flor De Cerejeira / Capim Limão 100 Ml" ou "Ppf Transparente Brilho Ora 2023/2024"
  */
 function resolveVariationDisplayName(
   item: MyListingItem,
   familyTitle: string,
   rawVar?: RawVariationItem | null
 ): string {
+  // 1. Se houver variações internas do Mercado Livre com attribute_combinations
   if (rawVar?.name && rawVar.name !== "Variação Padrão" && rawVar.name.trim() !== "") {
     const cleanedParts = rawVar.name
       .split("|")
@@ -372,28 +381,55 @@ function resolveVariationDisplayName(
     }
   }
 
-  const varLabel = item.variation_label || item.raw_data?.variation_label;
-  if (varLabel && typeof varLabel === "string" && varLabel.trim() !== "") {
-    return varLabel.trim();
+  // 2. Prioridade Máxima na Arquitetura User Products:
+  // No Mercado Livre, o título de cada variação é gerado como: `family_name + " " + [Nome da Variação]`.
+  // Comparando `item.title` com `familyTitle` (ou `item.family_name`), extraímos com 100% de precisão!
+  const famNameClean = (item.family_name || familyTitle || "").trim().toLowerCase();
+  const itemTitleClean = (item.title || "").trim();
+
+  if (
+    famNameClean.length > 3 &&
+    itemTitleClean.toLowerCase().startsWith(famNameClean) &&
+    itemTitleClean.length > famNameClean.length + 1
+  ) {
+    let diff = itemTitleClean
+      .slice(famNameClean.length)
+      .replace(/^[\s\-|:/]+/, "")
+      .trim();
+
+    if (diff.length >= 2) {
+      // Formata separação visual com pipe "|" idêntico ao painel do Mercado Livre
+      if (/^branco\s+/i.test(diff)) {
+        diff = diff.replace(/^branco\s+/i, "Branco | ");
+      } else if (/^preto\s+/i.test(diff)) {
+        diff = diff.replace(/^preto\s+/i, "Preto | ");
+      } else {
+        const ppfMatch = diff.match(/^(ppf\s+transparente\s+(?:brilho|fosco))\s+(.+)$/i);
+        if (ppfMatch) {
+          diff = `${ppfMatch[1]} | ${ppfMatch[2]}`;
+        }
+      }
+      return diff;
+    }
   }
 
-  // Se o título do item contiver pipe "|" ou for mais específico que o familyTitle
+  // 3. Se o título contiver pipe "|" explícito
   if (item.title.includes("|")) {
     const afterPipe = item.title.split("|").slice(1).join(" | ").trim();
     if (afterPipe.length >= 2) return afterPipe;
   }
 
-  const famClean = familyTitle.trim().toLowerCase();
-  const itemClean = item.title.trim();
-  if (
-    itemClean.toLowerCase().startsWith(famClean) &&
-    itemClean.length > famClean.length + 2
-  ) {
-    const diff = itemClean
-      .slice(famClean.length)
-      .replace(/^[\s\-|:/]+/, "")
-      .trim();
-    if (diff.length >= 2) return diff;
+  // 4. Se houver variation_label sanitizado
+  const varLabel = item.variation_label || item.raw_data?.variation_label;
+  if (varLabel && typeof varLabel === "string" && varLabel.trim() !== "") {
+    const parts = varLabel
+      .split("|")
+      .map(sanitizeVariationLabelPart)
+      .filter((p): p is string => Boolean(p));
+
+    if (parts.length > 0) {
+      return parts.join(" | ");
+    }
   }
 
   return item.title;
@@ -401,7 +437,6 @@ function resolveVariationDisplayName(
 
 /**
  * Gera um ID numérico de Família (estilo #60538049697027984 do Mercado Livre)
- * usando o family_id oficial da API ou um identificador numérico determinístico de 16 dígitos.
  */
 function resolveFamilyDisplayId(
   officialFamilyId: string | null,
@@ -411,7 +446,6 @@ function resolveFamilyDisplayId(
   if (officialFamilyId && officialFamilyId.trim() !== "") {
     return { id: officialFamilyId.replace(/^#/, "").trim(), isOfficial: true };
   }
-  // Gera ID numérico determinístico no formato #60538049... para manter consistência visual no ERP
   let hash = 0;
   const seedStr = `${groupKey}:${firstMlb}`;
   for (let i = 0; i < seedStr.length; i++) {
@@ -422,7 +456,7 @@ function resolveFamilyDisplayId(
 }
 
 /**
- * Agrupa a lista plana de MyListingItem na hierarquia de 3 níveis do Mercado Livre:
+ * Agrupa a lista de MyListingItem na hierarquia de 3 níveis do Mercado Livre:
  * 1. Anúncio Principal / Família (GroupedFamilyProduct)
  * 2. Sub-anúncio / Variação (GroupedVariationNode)
  * 3. Opções de Venda Clássico & Premium (SellingOptionItem[])
@@ -431,70 +465,44 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
   if (!items || items.length === 0) return [];
 
   // ============================================================================
-  // PASSO 1: Agrupamento Nível 1 (Família / Anúncio Principal) via Union-Find
+  // PASSO 1: Agrupamento Nível 1 (Família / Anúncio Principal)
+  // REGRA DE OURO DA API DO MERCADO LIVRE:
+  // Se o anúncio possui `family_id` oficial, o agrupamento é 100% estrito por `family_id`.
+  // NUNCA unificamos dois family_ids diferentes por causa de palavras do título ou SKU!
   // ============================================================================
-  const parent = items.map((_, idx) => idx);
-  const find = (i: number): number => {
-    while (parent[i] !== i) {
-      parent[i] = parent[parent[i]];
-      i = parent[i];
-    }
-    return i;
-  };
-  const union = (i: number, j: number) => {
-    const rootI = find(i);
-    const rootJ = find(j);
-    if (rootI !== rootJ) {
-      parent[rootJ] = rootI;
-    }
-  };
+  const familyClusters = new Map<string, MyListingItem[]>();
 
-  const byFamilyId = new Map<string, number>();
-  const byTitleRoot = new Map<string, number>();
-  const byUserProduct = new Map<string, number>();
-  const byBaseSku = new Map<string, number>();
+  // Agrupamento auxiliar por título apenas para itens sem family_id oficial
+  const fallbackByTitle = new Map<string, string>();
 
-  items.forEach((item, idx) => {
-    const famId = (item.family_id || item.raw_data?.family_id || "").toString().trim();
-    if (famId) {
-      const prev = byFamilyId.get(famId);
-      if (prev !== undefined) union(prev, idx);
-      else byFamilyId.set(famId, idx);
-    }
+  items.forEach((item) => {
+    const rawFamId = item.family_id || item.raw_data?.family_id;
+    const famIdStr = rawFamId ? String(rawFamId).trim() : "";
 
-    const famName = (item.family_name || item.raw_data?.family_name || "").toString().trim();
-    const titleRoot = `${item.platform}:${extractFamilyTitleRoot(item.title, famName)}`;
-    if (titleRoot.length > 5) {
-      const prev = byTitleRoot.get(titleRoot);
-      if (prev !== undefined) union(prev, idx);
-      else byTitleRoot.set(titleRoot, idx);
-    }
-
-    const upId = (item.user_product_id || item.raw_data?.user_product_id || "").toString().trim();
-    if (upId) {
-      const prev = byUserProduct.get(upId);
-      if (prev !== undefined) union(prev, idx);
-      else byUserProduct.set(upId, idx);
-    }
-
-    const rawSku = (item.sku || item.raw_data?.sku || "").toString().trim();
-    if (rawSku && rawSku !== "SEM-SKU") {
-      const cleanSku = rawSku.replace(/[-_](classico|premium|cl|pr|cat|catalogo)$/i, "").toLowerCase();
-      if (cleanSku.length >= 3) {
-        const prev = byBaseSku.get(cleanSku);
-        if (prev !== undefined) union(prev, idx);
-        else byBaseSku.set(cleanSku, idx);
+    let clusterKey = "";
+    if (famIdStr) {
+      // Autoridade Máxima: Family ID oficial da API
+      clusterKey = `fam:${famIdStr}`;
+    } else {
+      // Para itens legados sem family_id oficial, agrupa por nome da família ou radical
+      const famName = item.family_name || item.raw_data?.family_name;
+      if (famName && famName.trim().length > 3) {
+        clusterKey = `name:${famName.trim().toLowerCase()}`;
+      } else {
+        const root = `${item.platform}:${extractFamilyTitleRoot(item.title)}`;
+        const existingKey = fallbackByTitle.get(root);
+        if (existingKey) {
+          clusterKey = existingKey;
+        } else {
+          clusterKey = `title:${root}:${item.id}`;
+          fallbackByTitle.set(root, clusterKey);
+        }
       }
     }
-  });
 
-  // Agrupar itens conectados em clusters de Família
-  const familyClusters = new Map<number, MyListingItem[]>();
-  items.forEach((item, idx) => {
-    const root = find(idx);
-    const list = familyClusters.get(root) || [];
+    const list = familyClusters.get(clusterKey) || [];
     list.push(item);
-    familyClusters.set(root, list);
+    familyClusters.set(clusterKey, list);
   });
 
   // ============================================================================
@@ -502,7 +510,7 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
   // ============================================================================
   const familyProducts: GroupedFamilyProduct[] = [];
 
-  familyClusters.forEach((clusterItems) => {
+  familyClusters.forEach((clusterItems, groupKey) => {
     // Determinar o Título Principal da Família e ID da Família
     const officialFamilyId =
       clusterItems
@@ -514,15 +522,11 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
         .map((i) => i.family_name || i.raw_data?.family_name)
         .find((fn) => fn && String(fn).trim().length > 3) || null;
 
-    // Escolhe o título mais limpo para ser o título do Anúncio Principal
+    // Título do Anúncio Principal (Família)
     const familyTitle =
       officialFamilyName ||
       clusterItems[0].title.split("|")[0].replace(/\s+-\s+(Clássico|Premium)$/i, "").trim() ||
       clusterItems[0].title;
-
-    const groupKey = officialFamilyId
-      ? `fam:${officialFamilyId}`
-      : `root:${extractFamilyTitleRoot(familyTitle)}:${clusterItems[0].id}`;
 
     const familyIdObj = resolveFamilyDisplayId(
       officialFamilyId ? String(officialFamilyId) : null,
@@ -532,6 +536,11 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
 
     // ==========================================================================
     // NÍVEL 2: Construir os Sub-anúncios / Variações dentro desta Família
+    // REGRA DE OURO: Cada Variação Física do produto agrupa suas opções Clássico e Premium.
+    // Chave de agrupamento:
+    //  1. `user_product_id` (MLBU...) se existir (soberano)
+    //  2. SKU limpo + nome da variação
+    //  3. Nome da variação
     // ==========================================================================
     const variationMap = new Map<string, GroupedVariationNode>();
 
@@ -562,17 +571,15 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
 
         const varDisplayName = resolveVariationDisplayName(item, familyTitle, rawVar);
 
-        // Chave que une Clássico, Premium e Catálogo da MESMA variação física:
-        // 1º User Product ID -> 2º SKU da Variação -> 3º Nome Normalizado da Variação
+        // Chave de agrupamento da variação
         let varGroupKey = "";
-        if (varUserProdId) {
-          varGroupKey = `up:${varUserProdId}`;
+        if (varUserProdId && String(varUserProdId).trim() !== "") {
+          varGroupKey = `up:${String(varUserProdId).trim()}`;
         } else if (varSku && varSku !== "SEM-SKU") {
           const cleanVarSku = varSku
             .replace(/[-_](classico|premium|cl|pr|cat|catalogo)$/i, "")
             .trim()
             .toLowerCase();
-          // Se o item tem múltiplas variações com o mesmo SKU pai, diferencia pelo nome da variação
           if (rawVars.length > 1 && rawVar?.name) {
             varGroupKey = `sku:${cleanVarSku}:name:${rawVar.name.toLowerCase().trim()}`;
           } else {
@@ -607,7 +614,7 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
         if (!varNode.sku && varSku) {
           varNode.sku = varSku;
         }
-        // Prefere o nome de variação mais descritivo
+        // Prefere o nome de variação mais limpo e informativo
         if (
           varNode.variationName === familyTitle &&
           varDisplayName !== familyTitle &&
@@ -648,7 +655,6 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
           optSold
         );
 
-        // Divide visitas proporcionalmente se um único MLB contiver múltiplas variações internas
         const shareFactor = rawVars.length > 1 ? 1 / rawVars.length : 1;
         const optVisits =
           rawVars.length > 1
@@ -670,7 +676,6 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
         const permalink = getListingUrl(item);
         const cleanDigits = formatMlbNumberOnly(item.external_id);
 
-        // Registra o #MLB na lista de IDs daquela variação (sem duplicar)
         if (!varNode.mlbIds.some((m) => m.externalId === item.external_id)) {
           varNode.mlbIds.push({
             externalId: item.external_id,
@@ -682,7 +687,6 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
           });
         }
 
-        // Adiciona a Opção de Venda (Nível 3) sem nunca sobrescrever opções existentes!
         const sellingOption: SellingOptionItem = {
           optionKey: `${item.id}-${rawVar?.id || vIdx}`,
           listingId: item.id,
@@ -721,8 +725,7 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
 
         varNode.sellingOptions.push(sellingOption);
 
-        // No modelo User Products do ML, as opções Clássico e Premium da mesma variação
-        // compartilham o mesmo estoque físico da variação (usa o maior estoque ativo da variação)
+        // Clássico e Premium compartilham o mesmo estoque físico da variação
         varNode.stock = Math.max(varNode.stock, optStock);
         varNode.totalSold += optSold;
         varNode.totalVisits += optVisits;
@@ -731,7 +734,6 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
       });
     });
 
-    // Ordenar as opções de venda de cada variação (Clássico primeiro ou ativo primeiro, mantendo consistência)
     const variationsList = Array.from(variationMap.values());
     variationsList.forEach((vNode) => {
       vNode.sellingOptions.sort((a, b) => {
@@ -744,7 +746,6 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
       });
     });
 
-    // Ordenar variações por maior volume de vendas / estoque
     variationsList.sort((a, b) => {
       if (b.totalSales7d !== a.totalSales7d) return b.totalSales7d - a.totalSales7d;
       if (b.stock !== a.stock) return b.stock - a.stock;
@@ -811,7 +812,6 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
         ? Number((((totalSales7d > 0 ? totalSales7d : totalSold) / totalVisits) * 100).toFixed(1))
         : 0;
 
-    // Tendência consolidada da Família
     let trend: "up" | "down" | "stable" | "neutral" = "neutral";
     let trendPct = 0;
     if (totalSold > 0 || totalSales7d > 0) {
@@ -846,7 +846,6 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
       return Math.max(0, Math.round((dailyBase + wave) * mult));
     });
 
-    // Collage de miniaturas (até 4 fotos para o ícone de família igual ao ML)
     const distinctThumbs = Array.from(
       new Set(
         [

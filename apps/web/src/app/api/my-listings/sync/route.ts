@@ -15,8 +15,6 @@ const VARIATION_ATTRIBUTE_IDS = new Set([
   "COLOR",
   "MAIN_COLOR",
   "SECONDARY_COLOR",
-  "FINISH",
-  "SURFACE_FINISH",
   "FRAGRANCE",
   "SCENT",
   "AROMA",
@@ -24,22 +22,16 @@ const VARIATION_ATTRIBUTE_IDS = new Set([
   "VEHICLE_MODEL",
   "COMPATIBLE_VEHICLE",
   "CAR_MODEL",
-  "MODEL",
-  "DESIGN",
+  "FINISH",
+  "SURFACE_FINISH",
   "FABRIC_DESIGN",
   "PATTERN",
   "SIZE",
   "VOLTAGE",
   "CAPACITY",
   "VOLUME_CAPACITY",
-  "WEIGHT",
-  "LENGTH",
-  "WIDTH",
-  "THICKNESS",
   "SIDE",
   "POSITION",
-  "KIT_COMPOSITION",
-  "UNITS_PER_PACK",
 ]);
 
 /**
@@ -121,7 +113,42 @@ async function fetchAllSellerItemIds(
  * o modelo novo "User Products" (onde cada variação é um item com user_product_id).
  */
 function extractUserProductVariationLabel(item: any): string | null {
-  // 1. Se houver variation_attributes explícito no item
+  // 1. Prioridade Máxima na Arquitetura User Products:
+  // No Mercado Livre, o título de cada variação é estruturado como: [family_name] + " " + [Nome da Variação].
+  // Comparando o título com o family_name, extraímos com precisão cirúrgica sem capturar SEO do MODEL.
+  if (
+    item.family_name &&
+    item.title &&
+    typeof item.family_name === "string" &&
+    typeof item.title === "string"
+  ) {
+    const famClean = item.family_name.trim();
+    const titleClean = item.title.trim();
+    if (
+      titleClean.toLowerCase().startsWith(famClean.toLowerCase()) &&
+      titleClean.length > famClean.length + 1
+    ) {
+      let suffix = titleClean
+        .slice(famClean.length)
+        .replace(/^[\s\-|:/]+/, "")
+        .trim();
+      if (suffix && suffix.length >= 2) {
+        if (/^branco\s+/i.test(suffix)) {
+          suffix = suffix.replace(/^branco\s+/i, "Branco | ");
+        } else if (/^preto\s+/i.test(suffix)) {
+          suffix = suffix.replace(/^preto\s+/i, "Preto | ");
+        } else {
+          const ppfMatch = suffix.match(/^(ppf\s+transparente\s+(?:brilho|fosco))\s+(.+)$/i);
+          if (ppfMatch) {
+            suffix = `${ppfMatch[1]} | ${ppfMatch[2]}`;
+          }
+        }
+        return suffix;
+      }
+    }
+  }
+
+  // 2. Se houver variation_attributes explícito no item
   if (Array.isArray(item.variation_attributes) && item.variation_attributes.length > 0) {
     const parts = item.variation_attributes
       .map((a: any) => a.value_name)
@@ -129,7 +156,7 @@ function extractUserProductVariationLabel(item: any): string | null {
     if (parts.length > 0) return parts.join(" | ");
   }
 
-  // 2. Se houver variations[0].attribute_combinations
+  // 3. Se houver variations[0].attribute_combinations
   if (
     Array.isArray(item.variations) &&
     item.variations.length === 1 &&
@@ -141,7 +168,7 @@ function extractUserProductVariationLabel(item: any): string | null {
     if (parts.length > 0) return parts.join(" | ");
   }
 
-  // 3. Se o título do item for diferente do family_name, ou se houver atributos de variação
+  // 4. Atributos físicos reais (excluindo textos longos de MODEL)
   if (Array.isArray(item.attributes)) {
     const varAttrs: string[] = [];
     for (const attr of item.attributes) {
@@ -149,7 +176,9 @@ function extractUserProductVariationLabel(item: any): string | null {
         attr &&
         attr.id &&
         VARIATION_ATTRIBUTE_IDS.has(String(attr.id).toUpperCase()) &&
-        attr.value_name
+        attr.value_name &&
+        String(attr.value_name).length <= 35 &&
+        !String(attr.value_name).includes(",")
       ) {
         if (!varAttrs.includes(attr.value_name)) {
           varAttrs.push(attr.value_name);
@@ -158,27 +187,6 @@ function extractUserProductVariationLabel(item: any): string | null {
     }
     if (varAttrs.length > 0) {
       return varAttrs.join(" | ");
-    }
-  }
-
-  // 4. Diferença entre item.title e item.family_name
-  if (
-    item.family_name &&
-    item.title &&
-    typeof item.family_name === "string" &&
-    typeof item.title === "string"
-  ) {
-    const famClean = item.family_name.trim();
-    const titleClean = item.title.trim();
-    if (
-      titleClean.toLowerCase().startsWith(famClean.toLowerCase()) &&
-      titleClean.length > famClean.length + 2
-    ) {
-      const suffix = titleClean
-        .slice(famClean.length)
-        .replace(/^[\s\-|:/]+/, "")
-        .trim();
-      if (suffix) return suffix;
     }
   }
 
