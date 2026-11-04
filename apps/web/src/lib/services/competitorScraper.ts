@@ -460,14 +460,17 @@ const ODD_MLB_ANCHORS: [number, number][] = [
   [3604088865, 1708614317],
   [3677706001, 1714672144],
   [3775570601, 1720721286],
+  [3791988025, 1721905870],
   [3870433327, 1728306310],
   [3878354037, 1729017450],
-  [4000000001, 1740000000],
+  [3950553465, 1736687662],
   [4405079191, 1767714028],
   [4473157969, 1770897600],
   [4516465031, 1773081053],
+  [4637247523, 1777301270],
   [4680140101, 1778774182],
   [4729260091, 1780401600],
+  [4815068677, 1782408395],
   [4907118005, 1784298505],
   [4949688649, 1785118614],
   [5007001935, 1786033623],
@@ -486,6 +489,8 @@ const ODD_MLB_ANCHORS: [number, number][] = [
   [5425017267, 1792428203],
   [5451861735, 1792759331],
   [5467689883, 1793060428],
+  [5481288423, 1793274499],
+  [5495858211, 1793552607],
 ];
 
 const EVEN_MLB_ANCHORS: [number, number][] = [
@@ -494,13 +499,17 @@ const EVEN_MLB_ANCHORS: [number, number][] = [
   [4239931650, 1701085623],
   [4323562446, 1703681117],
   [4440840978, 1707647181],
+  [4663801474, 1715198758],
   [5279238968, 1738893724],
   [5302227582, 1740690198],
+  [5325009484, 1742573943],
   [5478913174, 1751758357],
   [5803698714, 1760521760],
   [5933540874, 1763057982],
-  [6168219740, 1772019365],
-  [6257283512, 1772400000],
+  [6052459348, 1765732276],
+  [6168219740, 1768392000],
+  [6257283512, 1771354409],
+  [6310961644, 1772198879],
   [6662209498, 1776978982],
   [6776418892, 1778775181],
   [6936719092, 1781103327],
@@ -509,6 +518,7 @@ const EVEN_MLB_ANCHORS: [number, number][] = [
   [7136348316, 1783638496],
   [7259550226, 1785118538],
   [7349483204, 1786059234],
+  [7390551330, 1786481774],
   [7400693466, 1786581179],
   [7472416462, 1787271960],
   [7536360518, 1787876196],
@@ -630,6 +640,8 @@ export async function refineMlCreationDateFromImage(
   thumbnailUrl?: string | null,
   html?: string | null
 ): Promise<string | null> {
+  const baseEst = estimateMlCreationDate(externalIdOrUrl, thumbnailUrl, html);
+  const baseEstMs = baseEst ? new Date(baseEst).getTime() : NaN;
   const mlbMatch = String(externalIdOrUrl || "").match(/MLB(?!U)-?(\d{9,12})/i);
   const normalizedMlbId = mlbMatch ? `MLB${mlbMatch[1]}` : "";
 
@@ -657,6 +669,11 @@ export async function refineMlCreationDateFromImage(
           if (descData?.date_created) {
             const d = new Date(descData.date_created);
             if (!isNaN(d.getTime()) && d.getFullYear() >= 2015) {
+              // Se a descrição foi adicionada semanas/meses DEPOIS da criação do ID MLB (ex: MLB6168219740
+              // criado em 14/01/2026 mas com descrição adicionada em 25/02/2026), prevalece a data mais antiga (baseEst)!
+              if (!isNaN(baseEstMs) && d.getTime() > baseEstMs + 3 * 86400000) {
+                return baseEst;
+              }
               return d.toISOString();
             }
           }
@@ -665,7 +682,6 @@ export async function refineMlCreationDateFromImage(
     } catch {}
   }
 
-  const baseEst = estimateMlCreationDate(externalIdOrUrl, thumbnailUrl, html);
   if (baseEst || normalizedMlbId) {
     return baseEst;
   }

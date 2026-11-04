@@ -214,14 +214,17 @@
     [3604088865, 1708614317],
     [3677706001, 1714672144],
     [3775570601, 1720721286],
+    [3791988025, 1721905870],
     [3870433327, 1728306310],
     [3878354037, 1729017450],
-    [4000000001, 1740000000],
+    [3950553465, 1736687662],
     [4405079191, 1767714028],
     [4473157969, 1770897600],
     [4516465031, 1773081053],
+    [4637247523, 1777301270],
     [4680140101, 1778774182],
     [4729260091, 1780401600],
+    [4815068677, 1782408395],
     [4907118005, 1784298505],
     [4949688649, 1785118614],
     [5007001935, 1786033623],
@@ -240,6 +243,8 @@
     [5425017267, 1792428203],
     [5451861735, 1792759331],
     [5467689883, 1793060428],
+    [5481288423, 1793274499],
+    [5495858211, 1793552607],
   ];
 
   const EVEN_MLB_ANCHORS = [
@@ -248,13 +253,17 @@
     [4239931650, 1701085623],
     [4323562446, 1703681117],
     [4440840978, 1707647181],
+    [4663801474, 1715198758],
     [5279238968, 1738893724],
     [5302227582, 1740690198],
+    [5325009484, 1742573943],
     [5478913174, 1751758357],
     [5803698714, 1760521760],
     [5933540874, 1763057982],
-    [6168219740, 1772019365],
-    [6257283512, 1772400000],
+    [6052459348, 1765732276],
+    [6168219740, 1768392000],
+    [6257283512, 1771354409],
+    [6310961644, 1772198879],
     [6662209498, 1776978982],
     [6776418892, 1778775181],
     [6936719092, 1781103327],
@@ -263,6 +272,7 @@
     [7136348316, 1783638496],
     [7259550226, 1785118538],
     [7349483204, 1786059234],
+    [7390551330, 1786481774],
     [7400693466, 1786581179],
     [7472416462, 1787271960],
     [7536360518, 1787876196],
@@ -387,8 +397,69 @@
    * Helper: Extrai data de criação do anúncio do Mercado Livre (Multicamada)
    */
   function extractMlCreationDate(externalId = null, thumbnailUrl = null) {
+    window.__LAST_ML_DATE_FROM_DOM__ = false;
     try {
-      // Camada 1: Scripts JSON embutidos na página (startTime / start_time / date_created)
+      // Camada 1: Informação explícita ou relativa visível no DOM
+      // Ex: "Publicado: há 294 dias", tooltip "14/01/2026", "Publicado em 14/01/2026", "Anunciado 14 jan. 2026"
+      const bodyText = document.body?.innerText || "";
+      const bodyHtml = document.body?.innerHTML || "";
+
+      // 1a. Data explícita próxima de "Publicado" (incluindo tooltips como 14/01/2026)
+      const pubTooltipMatch =
+        bodyHtml.match(/Publicado[\s\S]{0,350}?(\d{2})\/(\d{2})\/(20\d{2})/i) ||
+        bodyText.match(/Publicado\s*(?:em|:)?\s*(\d{2})\/(\d{2})\/(20\d{2})/i);
+      if (pubTooltipMatch) {
+        const day = parseInt(pubTooltipMatch[1], 10);
+        const month = parseInt(pubTooltipMatch[2], 10) - 1;
+        const year = parseInt(pubTooltipMatch[3], 10);
+        const d = new Date(Date.UTC(year, month, day, 12, 0, 0));
+        if (!isNaN(d.getTime())) {
+          window.__LAST_ML_DATE_FROM_DOM__ = true;
+          return d.toISOString();
+        }
+      }
+
+      // 1b. Padrão "Anunciado 14 jan. 2026"
+      const ptMonths = {
+        jan: 0, fev: 1, mar: 2, abr: 3, mai: 4, jun: 5,
+        jul: 6, ago: 7, set: 8, out: 9, nov: 10, dez: 11,
+      };
+      const anunciadoMatch = bodyText.match(
+        /Anunciado\s+(?:em\s+)?(\d{1,2})\s+(?:de\s+)?(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-z.]*\s+(?:de\s+)?(20\d{2})/i
+      );
+      if (anunciadoMatch) {
+        const day = parseInt(anunciadoMatch[1], 10);
+        const mKey = anunciadoMatch[2].toLowerCase().slice(0, 3);
+        const year = parseInt(anunciadoMatch[3], 10);
+        if (ptMonths[mKey] !== undefined) {
+          const d = new Date(Date.UTC(year, ptMonths[mKey], day, 12, 0, 0));
+          if (!isNaN(d.getTime())) {
+            window.__LAST_ML_DATE_FROM_DOM__ = true;
+            return d.toISOString();
+          }
+        }
+      }
+
+      // 1c. Padrão "Publicado: há 294 dias"
+      const relDaysMatch = bodyText.match(/Publicado:?\s*h[áa]\s*(\d+)\s*dias?/i);
+      if (relDaysMatch) {
+        const days = parseInt(relDaysMatch[1], 10);
+        if (!isNaN(days) && days >= 0 && days < 5000) {
+          window.__LAST_ML_DATE_FROM_DOM__ = true;
+          return new Date(Date.now() - days * 86400000).toISOString();
+        }
+      }
+      if (/Publicado:?\s*hoje/i.test(bodyText)) {
+        window.__LAST_ML_DATE_FROM_DOM__ = true;
+        return new Date().toISOString();
+      }
+      if (/Publicado:?\s*ontem/i.test(bodyText)) {
+        window.__LAST_ML_DATE_FROM_DOM__ = true;
+        return new Date(Date.now() - 86400000).toISOString();
+      }
+
+      // Camada 2: Scripts JSON embutidos na página (APENAS startTime / start_time do item;
+      // NUNCA "date_created" genérico pois reviews e perguntas possuem date_created próprios!)
       const scripts = document.querySelectorAll("script");
       for (const script of scripts) {
         const content = script.textContent;
@@ -396,42 +467,18 @@
 
         const match =
           content.match(/"startTime"\s*:\s*"([^"]+)"/i) ||
-          content.match(/"start_time"\s*:\s*"([^"]+)"/i) ||
-          content.match(/"date_created"\s*:\s*"([^"]+)"/i);
+          content.match(/"start_time"\s*:\s*"([^"]+)"/i);
 
         if (match && match[1]) {
           const d = new Date(match[1]);
           if (!isNaN(d.getTime())) {
+            window.__LAST_ML_DATE_FROM_DOM__ = true;
             return d.toISOString();
           }
         }
       }
 
-      // Camada 2: Informação visível no DOM (ex: "Publicado: há 258 dias" ou "Publicado em DD/MM/YYYY")
-      const bodyText = document.body?.innerText || "";
-      const relDaysMatch = bodyText.match(/Publicado:?\s*h[áa]\s*(\d+)\s*dias?/i);
-      if (relDaysMatch) {
-        const days = parseInt(relDaysMatch[1], 10);
-        if (!isNaN(days) && days >= 0 && days < 5000) {
-          return new Date(Date.now() - days * 86400000).toISOString();
-        }
-      }
-      if (/Publicado:?\s*hoje/i.test(bodyText)) {
-        return new Date().toISOString();
-      }
-      if (/Publicado:?\s*ontem/i.test(bodyText)) {
-        return new Date(Date.now() - 86400000).toISOString();
-      }
-      const explicitDateMatch = bodyText.match(/Publicado\s*(?:em|:)?\s*(\d{2})\/(\d{2})\/(20\d{2})/i);
-      if (explicitDateMatch) {
-        const day = parseInt(explicitDateMatch[1], 10);
-        const month = parseInt(explicitDateMatch[2], 10) - 1;
-        const year = parseInt(explicitDateMatch[3], 10);
-        const d = new Date(Date.UTC(year, month, day, 12, 0, 0));
-        if (!isNaN(d.getTime())) return d.toISOString();
-      }
-
-      // Camada 3: Interpolação Cronológica Dual-Shard do ID MLB + Sufixo da Imagem
+      // Camada 3: Interpolação Cronológica Dual-Shard do ID MLB
       const interpolated = interpolateMlbCreationDate(externalId, thumbnailUrl);
       if (interpolated) return interpolated;
     } catch (e) {
@@ -1335,6 +1382,7 @@
       pictures: extractAllListingImages(),
       sales_count_approx: salesCount,
       listing_created_at: creationDate,
+      date_from_dom: Boolean(window.__LAST_ML_DATE_FROM_DOM__),
       listing_type: listingType,
       listing_type_label: isPremium ? "Premium" : "Clássico",
       category_id: categoryId || null,

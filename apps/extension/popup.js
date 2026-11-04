@@ -350,10 +350,19 @@ document.addEventListener("DOMContentLoaded", async () => {
                     : "📍 Mercado Envios Nacional";
               }
 
-              // 2. Atualiza Data de Criação se refinada pela API / cabeçalho Last-Modified da foto
-              if (feeRes.listing_created_at) {
+              // 2. Atualiza Data de Criação se refinada pela API (apenas se não veio cravada do DOM
+              //    e se não for uma edição tardia de descrição posterior à criação do ID MLB)
+              if (feeRes.listing_created_at && !currentScrapedData.date_from_dom) {
                 const apiDateObj = new Date(feeRes.listing_created_at);
-                if (!isNaN(apiDateObj.getTime())) {
+                const existingDateObj = currentScrapedData.listing_created_at
+                  ? new Date(currentScrapedData.listing_created_at)
+                  : null;
+                const isReasonableOrEarlier =
+                  !existingDateObj ||
+                  isNaN(existingDateObj.getTime()) ||
+                  apiDateObj.getTime() <= existingDateObj.getTime() + 3 * 86400000;
+
+                if (!isNaN(apiDateObj.getTime()) && isReasonableOrEarlier) {
                   currentScrapedData.listing_created_at = apiDateObj.toISOString();
                   if (dateEl) {
                     const brDate = apiDateObj.toLocaleDateString("pt-BR");

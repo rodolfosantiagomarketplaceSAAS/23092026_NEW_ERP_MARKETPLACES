@@ -292,7 +292,16 @@ export async function GET(req: NextRequest) {
         if (descRes && descRes.ok) {
           const descData = await descRes.json().catch(() => null);
           if (descData?.date_created) {
-            apiCreatedAt = String(descData.date_created);
+            const descDate = new Date(descData.date_created);
+            const refinedBase = await refinedDatePromise;
+            const baseMs = refinedBase ? new Date(refinedBase).getTime() : NaN;
+            // Se a descrição foi adicionada semanas após a criação do anúncio (ex: MLB6168219740 criado em 14/01/2026
+            // e descrição adicionada em 25/02/2026), mantém a data de criação mais antiga do anúncio!
+            if (!isNaN(baseMs) && descDate.getTime() > baseMs + 3 * 86400000) {
+              apiCreatedAt = refinedBase;
+            } else {
+              apiCreatedAt = String(descData.date_created);
+            }
           }
         }
 
