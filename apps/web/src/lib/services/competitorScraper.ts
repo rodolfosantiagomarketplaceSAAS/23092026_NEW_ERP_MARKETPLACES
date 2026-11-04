@@ -1,6 +1,9 @@
 import { createHash } from "crypto";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { getActiveMarketplaceToken } from "@/lib/services/marketplaceIntegrations";
+import {
+  getActiveMarketplaceToken,
+  refreshMercadoLivreIntegration,
+} from "@/lib/services/marketplaceIntegrations";
 import { decryptSecret } from "@/lib/security/crypto";
 
 export interface VerifiedCompetitorData {
@@ -541,16 +544,24 @@ export function estimateMlCreationDate(
     }
   }
 
-  let imgMonthYear: { month: number; year: number; endOfMonthMs: number; defaultMs: number } | null = null;
+  let imgMonthYear: {
+    month: number;
+    year: number;
+    startOfMonthMs: number;
+    endOfMonthMs: number;
+    defaultMs: number;
+  } | null = null;
   if (thumbnailUrl) {
     const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
     if (imgDateMatch) {
       const month = parseInt(imgDateMatch[1], 10);
       const year = parseInt(imgDateMatch[2], 10);
       if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+        const startOfMonthMs = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0)).getTime();
         const endOfMonthMs = new Date(Date.UTC(year, month, 0, 12, 0, 0)).getTime();
-        const defaultMs = Math.min(endOfMonthMs, Date.now());
-        imgMonthYear = { month, year, endOfMonthMs, defaultMs };
+        const midMonthMs = new Date(Date.UTC(year, month - 1, 15, 12, 0, 0)).getTime();
+        const defaultMs = Math.min(midMonthMs, Date.now());
+        imgMonthYear = { month, year, startOfMonthMs, endOfMonthMs, defaultMs };
       }
     }
   }
@@ -586,9 +597,13 @@ export function estimateMlCreationDate(
       const clamped = Math.min(Math.round(sec), nowSec);
       if (clamped > 1200000000) {
         const interpMs = clamped * 1000;
-        // Se a URL da foto possui _MMYYYY de um mês anterior à interpolação (> 45 dias antes),
-        // respeita o mês/ano real de upload da foto
-        if (imgMonthYear && interpMs > imgMonthYear.endOfMonthMs + 45 * 86400000) {
+        // Se a URL da foto possui _MMYYYY fora da janela da interpolação (antes ou depois),
+        // respeita o mês/ano real de upload da foto no mlstatic.com
+        if (
+          imgMonthYear &&
+          (interpMs > imgMonthYear.endOfMonthMs + 30 * 86400000 ||
+            interpMs < imgMonthYear.startOfMonthMs - 15 * 86400000)
+        ) {
           return new Date(imgMonthYear.defaultMs).toISOString();
         }
         return new Date(interpMs).toISOString();
@@ -605,6 +620,7 @@ export function estimateMlCreationDate(
 
 /**
  * Refina a data de criação consultando o header Last-Modified da imagem no http2.mlstatic.com
+ * O timestamp HTTP Last-Modified do CDN do Mercado Livre é o momento exato do upload da foto pelo vendedor.
  */
 export async function refineMlCreationDateFromImage(
   externalIdOrUrl?: string | null,
@@ -618,7 +634,7 @@ export async function refineMlCreationDateFromImage(
 
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1500);
+    const timer = setTimeout(() => controller.abort(), 1800);
     const res = await fetch(thumbnailUrl.replace(/^http:\/\//i, "https://"), {
       method: "GET",
       headers: { Range: "bytes=0-1" },
@@ -629,13 +645,8 @@ export async function refineMlCreationDateFromImage(
     const lastMod = res?.headers?.get("last-modified");
     if (lastMod) {
       const imgDate = new Date(lastMod);
-      if (!isNaN(imgDate.getTime())) {
-        if (!baseEst) return imgDate.toISOString();
-        const estDate = new Date(baseEst);
-        const diffDays = Math.abs(imgDate.getTime() - estDate.getTime()) / 86400000;
-        if (imgDate.getTime() < estDate.getTime() || diffDays <= 14) {
-          return imgDate.toISOString();
-        }
+      if (!isNaN(imgDate.getTime()) && imgDate.getFullYear() >= 2015) {
+        return imgDate.toISOString();
       }
     }
   } catch {
@@ -1104,7 +1115,7 @@ export async function resolveAnyActiveMlToken(
     const supabase = createSupabaseAdminClient();
     const { data: row } = await supabase
       .from("marketplace_integrations")
-      .select("id, access_token")
+      .select("id, access_token, token_expires_at")
       .eq("platform", "mercadolivre")
       .eq("is_active", true)
       .order("updated_at", { ascending: false })
@@ -1112,6 +1123,11 @@ export async function resolveAnyActiveMlToken(
       .maybeSingle();
 
     if (row?.access_token) {
+      const expiresAt = row.token_expires_at ? Date.parse(row.token_expires_at) : 0;
+      if (expiresAt && expiresAt - Date.now() <= 5 * 60 * 1000) {
+        const refreshed = await refreshMercadoLivreIntegration(row.id).catch(() => null);
+        if (refreshed) return refreshed;
+      }
       return decryptSecret(row.access_token);
     }
   } catch {

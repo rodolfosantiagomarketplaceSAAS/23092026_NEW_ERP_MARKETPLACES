@@ -267,9 +267,10 @@
           const month = parseInt(imgDateMatch[1], 10);
           const year = parseInt(imgDateMatch[2], 10);
           if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+            const startOfMonthMs = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0)).getTime();
             const endOfMonthMs = new Date(Date.UTC(year, month, 0, 12, 0, 0)).getTime();
             const defaultMs = Math.min(endOfMonthMs, Date.now());
-            imgMonthYear = { month, year, endOfMonthMs, defaultMs };
+            imgMonthYear = { month, year, startOfMonthMs, endOfMonthMs, defaultMs };
           }
         }
       }
@@ -304,7 +305,11 @@
           const clamped = Math.min(Math.round(sec), nowSec);
           if (clamped > 1200000000) {
             const interpMs = clamped * 1000;
-            if (imgMonthYear && interpMs > imgMonthYear.endOfMonthMs + 45 * 86400000) {
+            if (
+              imgMonthYear &&
+              (interpMs > imgMonthYear.endOfMonthMs + 30 * 86400000 ||
+                interpMs < imgMonthYear.startOfMonthMs - 15 * 86400000)
+            ) {
               return new Date(imgMonthYear.defaultMs).toISOString();
             }
             return new Date(interpMs).toISOString();
@@ -426,20 +431,45 @@
   }
 
   /**
-   * Refina a data de criação consultando o cabeçalho HTTP Last-Modified da primeira imagem no mlstatic.com
+   * Refina a data de criação consultando o cabeçalho HTTP Last-Modified da imagem no mlstatic.com
+   * e tenta resolver a localização do concorrente na página de perfil/loja se ainda não detectada.
    */
   async function refineMlCreationDateAsync(data) {
     if (!data || data.platform !== "mercadolivre") return data;
     try {
-      const imgUrl =
+      // Seleciona a imagem com o sufixo _MMYYYY mais antigo da galeria ou thumbnail principal
+      let candidateUrls = [];
+      if (Array.isArray(data.pictures)) {
+        for (const p of data.pictures) {
+          const u = p?.originalUrl || p?.primaryUrl || (typeof p === "string" ? p : null);
+          if (u && u.includes("mlstatic.com")) candidateUrls.push(u);
+        }
+      }
+      const fallbackImg =
         data.thumbnail_url ||
         document.querySelector('meta[property="og:image"]')?.getAttribute("content") ||
         document.querySelector(".ui-pdp-gallery__figure img")?.getAttribute("src");
+      if (fallbackImg && fallbackImg.includes("mlstatic.com")) {
+        candidateUrls.unshift(fallbackImg);
+      }
 
-      if (imgUrl && imgUrl.includes("mlstatic.com")) {
+      let bestImgUrl = candidateUrls[0] || null;
+      let earliestYm = 999999;
+      for (const u of candidateUrls) {
+        const ymMatch = String(u).match(/_(\d{2})(20\d{2})-/);
+        if (ymMatch) {
+          const ymVal = parseInt(ymMatch[2], 10) * 100 + parseInt(ymMatch[1], 10);
+          if (ymVal < earliestYm) {
+            earliestYm = ymVal;
+            bestImgUrl = u;
+          }
+        }
+      }
+
+      if (bestImgUrl && bestImgUrl.includes("mlstatic.com")) {
         const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 1200);
-        const res = await fetch(imgUrl.replace(/^http:\/\//i, "https://"), {
+        const timer = setTimeout(() => controller.abort(), 1400);
+        const res = await fetch(bestImgUrl.replace(/^http:\/\//i, "https://"), {
           method: "GET",
           headers: { Range: "bytes=0-1" },
           signal: controller.signal,
@@ -449,22 +479,217 @@
         const lastMod = res?.headers?.get("last-modified");
         if (lastMod) {
           const imgDate = new Date(lastMod);
-          if (!isNaN(imgDate.getTime())) {
-            if (!data.listing_created_at) {
-              data.listing_created_at = imgDate.toISOString();
-            } else {
-              const currentEst = new Date(data.listing_created_at);
-              const diffDays = Math.abs(imgDate.getTime() - currentEst.getTime()) / 86400000;
-              // Se a foto foi enviada na mesma época (<= 14 dias) ou antes da estimativa, usa o timestamp exato do Last-Modified
-              if (imgDate.getTime() < currentEst.getTime() || diffDays <= 14) {
-                data.listing_created_at = imgDate.toISOString();
-              }
-            }
+          if (
+            !isNaN(imgDate.getTime()) &&
+            imgDate.getFullYear() >= 2015 &&
+            imgDate.getTime() <= Date.now() + 86400000
+          ) {
+            // O cabeçalho Last-Modified da imagem no mlstatic.com reflete a data exata de upload da foto do anúncio
+            data.listing_created_at = imgDate.toISOString();
           }
         }
       }
+
+      // Se a localização do vendedor ainda não foi encontrada na PDP, tenta buscar no link de perfil/loja
+      if (!data.seller_location && data.seller_store_url && data.seller_store_url.includes("mercadolivre.com.br")) {
+        try {
+          const locCtrl = new AbortController();
+          const locTimer = setTimeout(() => locCtrl.abort(), 1400);
+          const storeRes = await fetch(data.seller_store_url, {
+            method: "GET",
+            credentials: "include",
+            signal: locCtrl.signal,
+          }).catch(() => null);
+          clearTimeout(locTimer);
+          if (storeRes && storeRes.ok) {
+            const storeHtml = await storeRes.text();
+            const locFromProfile =
+              storeHtml.match(/Localizado\s+em\s+([^<".\n]{3,45})/i)?.[1] ||
+              storeHtml.match(/"city"\s*:\s*\{\s*(?:"id"\s*:\s*"[^"]*"\s*,\s*)?"name"\s*:\s*"([^"]+)"\s*\}\s*,\s*"state"\s*:\s*\{\s*"id"\s*:\s*"(?:BR-)?([A-Z]{2})"/i);
+            if (Array.isArray(locFromProfile)) {
+              data.seller_location = `${locFromProfile[1]} - ${locFromProfile[2]}`;
+            } else if (typeof locFromProfile === "string" && locFromProfile.trim()) {
+              data.seller_location = locFromProfile.trim();
+            }
+          }
+        } catch {}
+      }
     } catch {}
     return data;
+  }
+
+  /**
+   * Helper: Extrai a localização do vendedor/concorrente no Mercado Livre (Cidade / Estado)
+   */
+  function extractMlSellerLocation(scriptsText = "") {
+    try {
+      // 1. Containers de informação do vendedor no DOM (.ui-seller-info__status-info)
+      const statusBlocks = document.querySelectorAll(
+        ".ui-seller-info__status-info, .ui-pdp-seller__status-info, [class*='seller-info__status']"
+      );
+      for (const block of statusBlocks) {
+        const header = block.querySelector(".ui-seller-info__status-info__title, h3, strong")?.innerText?.trim() || "";
+        const subtitle = block.querySelector(".ui-seller-info__status-info__subtitle, p, span")?.innerText?.trim() || "";
+        if (/localiza[çc][ãa]o/i.test(header) && subtitle) {
+          return subtitle;
+        }
+        const fullText = (block.innerText || "").replace(/\s+/g, " ").trim();
+        const locMatch = fullText.match(/Localiza[çc][ãa]o\s*:?\s*(.+)$/i) || fullText.match(/Localizado\s+em\s+(.+)$/i);
+        if (locMatch && locMatch[1]) {
+          return locMatch[1].trim();
+        }
+      }
+
+      // 2. JSON embutido nos scripts da página (seller_address / city / state)
+      if (scriptsText) {
+        const addrRegex =
+          /"seller_address"\s*:\s*\{[\s\S]{0,600}?"city"\s*:\s*\{\s*(?:"id"\s*:\s*"[^"]*"\s*,\s*)?"name"\s*:\s*"([^"]+)"\s*\}[\s\S]{0,200}?"state"\s*:\s*\{\s*"id"\s*:\s*"(?:BR-)?([A-Z]{2})"\s*,\s*"name"\s*:\s*"([^"]+)"/i;
+        const m = scriptsText.match(addrRegex);
+        if (m && m[1]) {
+          return m[2] ? `${m[1]} - ${m[2]}` : `${m[1]} - ${m[3]}`;
+        }
+
+        const cityStateMatch = scriptsText.match(
+          /"city"\s*:\s*\{\s*(?:"id"\s*:\s*"[^"]*"\s*,\s*)?"name"\s*:\s*"([^"]+)"\s*\}\s*,\s*"state"\s*:\s*\{\s*"id"\s*:\s*"(?:BR-)?([A-Z]{2})"/i
+        );
+        if (cityStateMatch && cityStateMatch[1]) {
+          return `${cityStateMatch[1]} - ${cityStateMatch[2]}`;
+        }
+      }
+
+      // 3. Texto de envio no bloco de frete ("Enviado de São Paulo, SP")
+      const shippingContainers = document.querySelectorAll(
+        ".ui-pdp-media__body, .ui-pdp-shipping, .ui-vpp-seller-profile"
+      );
+      for (const el of shippingContainers) {
+        const txt = (el.innerText || "").replace(/\s+/g, " ").trim();
+        const m =
+          txt.match(/Enviado\s+de\s+([A-ZÀ-Úa-zà-ú\s]+(?:[,-]\s*[A-ZÀ-Úa-zà-ú]{2,20})?)/i) ||
+          txt.match(/Localizado\s+em\s+([A-ZÀ-Úa-zà-ú\s]+(?:[,-]\s*[A-ZÀ-Úa-zà-ú]{2,20})?)/i);
+        if (m && m[1] && m[1].length >= 3 && m[1].length <= 45) {
+          return m[1].trim();
+        }
+      }
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Helper: Extrai o peso faturável do produto (em gramas) da Ficha Técnica do DOM, Descrição ou Título
+   */
+  function extractMlProductWeightGrams(title = "", scriptsText = "") {
+    try {
+      // 1. Ficha Técnica (Tabelas Andes e listas de especificações)
+      const rows = document.querySelectorAll(
+        ".andes-table tr, .ui-vpp-striped-specs__table tr, .ui-pdp-specs__table tr, [class*='specs'] tr"
+      );
+      for (const row of rows) {
+        const th = (row.querySelector("th, td:first-child")?.innerText || "").trim().toLowerCase();
+        const td = (row.querySelector("td:last-child, td:nth-child(2)")?.innerText || "").trim().toLowerCase();
+        if (th && td && /(?:^|\s)peso(?:\s|$|bruto|l[íi]quido|do produto|aproximado)/i.test(th)) {
+          const kgMatch = td.match(/(\d+(?:[.,]\d+)?)\s*(?:kg|quilos?)\b/i);
+          if (kgMatch) {
+            const val = parseFloat(kgMatch[1].replace(",", "."));
+            if (val > 0 && val <= 150) return Math.round(val * 1000);
+          }
+          const gMatch = td.match(/(\d+(?:[.,]\d+)?)\s*(?:g|gr|gramas?)\b/i);
+          if (gMatch) {
+            const val = parseFloat(gMatch[1].replace(",", "."));
+            if (val >= 10 && val <= 150000) return Math.round(val);
+          }
+        }
+      }
+
+      // 2. Atributos estruturados em JSON nos scripts da página (id: "WEIGHT" ou "PACKAGE_WEIGHT")
+      if (scriptsText) {
+        const attrWeightMatch =
+          scriptsText.match(/"id"\s*:\s*"(?:PACKAGE_)?WEIGHT"[\s\S]{0,250}?"value_name"\s*:\s*"(\d+(?:[.,]\d+)?)\s*(kg|g)"/i) ||
+          scriptsText.match(/"name"\s*:\s*"Peso[^"]*"[\s\S]{0,200}?"value_name"\s*:\s*"(\d+(?:[.,]\d+)?)\s*(kg|g)"/i);
+        if (attrWeightMatch) {
+          const num = parseFloat(attrWeightMatch[1].replace(",", "."));
+          const unit = attrWeightMatch[2].toLowerCase();
+          if (num > 0) {
+            const grams = unit === "kg" ? Math.round(num * 1000) : Math.round(num);
+            if (grams >= 10 && grams <= 150000) return grams;
+          }
+        }
+      }
+
+      // 3. Descrição do anúncio ("Peso: 3,8 kg" / "Peso aprox.: 3.5kg")
+      const descEl = document.querySelector(".ui-pdp-description__content, [data-testid='content']");
+      if (descEl && descEl.innerText) {
+        const descText = descEl.innerText;
+        const descWeightMatch = descText.match(
+          /peso(?:\s+aprox(?:imado)?\.?|\s+l[íi]quido|\s+bruto|\s+do\s+produto)?\s*[:=-]?\s*(\d+(?:[.,]\d+)?)\s*(kg|quilos?|g|gr|gramas?)\b/i
+        );
+        if (descWeightMatch) {
+          const num = parseFloat(descWeightMatch[1].replace(",", "."));
+          const unit = descWeightMatch[2].toLowerCase();
+          if (num > 0) {
+            const grams = unit.startsWith("k") || unit.startsWith("q") ? Math.round(num * 1000) : Math.round(num);
+            if (grams >= 20 && grams <= 150000) return grams;
+          }
+        }
+      }
+
+      // 4. Inferência inteligente pelo título (ex: "2000va", "3kg", "500g", "bateria", etc.)
+      const t = (title || "").toLowerCase();
+      if (t) {
+        const kgTitle = t.match(/\b(\d+(?:[.,]\d+)?)\s*(?:kg|quilos?)\b/i);
+        if (kgTitle) {
+          const kg = parseFloat(kgTitle[1].replace(",", "."));
+          if (kg > 0 && kg <= 100) return Math.round(kg * 1000);
+        }
+        const gTitle = t.match(/\b(\d{2,5})\s*(?:g|gr|gramas)\b/i);
+        if (gTitle) {
+          const g = parseInt(gTitle[1], 10);
+          if (g >= 50 && g <= 50000) return g;
+        }
+        if (/\b(?:transformador|autotransformador|trafo)\b/i.test(t)) {
+          const vaMatch = t.match(/\b(\d{3,5})\s*(?:va|w|watts)\b/i);
+          if (vaMatch) {
+            const va = parseInt(vaMatch[1], 10);
+            if (va >= 5000) return 7500;
+            if (va >= 3000) return 5200;
+            if (va >= 2000) return 3800;
+            if (va >= 1500) return 2900;
+            if (va >= 1000) return 2250;
+            if (va >= 750) return 1700;
+            if (va >= 500) return 1250;
+            return 850;
+          }
+          return 2500;
+        }
+        if (/bateria\s+automotiva|bateria\s+60ah|bateria\s+moura/i.test(t)) return 11500;
+        if (/kit\s+motor|motor\s+deslizante|motor\s+port[ãa]o/i.test(t)) return 5500;
+        if (/pneu\s+\d{3}|roda\s+aro/i.test(t)) return 8500;
+      }
+    } catch {}
+    return 250; // Padrão leve (< 300g)
+  }
+
+  /**
+   * Calcula o custo de frete Mercado Envios (50% desconto Líder/Verde) considerando Preço + Faixa de Peso
+   */
+  function estimateMlShippingByPriceAndWeight(price, weightGrams = 250) {
+    if (!price || price < 79) return 0;
+
+    let tier = 0; // R$ 79 a R$ 99,99
+    if (price >= 200) tier = 4;
+    else if (price >= 150) tier = 3;
+    else if (price >= 120) tier = 2;
+    else if (price >= 100) tier = 1;
+
+    const w = weightGrams > 0 ? weightGrams : 250;
+    if (w <= 300) return [13.65, 16.85, 18.65, 20.45, 22.45][tier];
+    if (w <= 500) return [14.45, 17.85, 19.85, 21.45, 23.45][tier];
+    if (w <= 1000) return [15.45, 18.95, 20.95, 22.95, 24.95][tier];
+    if (w <= 2000) return [16.95, 19.95, 22.45, 24.45, 26.95][tier];
+    if (w <= 3000) return [18.45, 21.45, 23.95, 26.45, 28.95][tier];
+    if (w <= 5000) return [19.95, 22.85, 25.45, 28.45, 31.45][tier];
+    if (w <= 9000) return [26.95, 30.95, 34.45, 38.45, 42.95][tier];
+    if (w <= 13000) return [36.95, 41.95, 46.95, 51.95, 56.95][tier];
+    return [44.95, 51.95, 57.95, 63.95, 69.95][tier];
   }
 
   /**
@@ -1008,7 +1233,7 @@
       .join(" > ");
 
     const isPremium = listingType === "gold_pro";
-    let saleFeePct = isPremium ? 17 : 12;
+    let saleFeePct = isPremium ? 16.5 : 11.5;
     const fixedFee =
       currentPrice > 0 && currentPrice < 12.5
         ? currentPrice / 2
@@ -1022,15 +1247,9 @@
     let saleFeeAmount =
       currentPrice > 0 ? Number(((currentPrice * saleFeePct) / 100 + fixedFee).toFixed(2)) : 0;
 
-    let shippingCost = 0;
-    if (currentPrice > 0) {
-      if (currentPrice < 79) shippingCost = 0;
-      else if (currentPrice < 100) shippingCost = 13.65;
-      else if (currentPrice < 120) shippingCost = 16.85;
-      else if (currentPrice < 150) shippingCost = 18.65;
-      else if (currentPrice < 200) shippingCost = 20.45;
-      else shippingCost = 22.45;
-    }
+    const sellerLocation = extractMlSellerLocation(scriptsText);
+    const weightGrams = extractMlProductWeightGrams(title, scriptsText);
+    let shippingCost = estimateMlShippingByPriceAndWeight(currentPrice, weightGrams);
 
     // Identifica item_id real mesmo em páginas de catálogo (/p/MLB...)
     let resolvedItemId = externalId;
@@ -1075,6 +1294,7 @@
       current_price: currentPrice,
       original_price: originalPrice,
       seller_name: sellerName,
+      seller_location: sellerLocation,
       seller_reputation: sellerReputation,
       seller_store_url: sellerStoreUrl,
       seller_id: sellerId,
@@ -1089,6 +1309,7 @@
       listing_type_label: isPremium ? "Premium" : "Clássico",
       category_id: categoryId || null,
       breadcrumb: breadcrumb || null,
+      weight_grams: weightGrams,
       sale_fee_amount: saleFeeAmount,
       sale_fee_pct: saleFeePct,
       shipping_cost: shippingCost,
@@ -1472,6 +1693,89 @@
       });
     };
 
+    // Botão para salvar anúncio na aba "Anúncios p/ Analisar & Criar"
+    const saveOppBtn = document.createElement("button");
+    saveOppBtn.id = "crm-erp-floating-save-btn";
+    saveOppBtn.innerHTML = `🔖 Salvar p/ Criar`;
+    saveOppBtn.title = "Salvar este anúncio na aba 'Anúncios p/ Analisar & Criar' do ERP";
+    saveOppBtn.style.cssText = `
+      background: transparent;
+      color: #FBBF24;
+      border: none;
+      border-left: 1px solid #334155;
+      padding: 9px 12px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      outline: none;
+      transition: background-color 0.2s;
+    `;
+    saveOppBtn.onmouseover = () => {
+      saveOppBtn.style.backgroundColor = "#1E293B";
+    };
+    saveOppBtn.onmouseout = () => {
+      saveOppBtn.style.backgroundColor = "transparent";
+    };
+    saveOppBtn.onclick = async () => {
+      let data = extractProductData();
+      if (!data || !data.current_price) {
+        showToast("Não foi possível identificar o anúncio nesta página.", "error");
+        return;
+      }
+      data = await refineMlCreationDateAsync(data);
+      showToast(`Salvando "${(data.title || "").slice(0, 35)}..." em Anúncios p/ Criar...`, "info");
+      chrome.runtime.sendMessage(
+        {
+          action: "SAVE_OPPORTUNITY_LISTING",
+          payload: {
+            external_id: data.external_id,
+            platform: data.platform || "mercadolivre",
+            title: data.title,
+            current_price: data.current_price,
+            original_price: data.original_price,
+            discount_pct:
+              data.original_price && data.original_price > data.current_price
+                ? Math.round(((data.original_price - data.current_price) / data.original_price) * 100)
+                : null,
+            sales_count_approx: data.sales_count_approx || 0,
+            listing_created_at: data.listing_created_at || null,
+            seller_name: data.seller_name || null,
+            seller_id: data.seller_id || null,
+            seller_location: data.seller_location || null,
+            seller_reputation: data.seller_reputation || null,
+            seller_store_url: data.seller_store_url || null,
+            shipping_type: data.shipping_type || "padrao",
+            is_full: data.shipping_type === "ml_full",
+            is_free_shipping: data.shipping_cost === 0,
+            promo_badge: data.promo_badge || null,
+            permalink: data.permalink || window.location.href,
+            thumbnail_url: data.thumbnail_url || null,
+            pictures: Array.isArray(data.pictures)
+              ? data.pictures.map((p) => p?.primaryUrl || p?.originalUrl || p).filter(Boolean)
+              : [],
+            category_id: data.category_id || null,
+            listing_type: data.listing_type || "gold_special",
+            estimated_sale_fee: data.sale_fee_amount || 0,
+            estimated_shipping_cost: data.shipping_cost || 0,
+            estimated_net: data.net_receivable || 0,
+            rating: data.rating || 4.8,
+          },
+        },
+        (res) => {
+          if (chrome.runtime.lastError || !res || !res.success) {
+            showToast(`Erro ao salvar anúncio: ${res?.error || chrome.runtime.lastError?.message || "Falha"}`, "error");
+          } else {
+            saveOppBtn.innerHTML = "✓ Salvo p/ Criar!";
+            saveOppBtn.style.color = "#34D399";
+            showToast(`✓ Anúncio salvo em "Anúncios p/ Analisar & Criar" no ERP!`, "success");
+          }
+        }
+      );
+    };
+
     // Botão para baixar fotos do anúncio em JPG alta resolução
     const photoBtn = document.createElement("button");
     photoBtn.id = "crm-erp-floating-photo-btn";
@@ -1546,6 +1850,7 @@
     };
 
     container.appendChild(btn);
+    container.appendChild(saveOppBtn);
     container.appendChild(photoBtn);
     container.appendChild(closeBtn);
     document.body.appendChild(container);

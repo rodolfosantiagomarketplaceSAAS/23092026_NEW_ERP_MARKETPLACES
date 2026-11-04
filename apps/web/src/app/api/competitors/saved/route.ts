@@ -266,6 +266,9 @@ export async function POST(request: Request) {
     const sellerReputation = String(
       body.seller_reputation || scraped.seller_reputation || "platinum"
     );
+    const sellerLocation = body.seller_location
+      ? String(body.seller_location).trim()
+      : null;
 
     const storeSegment = String(body.store_segment || "Geral");
     const isCatalog = Boolean(
@@ -294,6 +297,7 @@ export async function POST(request: Request) {
       estimated_net: estimatedNet,
       seller_name: sellerName,
       seller_reputation: sellerReputation,
+      seller_location: sellerLocation,
       store_segment: storeSegment,
       permalink,
       thumbnail_url: thumbnailUrl,
@@ -322,3 +326,4 @@ export async function POST(request: Request) {
     );
   }
 }
+

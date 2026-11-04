@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS public.competitor_saved_listings (
   estimated_shipping NUMERIC(12, 2) DEFAULT 0,
   estimated_net NUMERIC(12, 2) DEFAULT 0,
   seller_name TEXT NOT NULL DEFAULT 'Concorrente',
+  seller_location TEXT,
   seller_reputation TEXT DEFAULT 'platinum',
   store_segment TEXT DEFAULT 'Geral',
   permalink TEXT NOT NULL,
@@ -43,6 +44,9 @@ CREATE TABLE IF NOT EXISTS public.competitor_saved_listings (
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_competitor_saved_listings_user_ext
   ON public.competitor_saved_listings (user_id, external_id);
+
+ALTER TABLE public.competitor_saved_listings
+  ADD COLUMN IF NOT EXISTS seller_location TEXT;
 
 CREATE INDEX IF NOT EXISTS idx_competitor_saved_listings_status
   ON public.competitor_saved_listings (status);
@@ -66,3 +70,4 @@ BEGIN
       WITH CHECK (true);
   END IF;
 END $$;
+

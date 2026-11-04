@@ -887,6 +887,11 @@ export function SavedOpportunitiesView({
                         >
                           {item.seller_name || "Concorrente"}
                         </div>
+                        {item.seller_location && (
+                          <div className="text-[10px] font-medium text-slate-500 truncate max-w-[155px] mt-0.5">
+                            📍 {item.seller_location}
+                          </div>
+                        )}
                         <div className="flex flex-wrap items-center gap-1 mt-0.5">
                           <span className="text-[9px] font-bold uppercase px-1.5 py-0.2 rounded bg-slate-100 text-slate-600 border border-slate-200">
                             {item.seller_reputation || "Platinum"}
@@ -1064,3 +1069,4 @@ export function SavedOpportunitiesView({
     </div>
   );
 }
+

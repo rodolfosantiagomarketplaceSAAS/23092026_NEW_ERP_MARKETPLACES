@@ -165,6 +165,16 @@ async function handleSyncStoreItems(rawErpUrl, payload) {
   };
 }
 
+async function handleSaveOpportunityListing(rawErpUrl, payload) {
+  const { data, erpUrl } = await postToErp("/api/competitors/saved", payload, { erpUrl: rawErpUrl });
+  return {
+    success: true,
+    erpUrl,
+    redirectUrl: "/inteligencia?tab=salvos",
+    ...data,
+  };
+}
+
 async function handleGetMyListings(platform, query = "") {
   const config = await getStoredConfig();
   const params = new URLSearchParams();
@@ -734,6 +744,9 @@ async function handleGetCompetitorFees(req) {
   if (req.category_id) params.set("category_id", req.category_id);
   if (req.breadcrumb) params.set("breadcrumb", req.breadcrumb);
   if (req.title) params.set("title", req.title);
+  if (req.weight_grams) params.set("weight_grams", String(req.weight_grams));
+  if (req.seller_id) params.set("seller_id", String(req.seller_id));
+  if (req.thumbnail_url) params.set("thumbnail_url", String(req.thumbnail_url));
 
   const res = await fetch(`${config.erpUrl}/api/extension/fees?${params.toString()}`, {
     headers: authHeaders(config.apiToken),
@@ -874,6 +887,7 @@ const handlers = {
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
   SYNC_SEARCH_ITEMS: (req) => handleSyncSearchItems(req.erpUrl, req.payload),
   SYNC_STORE_ITEMS: (req) => handleSyncStoreItems(req.erpUrl, req.payload),
+  SAVE_OPPORTUNITY_LISTING: (req) => handleSaveOpportunityListing(req.erpUrl, req.payload),
   GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),
   GET_COMPETITOR_FEES: (req) => handleGetCompetitorFees(req),
   INSPECT_COMPETITOR_LINK: (req) => handleInspectCompetitorLink(req.payload),

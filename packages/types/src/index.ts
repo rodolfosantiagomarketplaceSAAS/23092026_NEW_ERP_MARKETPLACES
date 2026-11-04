@@ -476,6 +476,7 @@ export interface SavedOpportunityListing {
   estimated_net?: number;
   seller_name: string;
   seller_reputation?: string | null;
+  seller_location?: string | null;
   store_segment?: string | null;
   permalink: string;
   thumbnail_url?: string | null;

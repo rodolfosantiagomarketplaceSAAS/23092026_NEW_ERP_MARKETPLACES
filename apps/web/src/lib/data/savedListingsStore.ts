@@ -71,6 +71,7 @@ function mapRowToSavedListing(row: any): SavedOpportunityListing {
     estimated_net: Number(row.estimated_net || 0),
     seller_name: String(row.seller_name || "Concorrente"),
     seller_reputation: row.seller_reputation || "platinum",
+    seller_location: row.seller_location || null,
     store_segment: row.store_segment || "Geral",
     permalink: String(row.permalink || ""),
     thumbnail_url: row.thumbnail_url || null,
@@ -180,6 +181,10 @@ export async function upsertSavedOpportunityListing(
     seller_name: input.seller_name || existing?.seller_name || "Concorrente",
     seller_reputation:
       input.seller_reputation || existing?.seller_reputation || "platinum",
+    seller_location:
+      input.seller_location !== undefined
+        ? input.seller_location
+        : existing?.seller_location ?? null,
     store_segment: input.store_segment || existing?.store_segment || "Geral",
     permalink: input.permalink || existing?.permalink || "",
     thumbnail_url:
@@ -415,3 +420,4 @@ export async function deleteSavedOpportunityListing(
 
   return true;
 }
+

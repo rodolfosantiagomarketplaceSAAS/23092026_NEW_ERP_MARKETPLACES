@@ -250,6 +250,12 @@ document.addEventListener("DOMContentLoaded", async () => {
         const formatMoney = (v) =>
           typeof v === "number" && !isNaN(v) ? `R$ ${v.toFixed(2).replace(".", ",")}` : "—";
 
+        const formatWeightBadge = (w) => {
+          if (!w || w <= 300) return "";
+          if (w >= 1000) return ` (~${(w / 1000).toFixed(1).replace(".", ",")} kg)`;
+          return ` (~${Math.round(w)} g)`;
+        };
+
         const initialFeeText =
           currentScrapedData.sale_fee_amount !== undefined
             ? `${formatMoney(currentScrapedData.sale_fee_amount)} (${currentScrapedData.sale_fee_pct || 11.5}% • ${
@@ -259,7 +265,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         const initialShippingText =
           currentScrapedData.shipping_cost !== undefined
             ? currentScrapedData.shipping_cost > 0
-              ? formatMoney(currentScrapedData.shipping_cost)
+              ? `${formatMoney(currentScrapedData.shipping_cost)}${formatWeightBadge(currentScrapedData.weight_grams)}`
               : "R$ 0,00 (Comprador / Programa)"
             : "Calculando...";
         const initialNetText =
@@ -274,6 +280,10 @@ document.addEventListener("DOMContentLoaded", async () => {
         const photosCountText =
           pictures.length > 0 ? `${pictures.length} fotos em alta resolução` : "1 foto detectada";
 
+        const initialSellerLoc =
+          currentScrapedData.seller_location ||
+          (currentScrapedData.shipping_type === "ml_full" ? "CD Mercado Envios FULL" : "Consultando...");
+
         pageInfoBox.innerHTML = `
           <div class="detected-prod">
             <strong>${currentDetectedPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"}</strong>
@@ -281,8 +291,9 @@ document.addEventListener("DOMContentLoaded", async () => {
             <span>ID: <code>${currentScrapedData.external_id}</code></span>
             <span>Preço: <strong style="color:#0f766e;">${formattedPrice}</strong></span>
             <span>Vendedor: <strong>${currentScrapedData.seller_name || "Desconhecido"}</strong></span>
+            <span>Local: <strong id="extSellerLocVal" style="color:#475569;">📍 ${initialSellerLoc}</strong></span>
             <span>Vendas: <strong style="color:${salesColor};">${formattedSales}</strong></span>
-            <span>Criado em: <strong style="color:#334155;">${formattedDate}</strong></span>
+            <span>Criado em: <strong id="extCreatedDateVal" style="color:#334155;">${formattedDate}</strong></span>
             <span>Fotos: <strong id="extPhotosCountVal" style="color:#0284C7;">${photosCountText}</strong></span>
             <div style="margin-top:4px; padding-top:4px; border-top:1px dashed #CBD5E1; display:flex; flex-direction:column; gap:2px;">
               <span>Tarifa: <strong id="extSaleFeeVal" style="color:#DC2626;">${initialFeeText}</strong></span>
@@ -292,11 +303,8 @@ document.addEventListener("DOMContentLoaded", async () => {
           </div>
         `;
 
-        // Refina Tarifa e Frete junto à API Oficial do Mercado Livre via ERP (apenas se não veio cravado do DOM)
-        if (
-          currentScrapedData.current_price > 0 &&
-          (!currentScrapedData.fee_from_dom || !currentScrapedData.shipping_from_dom)
-        ) {
+        // Refina Tarifa, Frete, Peso, Data de Criação e Local do Concorrente junto à API Oficial do Mercado Livre via ERP
+        if (currentScrapedData.current_price > 0) {
           chrome.runtime.sendMessage(
             {
               action: "GET_COMPETITOR_FEES",
@@ -307,15 +315,57 @@ document.addEventListener("DOMContentLoaded", async () => {
               category_id: currentScrapedData.category_id,
               breadcrumb: currentScrapedData.breadcrumb,
               title: currentScrapedData.title,
+              weight_grams: currentScrapedData.weight_grams,
+              seller_id: currentScrapedData.seller_id,
+              thumbnail_url: currentScrapedData.thumbnail_url,
             },
             (feeRes) => {
-              if (chrome.runtime.lastError || !feeRes || !feeRes.success) return;
+              const locEl = document.getElementById("extSellerLocVal");
+              const dateEl = document.getElementById("extCreatedDateVal");
+
+              if (chrome.runtime.lastError || !feeRes || !feeRes.success) {
+                if (locEl && !currentScrapedData.seller_location) {
+                  locEl.innerText =
+                    currentScrapedData.shipping_type === "ml_full"
+                      ? "📍 CD Mercado Envios FULL"
+                      : "📍 Mercado Envios Nacional";
+                }
+                return;
+              }
+
+              // 1. Atualiza Localização do Concorrente se retornada pela API
+              if (feeRes.seller_location) {
+                currentScrapedData.seller_location = feeRes.seller_location;
+                if (locEl) locEl.innerText = `📍 ${feeRes.seller_location}`;
+              } else if (locEl && !currentScrapedData.seller_location) {
+                locEl.innerText =
+                  currentScrapedData.shipping_type === "ml_full"
+                    ? "📍 CD Mercado Envios FULL"
+                    : "📍 Mercado Envios Nacional";
+              }
+
+              // 2. Atualiza Data de Criação se refinada pela API / cabeçalho Last-Modified da foto
+              if (feeRes.listing_created_at) {
+                const apiDateObj = new Date(feeRes.listing_created_at);
+                if (!isNaN(apiDateObj.getTime())) {
+                  currentScrapedData.listing_created_at = apiDateObj.toISOString();
+                  if (dateEl) {
+                    const brDate = apiDateObj.toLocaleDateString("pt-BR");
+                    const diffDays = Math.max(0, Math.floor((Date.now() - apiDateObj.getTime()) / 86400000));
+                    const ageText = diffDays === 0 ? "hoje" : diffDays === 1 ? "há 1 dia" : `há ${diffDays} dias`;
+                    dateEl.innerText = `${brDate} (${ageText})`;
+                  }
+                }
+              }
+
               const feeEl = document.getElementById("extSaleFeeVal");
               const shipEl = document.getElementById("extShippingCostVal");
               const netEl = document.getElementById("extNetVal");
 
               let finalFee = currentScrapedData.sale_fee_amount || 0;
               let finalShipping = currentScrapedData.shipping_cost || 0;
+              const resolvedWeight = feeRes.billable_weight || currentScrapedData.weight_grams || 250;
+              currentScrapedData.weight_grams = resolvedWeight;
 
               if (typeof feeRes.sale_fee_amount === "number" && !currentScrapedData.fee_from_dom) {
                 finalFee = feeRes.sale_fee_amount;
@@ -335,7 +385,9 @@ document.addEventListener("DOMContentLoaded", async () => {
                 currentScrapedData.shipping_cost = finalShipping;
                 if (shipEl) {
                   shipEl.innerText =
-                    finalShipping > 0 ? formatMoney(finalShipping) : "R$ 0,00 (Comprador / Programa)";
+                    finalShipping > 0
+                      ? `${formatMoney(finalShipping)}${formatWeightBadge(resolvedWeight)}`
+                      : "R$ 0,00 (Comprador / Programa)";
                 }
               }
 
@@ -352,6 +404,84 @@ document.addEventListener("DOMContentLoaded", async () => {
 
         await loadMyListings(currentDetectedPlatform);
         captureNowBtn.style.display = "block";
+        const saveOpportunityBtn = document.getElementById("saveOpportunityBtn");
+        if (saveOpportunityBtn) {
+          saveOpportunityBtn.style.display = "block";
+          saveOpportunityBtn.onclick = () => {
+            if (!currentScrapedData) return;
+            saveOpportunityBtn.disabled = true;
+            saveOpportunityBtn.innerText = "⏳ Salvando Anúncio p/ Criar...";
+
+            const currentErpUrl = normalizeErpUrl(erpUrlInput?.value);
+            const savePayload = {
+              external_id: currentScrapedData.external_id,
+              platform: currentDetectedPlatform || "mercadolivre",
+              title: currentScrapedData.title,
+              current_price: currentScrapedData.current_price,
+              original_price: currentScrapedData.original_price,
+              discount_pct:
+                currentScrapedData.original_price &&
+                currentScrapedData.original_price > currentScrapedData.current_price
+                  ? Math.round(
+                      ((currentScrapedData.original_price - currentScrapedData.current_price) /
+                        currentScrapedData.original_price) *
+                        100
+                    )
+                  : null,
+              sales_count_approx: currentScrapedData.sales_count_approx || 0,
+              listing_created_at: currentScrapedData.listing_created_at || null,
+              seller_name: currentScrapedData.seller_name || null,
+              seller_id: currentScrapedData.seller_id || null,
+              seller_location: currentScrapedData.seller_location || null,
+              seller_reputation: currentScrapedData.seller_reputation || null,
+              seller_store_url: currentScrapedData.seller_store_url || null,
+              shipping_type: currentScrapedData.shipping_type || "padrao",
+              is_full: currentScrapedData.shipping_type === "ml_full",
+              is_free_shipping: currentScrapedData.shipping_cost === 0,
+              promo_badge: currentScrapedData.promo_badge || null,
+              permalink: currentScrapedData.permalink || activeTab?.url || "",
+              thumbnail_url: currentScrapedData.thumbnail_url || null,
+              pictures: Array.isArray(currentScrapedData.pictures)
+                ? currentScrapedData.pictures
+                    .map((p) => p?.primaryUrl || p?.originalUrl || p)
+                    .filter(Boolean)
+                : [],
+              category_id: currentScrapedData.category_id || null,
+              listing_type: currentScrapedData.listing_type || "gold_special",
+              estimated_sale_fee: currentScrapedData.sale_fee_amount || 0,
+              estimated_shipping_cost: currentScrapedData.shipping_cost || 0,
+              estimated_net: currentScrapedData.net_receivable || 0,
+              rating: currentScrapedData.rating || 4.8,
+            };
+
+            chrome.runtime.sendMessage(
+              {
+                action: "SAVE_OPPORTUNITY_LISTING",
+                erpUrl: currentErpUrl,
+                payload: savePayload,
+              },
+              (saveRes) => {
+                saveOpportunityBtn.disabled = false;
+                if (chrome.runtime.lastError || !saveRes || !saveRes.success) {
+                  const errMsg =
+                    saveRes?.error ||
+                    chrome.runtime.lastError?.message ||
+                    "Falha ao salvar anúncio no ERP.";
+                  showFeedback(errMsg, "error");
+                  saveOpportunityBtn.innerText = "🔖 Salvar Anúncio p/ Analisar & Criar Depois";
+                  return;
+                }
+
+                saveOpportunityBtn.style.background = "linear-gradient(135deg, #059669, #10B981)";
+                saveOpportunityBtn.innerText = "✅ Salvo em Anúncios p/ Criar!";
+                showFeedback(
+                  "✅ Anúncio salvo na aba 'Anúncios p/ Analisar & Criar' do ERP!",
+                  "success"
+                );
+              }
+            );
+          };
+        }
         if (photosActionContainer) photosActionContainer.style.display = "block";
         if (downloadPhotosBtn) {
           downloadPhotosBtn.style.display = "block";
@@ -1027,6 +1157,17 @@ document.addEventListener("DOMContentLoaded", async () => {
       chrome.runtime.sendMessage({ action: "GET_STATUS" }, (status) => {
         const erpUrl = normalizeErpUrl(status?.erpUrl || erpUrlInput?.value);
         chrome.tabs.create({ url: `${erpUrl}/inteligencia?tab=lojas` });
+      });
+    });
+  }
+
+  // Abrir Anúncios p/ Analisar & Criar no ERP
+  const openSavedOpportunitiesErpBtn = document.getElementById("openSavedOpportunitiesErpBtn");
+  if (openSavedOpportunitiesErpBtn) {
+    openSavedOpportunitiesErpBtn.addEventListener("click", () => {
+      chrome.runtime.sendMessage({ action: "GET_STATUS" }, (status) => {
+        const erpUrl = normalizeErpUrl(status?.erpUrl || erpUrlInput?.value);
+        chrome.tabs.create({ url: `${erpUrl}/inteligencia?tab=salvos` });
       });
     });
   }
