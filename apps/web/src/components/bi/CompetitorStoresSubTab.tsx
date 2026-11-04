@@ -17,6 +17,8 @@ import {
   CheckCircle2,
   Filter,
   ArrowUpDown,
+  ArrowUp,
+  ArrowDown,
   PlusCircle,
   Eye,
   Edit3,
@@ -64,6 +66,31 @@ function getSafeListingUrl(item: CompetitorStoreListing): string {
   return url || ("https://produto.mercadolivre.com.br/" + item.external_id);
 }
 
+function computeEstimatedNet(item: CompetitorStoreListing): number {
+  if (typeof item.estimated_net === "number" && item.estimated_net > 0) {
+    return item.estimated_net;
+  }
+  const fee = item.estimated_sale_fee || Number((item.current_price * 0.165).toFixed(2));
+  const hasFreeShip = item.is_free_shipping || item.current_price >= 79;
+  let shipping = typeof item.estimated_shipping === "number" ? item.estimated_shipping : null;
+  if ((shipping === null || shipping === 0) && hasFreeShip) {
+    if (item.current_price < 19) shipping = 5.65;
+    else if (item.current_price < 49) shipping = 6.85;
+    else if (item.current_price < 79) shipping = 10.25;
+    else if (item.current_price < 100) shipping = 13.65;
+    else if (item.current_price < 120) shipping = 16.85;
+    else if (item.current_price < 150) shipping = 18.65;
+    else if (item.current_price < 200) shipping = 20.45;
+    else shipping = 22.45;
+  } else if (shipping === null) {
+    shipping = 0;
+  }
+  return Math.max(0, Number((item.current_price - fee - shipping).toFixed(2)));
+}
+
+type SortColumnKey = "title" | "store" | "date" | "sales" | "price" | "net" | "discount";
+type SortDirection = "asc" | "desc";
+
 export function CompetitorStoresSubTab() {
   // Navegação Interna: Lojas vs Anúncios
   const [activeView, setActiveView] = useState<"stores" | "listings">("stores");
@@ -89,6 +116,10 @@ export function CompetitorStoresSubTab() {
   const [onlyFreeShipping, setOnlyFreeShipping] = useState<boolean>(false);
   const [listingSort, setListingSort] = useState<string>("most_sold");
 
+  // Ordenação interativa por colunas
+  const [sortColumn, setSortColumn] = useState<SortColumnKey>("sales");
+  const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
+
   // Modais
   const [storeToEdit, setStoreToEdit] = useState<CompetitorStore | null>(null);
   const [isAddStoreOpen, setIsAddStoreOpen] = useState<boolean>(false);
@@ -98,6 +129,90 @@ export function CompetitorStoresSubTab() {
   const showToast = (msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3500);
+  };
+
+  const handleColumnSort = (column: SortColumnKey) => {
+    let newDir: SortDirection = "desc";
+    if (sortColumn === column) {
+      newDir = sortDirection === "asc" ? "desc" : "asc";
+    } else {
+      newDir = column === "title" || column === "store" ? "asc" : "desc";
+    }
+    setSortColumn(column);
+    setSortDirection(newDir);
+
+    // Sincroniza com o valor legível do select
+    if (column === "sales" && newDir === "desc") setListingSort("most_sold");
+    else if (column === "sales" && newDir === "asc") setListingSort("least_sold");
+    else if (column === "date" && newDir === "desc") setListingSort("newest");
+    else if (column === "date" && newDir === "asc") setListingSort("oldest");
+    else if (column === "price" && newDir === "asc") setListingSort("price_asc");
+    else if (column === "price" && newDir === "desc") setListingSort("price_desc");
+    else if (column === "net" && newDir === "desc") setListingSort("net_desc");
+    else if (column === "net" && newDir === "asc") setListingSort("net_asc");
+    else if (column === "title" && newDir === "asc") setListingSort("title_asc");
+    else if (column === "title" && newDir === "desc") setListingSort("title_desc");
+    else if (column === "store" && newDir === "asc") setListingSort("store_asc");
+    else if (column === "store" && newDir === "desc") setListingSort("store_desc");
+    else setListingSort("custom");
+  };
+
+  const handleSortSelectChange = (val: string) => {
+    setListingSort(val);
+    switch (val) {
+      case "most_sold":
+        setSortColumn("sales");
+        setSortDirection("desc");
+        break;
+      case "least_sold":
+        setSortColumn("sales");
+        setSortDirection("asc");
+        break;
+      case "newest":
+        setSortColumn("date");
+        setSortDirection("desc");
+        break;
+      case "oldest":
+        setSortColumn("date");
+        setSortDirection("asc");
+        break;
+      case "price_asc":
+        setSortColumn("price");
+        setSortDirection("asc");
+        break;
+      case "price_desc":
+        setSortColumn("price");
+        setSortDirection("desc");
+        break;
+      case "net_desc":
+        setSortColumn("net");
+        setSortDirection("desc");
+        break;
+      case "net_asc":
+        setSortColumn("net");
+        setSortDirection("asc");
+        break;
+      case "title_asc":
+        setSortColumn("title");
+        setSortDirection("asc");
+        break;
+      case "title_desc":
+        setSortColumn("title");
+        setSortDirection("desc");
+        break;
+      case "store_asc":
+        setSortColumn("store");
+        setSortDirection("asc");
+        break;
+      case "store_desc":
+        setSortColumn("store");
+        setSortDirection("desc");
+        break;
+      case "discount":
+        setSortColumn("discount");
+        setSortDirection("desc");
+        break;
+    }
   };
 
   // Carrega Lojas
@@ -131,7 +246,6 @@ export function CompetitorStoresSubTab() {
       if (onlyFull) params.set("onlyFull", "true");
       if (onlyFreeShipping) params.set("onlyFreeShipping", "true");
       if (onlyBestSellers) params.set("minSales", "1000");
-      params.set("sort", listingSort);
 
       const res = await fetch(
         `/api/competitors/stores/${selectedStoreId}/listings?${params.toString()}`,
@@ -146,7 +260,7 @@ export function CompetitorStoresSubTab() {
     } finally {
       setLoadingListings(false);
     }
-  }, [selectedStoreId, listingSearch, onlyNew, onlyFull, onlyFreeShipping, onlyBestSellers, listingSort]);
+  }, [selectedStoreId, listingSearch, onlyNew, onlyFull, onlyFreeShipping, onlyBestSellers]);
 
   useEffect(() => {
     fetchStores();
@@ -225,6 +339,99 @@ export function CompetitorStoresSubTab() {
   const followingCount = stores.filter((s) => s.is_following).length;
   const totalListingsCount = stores.reduce((acc, s) => acc + (s.total_listings || 0), 0);
   const totalSalesEstimate = stores.reduce((acc, s) => acc + (s.total_sales_approx || 0), 0);
+
+  // Lista de anúncios processada: deduplicada e ordenada instantaneamente por coluna
+  const processedListings = useMemo(() => {
+    const seen = new Set<string>();
+    const unique = listings.filter((item) => {
+      const key = (item.store_id || "") + "_" + (item.external_id || item.id);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+
+    return [...unique].sort((a, b) => {
+      let comp = 0;
+      switch (sortColumn) {
+        case "title":
+          comp = (a.title || "").localeCompare(b.title || "", "pt-BR", { sensitivity: "base" });
+          break;
+        case "store": {
+          const storeA = (a.store_name || "").toLowerCase();
+          const storeB = (b.store_name || "").toLowerCase();
+          comp = storeA.localeCompare(storeB, "pt-BR", { sensitivity: "base" });
+          break;
+        }
+        case "date": {
+          const timeA = a.listing_created_at ? new Date(a.listing_created_at).getTime() : 0;
+          const timeB = b.listing_created_at ? new Date(b.listing_created_at).getTime() : 0;
+          comp = timeA - timeB;
+          break;
+        }
+        case "sales":
+          comp = (a.sales_count_approx || 0) - (b.sales_count_approx || 0);
+          break;
+        case "price":
+          comp = (a.current_price || 0) - (b.current_price || 0);
+          break;
+        case "net": {
+          const netA = computeEstimatedNet(a);
+          const netB = computeEstimatedNet(b);
+          comp = netA - netB;
+          break;
+        }
+        case "discount": {
+          const discA = a.discount_pct || (a.original_price && a.original_price > a.current_price ? Math.round(((a.original_price - a.current_price) / a.original_price) * 100) : 0);
+          const discB = b.discount_pct || (b.original_price && b.original_price > b.current_price ? Math.round(((b.original_price - b.current_price) / b.original_price) * 100) : 0);
+          comp = discA - discB;
+          break;
+        }
+        default:
+          comp = 0;
+      }
+      return sortDirection === "asc" ? comp : -comp;
+    });
+  }, [listings, sortColumn, sortDirection]);
+
+  // Renderizador ergonômico de botão de ordenação no cabeçalho das colunas
+  const renderSortHeader = (
+    columnKey: SortColumnKey,
+    label: string,
+    align: "left" | "center" | "right" = "left",
+    extraClasses = ""
+  ) => {
+    const isActive = sortColumn === columnKey;
+    const directionLabel = isActive && sortDirection === "asc" ? "crescente (A-Z ou menor primeiro)" : "decrescente (maior ou mais recente primeiro)";
+    return (
+      <button
+        type="button"
+        onClick={() => handleColumnSort(columnKey)}
+        title={`Ordenar por ${label} (Atual: ${directionLabel} • Clique para alternar)`}
+        className={`group inline-flex items-center gap-1.5 py-1 px-2 rounded-lg transition-all text-xs font-bold cursor-pointer select-none ${
+          align === "center"
+            ? "justify-center mx-auto"
+            : align === "right"
+            ? "justify-end ml-auto"
+            : "justify-start"
+        } ${
+          isActive
+            ? "bg-indigo-100 text-indigo-900 shadow-2xs"
+            : "text-slate-700 hover:text-indigo-600 hover:bg-slate-200/60"
+        } ${extraClasses}`}
+      >
+        <span>{label}</span>
+        {isActive ? (
+          sortDirection === "asc" ? (
+            <ArrowUp className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+          ) : (
+            <ArrowDown className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
+          )
+        ) : (
+          <ArrowUpDown className="w-3 h-3 text-slate-300 opacity-60 group-hover:opacity-100 group-hover:text-indigo-600 shrink-0 transition-all" />
+        )}
+      </button>
+    );
+  };
 
   return (
     <div className="space-y-6">
@@ -584,14 +791,23 @@ export function CompetitorStoresSubTab() {
                 <span className="text-slate-500 font-medium">Ordenar por:</span>
                 <select
                   value={listingSort}
-                  onChange={(e) => setListingSort(e.target.value)}
-                  className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 focus:outline-none"
+                  onChange={(e) => handleSortSelectChange(e.target.value)}
+                  className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 text-xs font-semibold text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500/20"
                 >
-                  <option value="most_sold">🔥 Mais Vendidos (Best Sellers)</option>
+                  <option value="most_sold">🔥 Mais Vendidos (+1k primeiro)</option>
+                  <option value="least_sold">📉 Menos Vendidos (Menor volume)</option>
                   <option value="newest">✨ Mais Recentes (Novos Anúncios)</option>
-                  <option value="price_asc">Menor Preço</option>
-                  <option value="price_desc">Maior Preço</option>
-                  <option value="discount">Maior Desconto %</option>
+                  <option value="oldest">📅 Mais Antigos (Maior idade)</option>
+                  <option value="price_asc">💰 Menor Preço (R$ Crescente)</option>
+                  <option value="price_desc">💰 Maior Preço (R$ Decrescente)</option>
+                  <option value="net_desc">💵 Maior Líquido Estimado</option>
+                  <option value="net_asc">💵 Menor Líquido Estimado</option>
+                  <option value="title_asc">🔤 Título (A-Z)</option>
+                  <option value="title_desc">🔤 Título (Z-A)</option>
+                  <option value="store_asc">🏬 Loja (A-Z)</option>
+                  <option value="store_desc">🏬 Loja (Z-A)</option>
+                  <option value="discount">🏷️ Maior Desconto %</option>
+                  {listingSort === "custom" && <option value="custom">⚡ Ordenação por Coluna Ativa</option>}
                 </select>
               </div>
             </div>
@@ -668,7 +884,7 @@ export function CompetitorStoresSubTab() {
           <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
             {loadingListings ? (
               <div className="p-12 text-center text-slate-400 text-xs">Carregando anúncios do concorrente...</div>
-            ) : listings.length === 0 ? (
+            ) : processedListings.length === 0 ? (
               <div className="p-12 text-center space-y-2">
                 <ShoppingBag className="w-8 h-8 text-slate-300 mx-auto" />
                 <div className="text-xs font-bold text-slate-700">Nenhum anúncio localizado com os filtros ativos.</div>
@@ -678,29 +894,31 @@ export function CompetitorStoresSubTab() {
               <div className="overflow-x-auto">
                 <table className="w-full text-left text-xs border-collapse">
                   <thead>
-                    <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-600 font-semibold select-none">
-                      <th className="py-3 px-3 w-12 text-center">Foto</th>
-                      <th className="py-3 px-3 min-w-[280px]">Título & Anúncio</th>
-                      <th className="py-3 px-3 w-40">Loja & Nicho</th>
-                      <th className="py-3 px-3 w-36 text-center">Criação / Idade</th>
-                      <th className="py-3 px-3 w-32 text-center">Vendas Est.</th>
-                      <th className="py-3 px-3 w-32 text-right">Preço Atual</th>
-                      <th className="py-3 px-3 w-32 text-right">Líquido Concorrente</th>
-                      <th className="py-3 px-3 w-44 text-center">Ação Estratégica</th>
+                    <tr className="bg-slate-50/90 border-b border-slate-200 text-slate-600 font-semibold select-none text-xs">
+                      <th className="py-2.5 px-3 w-12 text-center text-slate-400 font-semibold">Foto</th>
+                      <th className="py-2 px-2 min-w-[280px]">
+                        {renderSortHeader("title", "Título & Anúncio", "left")}
+                      </th>
+                      <th className="py-2 px-2 w-44">
+                        {renderSortHeader("store", "Loja & Nicho", "left")}
+                      </th>
+                      <th className="py-2 px-2 w-36 text-center">
+                        {renderSortHeader("date", "Criação / Idade", "center")}
+                      </th>
+                      <th className="py-2 px-2 w-32 text-center">
+                        {renderSortHeader("sales", "Vendas Est.", "center")}
+                      </th>
+                      <th className="py-2 px-2 w-32 text-right">
+                        {renderSortHeader("price", "Preço Atual", "right")}
+                      </th>
+                      <th className="py-2 px-2 w-36 text-right">
+                        {renderSortHeader("net", "Líquido Concorrente", "right")}
+                      </th>
+                      <th className="py-2.5 px-3 w-44 text-center text-slate-500 font-semibold">Ação Estratégica</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {// Deduplica anúncios na visualização
-                    (() => {
-                      const seen = new Set<string>();
-                      const uniqueListings = listings.filter((item) => {
-                        const key = (item.store_id || "") + "_" + (item.external_id || item.id);
-                        if (seen.has(key)) return false;
-                        seen.add(key);
-                        return true;
-                      });
-                      return uniqueListings;
-                    })().map((item) => {
+                    {processedListings.map((item) => {
                       const safeUrl = getSafeListingUrl(item);
                       // Formata data e calcula novidade
                       let createdDateText = "—";
