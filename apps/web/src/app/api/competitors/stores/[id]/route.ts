@@ -15,7 +15,20 @@ export async function GET(
 ) {
   try {
     const { id } = await params;
-    const store = getMemoryStoreById(id);
+    let store: any = getMemoryStoreById(id);
+    if (!store) {
+      try {
+        const supabase = createSupabaseAdminClient();
+        const { data } = await supabase
+          .from("competitor_stores")
+          .select("*")
+          .eq("id", id)
+          .single();
+        if (data) store = data;
+      } catch {
+        // ignore
+      }
+    }
     if (!store) {
       return NextResponse.json({ error: "Loja concorrente não encontrada." }, { status: 404 });
     }
@@ -37,16 +50,12 @@ export async function PATCH(
     const authUser = await resolveRequestUser(req);
     const supabase = createSupabaseAdminClient();
 
-    const updated = updateMemoryStore(id, {
+    let updated: any = updateMemoryStore(id, {
       ...(segment !== undefined ? { segment } : {}),
       ...(is_following !== undefined ? { is_following } : {}),
       ...(store_name !== undefined ? { store_name } : {}),
       ...(notes !== undefined ? { notes } : {}),
     });
-
-    if (!updated) {
-      return NextResponse.json({ error: "Loja concorrente não encontrada." }, { status: 404 });
-    }
 
     // Update in Supabase if exists
     try {
@@ -56,9 +65,21 @@ export async function PATCH(
       if (store_name !== undefined) updateData.store_name = store_name;
       if (notes !== undefined) updateData.notes = notes;
 
-      await supabase.from("competitor_stores").update(updateData).eq("id", id);
+      const { data: dbUpdated } = await supabase
+        .from("competitor_stores")
+        .update(updateData)
+        .eq("id", id)
+        .select()
+        .single();
+      if (dbUpdated) {
+        updated = dbUpdated;
+      }
     } catch (dbErr) {
       console.warn("[API Stores PATCH] DB note:", dbErr);
+    }
+
+    if (!updated) {
+      return NextResponse.json({ error: "Loja concorrente não encontrada." }, { status: 404 });
     }
 
     return NextResponse.json({

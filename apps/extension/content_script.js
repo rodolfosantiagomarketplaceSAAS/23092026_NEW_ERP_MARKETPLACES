@@ -1649,35 +1649,143 @@
     );
   }
 
-  function extractStoreName() {
-    const storeTitleEl = document.querySelector(
-      ".ui-seller-data-header__title, .official-store-header h1, h1.store-header__title, .store-info__title, .header-store__title, h1.brand-title, .ui-pdp-seller__link-trigger, .ui-seller-data-header__brand-title"
+  function cleanExtractedStoreName(raw) {
+    if (!raw) return "";
+    return String(raw)
+      .replace(/^(Loja\s+oficial|Vendido\s+por|Loja|Oficial|Por)\s*:?\s*/i, "")
+      .replace(/\s*\|\s*P[áa]gina\s+do\s+vendedor.*$/i, "")
+      .replace(/\s+em\s+Mercado\s+Li[vb]re.*$/i, "")
+      .replace(/\s*\|\s*Mercado\s+Li[vb]re.*$/i, "")
+      .replace(/\s*-\s*Mercado\s+Li[vb]re.*$/i, "")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function extractSellerNickname() {
+    const m = window.location.pathname.match(/\/(?:pagina|loja|perfil)\/([^/?#]+)/i);
+    if (m && m[1]) {
+      return decodeURIComponent(m[1]).replace(/_Desde_\d+.*$/i, "").trim().toLowerCase();
+    }
+    return null;
+  }
+
+  function isGenericStoreTitle(val) {
+    const t = cleanExtractedStoreName(val);
+    if (!t || t.length < 2) return true;
+    return /^(mercado\s+li[vb]re|loja\s+concorrente|vendedor\s+mercado\s+livre|p[áa]gina\s+do\s+vendedor|mais\s+informa[çc][õo]es|frete\s+gr[áa]tis|parcelamento\s+sem\s+juros|produtos)$/i.test(
+      t
     );
-    if (storeTitleEl && storeTitleEl.innerText.trim()) {
-      return storeTitleEl.innerText.replace(/^(Loja|Vendido por|Oficial)\s*:?/i, "").trim();
+  }
+
+  function extractStoreNameFromDoc(doc = document) {
+    // 1. Seletores de cabeçalho de loja (incluindo h1.clipped da nova vitrine ML)
+    const storeTitleEl = doc.querySelector(
+      "h1.clipped, .ui-seller-data-header__title, .official-store-header h1, h1.store-header__title, .store-info__title, .header-store__title, h1.brand-title, .ui-pdp-seller__link-trigger, .ui-seller-data-header__brand-title, [class*='seller-header'] h1, [class*='store-header'] h1"
+    );
+    if (storeTitleEl) {
+      const candidate = cleanExtractedStoreName(storeTitleEl.innerText || storeTitleEl.textContent || "");
+      if (!isGenericStoreTitle(candidate)) return candidate;
     }
 
-    // Se tiver /pagina/<loja>
-    const matchPagina = window.location.pathname.match(/\/pagina\/([^/?#]+)/i);
-    if (matchPagina) {
-      return decodeURIComponent(matchPagina[1]).replace(/[-_]/g, " ").toUpperCase();
+    // 2. Meta tags og:title / twitter:title / description da página do vendedor
+    const ogTitle =
+      doc.querySelector('meta[property="og:title"]')?.getAttribute("content") ||
+      doc.querySelector('meta[name="twitter:title"]')?.getAttribute("content") ||
+      doc.querySelector('meta[name="title"]')?.getAttribute("content");
+    if (ogTitle && /em\s+Mercado\s+Li[vb]re|P[áa]gina\s+do\s+vendedor/i.test(ogTitle)) {
+      const candidate = cleanExtractedStoreName(ogTitle);
+      if (!isGenericStoreTitle(candidate)) return candidate;
     }
 
-    // Se tiver /loja/<loja>
-    const matchLoja = window.location.pathname.match(/\/loja\/([^/?#]+)/i);
-    if (matchLoja) {
-      return decodeURIComponent(matchLoja[1]).replace(/[-_]/g, " ").toUpperCase();
+    const metaDesc =
+      doc.querySelector('meta[name="description"]')?.getAttribute("content") ||
+      doc.querySelector('meta[property="og:description"]')?.getAttribute("content");
+    if (metaDesc) {
+      const descMatch = metaDesc.match(
+        /encontre\s+todos\s+os\s+produtos\s+de\s+([^"'.]+?)\s+em\s+um\s+s[óo]\s+lugar/i
+      );
+      if (descMatch && descMatch[1]) {
+        const candidate = cleanExtractedStoreName(descMatch[1]);
+        if (!isGenericStoreTitle(candidate)) return candidate;
+      }
     }
 
-    // Se tiver /perfil/<loja>
-    const matchPerfil = window.location.pathname.match(/\/perfil\/([^/?#]+)/i);
-    if (matchPerfil) {
-      return decodeURIComponent(matchPerfil[1]).replace(/[-_]/g, " ").toUpperCase();
+    // 3. Document Title (ex: "CARI-SOM | Página do vendedor" ou "HELIX SHIELD | Página do vendedor")
+    const docTitle = doc.title || "";
+    if (docTitle) {
+      const titleCandidate = cleanExtractedStoreName(docTitle.split("|")[0].split(" - ")[0]);
+      if (!isGenericStoreTitle(titleCandidate)) {
+        return titleCandidate;
+      }
     }
 
-    // Document Title
-    const titlePart = document.title.split("|")[0].split("-")[0].trim();
-    return titlePart || "Loja Concorrente Mercado Livre";
+    // 4. Vendedor exibido nos próprios cards da vitrine/lista (.poly-component__seller)
+    const sellerEls = Array.from(
+      doc.querySelectorAll(".poly-component__seller, .ui-search-item__seller-info")
+    );
+    for (const el of sellerEls) {
+      const candidate = cleanExtractedStoreName(el.innerText || el.textContent || "");
+      if (!isGenericStoreTitle(candidate)) {
+        return candidate;
+      }
+    }
+
+    return null;
+  }
+
+  let __CACHED_STORE_NAME__ = null;
+
+  function extractStoreName() {
+    if (__CACHED_STORE_NAME__ && !isGenericStoreTitle(__CACHED_STORE_NAME__)) {
+      return __CACHED_STORE_NAME__;
+    }
+
+    const fromDom = extractStoreNameFromDoc(document);
+    if (fromDom) {
+      __CACHED_STORE_NAME__ = fromDom;
+      return fromDom;
+    }
+
+    // Fallback final: slug da URL (/pagina/<loja>, /loja/<loja>, /perfil/<loja>)
+    const slug = extractSellerNickname();
+    if (slug) {
+      return slug.replace(/[-_]/g, " ").toUpperCase();
+    }
+
+    return "Loja Concorrente Mercado Livre";
+  }
+
+  async function resolveStoreNameAsync() {
+    const current = extractStoreName();
+    const slug = extractSellerNickname();
+    if (!slug) return current;
+
+    const normCurrent = current.toLowerCase().replace(/[\s\-_]/g, "");
+    const normSlug = slug.toLowerCase().replace(/[\s\-_]/g, "");
+    if (normCurrent !== normSlug && !isGenericStoreTitle(current)) {
+      return current;
+    }
+
+    // Se estiver em lista.mercadolivre.com.br/pagina/<slug> e o nome ainda for apenas o slug,
+    // consulta a vitrine www.mercadolivre.com.br/pagina/<slug> para obter o nome comercial real
+    try {
+      const res = await fetch(`https://www.mercadolivre.com.br/pagina/${encodeURIComponent(slug)}`, {
+        credentials: "omit",
+      });
+      if (res.ok) {
+        const html = await res.text();
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(html, "text/html");
+        const realName = extractStoreNameFromDoc(doc);
+        if (realName && !isGenericStoreTitle(realName)) {
+          __CACHED_STORE_NAME__ = realName;
+          return realName;
+        }
+      }
+    } catch {
+      // mantém fallback e deixa o backend resolver
+    }
+    return current;
   }
 
   function extractSellerId() {
@@ -2599,8 +2707,9 @@
     }
 
     const totalExpected = extractTotalResultsCount() || items.length;
-    const storeName = extractStoreName();
+    const storeName = await resolveStoreNameAsync();
     const sellerId = extractSellerId();
+    const sellerNickname = extractSellerNickname();
     const storeUrl = extractStoreUrl();
     const erpUrl = await resolveErpUrl(overrideUrl);
 
@@ -2608,6 +2717,7 @@
       platform: "mercadolivre",
       store_name: storeName,
       seller_id: sellerId,
+      seller_nickname: sellerNickname,
       store_url: storeUrl,
       segment: segment || "Acessórios Automotivos",
       is_following: isFollowing,
@@ -2637,7 +2747,7 @@
     } catch {}
 
     const items = extractAllSearchItems();
-    const storeName = extractStoreName();
+    const storeName = await resolveStoreNameAsync();
     const totalCount = extractTotalResultsCount() || items.length;
 
     const countText = totalCount > items.length
@@ -2765,15 +2875,18 @@
     if (request.action === "GET_PAGE_DATA") {
       if (isStorePage()) {
         const searchItems = extractAllSearchItems();
-        sendResponse({
-          success: true,
-          isStore: true,
-          isSearch: false,
-          storeName: extractStoreName(),
-          storeUrl: extractStoreUrl(),
-          sellerId: extractSellerId(),
-          itemsCount: searchItems.length,
-          platform: "mercadolivre",
+        resolveStoreNameAsync().then((resolvedStoreName) => {
+          sendResponse({
+            success: true,
+            isStore: true,
+            isSearch: false,
+            storeName: resolvedStoreName,
+            sellerNickname: extractSellerNickname(),
+            storeUrl: extractStoreUrl(),
+            sellerId: extractSellerId(),
+            itemsCount: searchItems.length,
+            platform: "mercadolivre",
+          });
         });
         return true;
       }
@@ -2802,17 +2915,20 @@
     }
 
     if (request.action === "SYNC_STORE_FROM_POPUP") {
-      const storeName = extractStoreName();
       const storeUrl = extractStoreUrl();
       const sellerId = extractSellerId();
+      const sellerNickname = extractSellerNickname();
       const items = extractAllSearchItems();
-      sendResponse({
-        success: true,
-        storeName,
-        storeUrl,
-        sellerId,
-        items,
-        platform: "mercadolivre",
+      resolveStoreNameAsync().then((storeName) => {
+        sendResponse({
+          success: true,
+          storeName,
+          sellerNickname,
+          storeUrl,
+          sellerId,
+          items,
+          platform: "mercadolivre",
+        });
       });
       return true;
     }

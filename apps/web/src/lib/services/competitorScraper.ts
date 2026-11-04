@@ -187,10 +187,163 @@ export function parsePrice(val: unknown): number {
 export function cleanSellerName(raw?: string | null): string {
   if (!raw) return "Concorrente";
   const cleaned = String(raw)
-    .replace(/^(Vendido\s+por|Loja:?)\s+/i, "")
+    .replace(/^(Vendido\s+por|Loja\s+oficial|Loja:?|Por)\s+/i, "")
+    .replace(/\s*\|\s*P[áa]gina\s+do\s+vendedor.*$/i, "")
+    .replace(/\s+em\s+Mercado\s+Li[vb]re.*$/i, "")
+    .replace(/\s*\|\s*Mercado\s+Li[vb]re.*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
   return cleaned || "Concorrente";
+}
+
+/**
+ * Extrai o slug da URL da loja do Mercado Livre (/pagina/<slug>, /loja/<slug>, /perfil/<slug>)
+ */
+export function extractStoreSlugFromUrl(storeUrl?: string | null): string | null {
+  if (!storeUrl) return null;
+  const match = String(storeUrl).match(/\/(?:pagina|loja|perfil)\/([^/?#]+)/i);
+  if (!match?.[1]) return null;
+  return decodeURIComponent(match[1]).replace(/_Desde_\d+.*$/i, "").trim() || null;
+}
+
+/**
+ * Verifica se o nome da loja é apenas o slug da URL (ex: "CARVIDROSOM" para "/pagina/carvidrosom")
+ * ou um nome genérico de fallback.
+ */
+export function isSlugOrGenericStoreName(
+  storeName?: string | null,
+  storeUrl?: string | null
+): boolean {
+  const name = (storeName || "").trim();
+  if (!name) return true;
+  if (
+    /^(loja\s+concorrente|vendedor\s+mercado\s+livre|mercado\s+li[vb]re|concorrente|loja\s+oficial)$/i.test(
+      name
+    )
+  ) {
+    return true;
+  }
+  const slug = extractStoreSlugFromUrl(storeUrl);
+  if (slug) {
+    const normName = name.toLowerCase().replace(/[\s\-_]/g, "");
+    const normSlug = slug.toLowerCase().replace(/[\s\-_]/g, "");
+    if (normName === normSlug) return true;
+  }
+  return false;
+}
+
+/**
+ * Resolve o nome comercial real da loja no Mercado Livre consultando a página pública
+ * https://www.mercadolivre.com.br/pagina/<slug> (ou /loja/<slug>, /perfil/<slug>)
+ * quando o nome capturado for apenas o slug da URL (ex: CARVIDROSOM -> CARI-SOM, NUSTRINKSSTOREPREMIUM -> HELIX SHIELD).
+ */
+export async function resolveMercadoLivreStoreName(
+  storeUrl?: string | null,
+  currentStoreName?: string | null,
+  items?: Array<{ seller_name?: string | null }>
+): Promise<{ storeName: string; sellerNickname: string | null }> {
+  const slug = extractStoreSlugFromUrl(storeUrl);
+  const cleanedCurrent = cleanSellerName(currentStoreName);
+
+  // Se já temos um nome real que não é o slug nem genérico, preserva
+  if (!isSlugOrGenericStoreName(cleanedCurrent, storeUrl)) {
+    return {
+      storeName: cleanedCurrent,
+      sellerNickname: slug ? slug.toLowerCase() : null,
+    };
+  }
+
+  // 1. Tenta consultar a vitrine pública www.mercadolivre.com.br/pagina/<slug>
+  if (slug) {
+    const candidateUrls = [
+      `https://www.mercadolivre.com.br/pagina/${encodeURIComponent(slug)}`,
+      `https://www.mercadolivre.com.br/loja/${encodeURIComponent(slug)}`,
+      `https://www.mercadolivre.com.br/perfil/${encodeURIComponent(slug)}`,
+    ];
+
+    for (const url of candidateUrls) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 3500);
+        const res = await fetch(url, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8",
+          },
+          signal: controller.signal,
+          cache: "no-store",
+        });
+        clearTimeout(timer);
+
+        if (!res.ok) continue;
+        const html = await res.text();
+        if (!html || html.includes("suspicious-traffic-frontend")) continue;
+
+        // A) <h1 class="clipped">NOME DA LOJA</h1> ou h1 da vitrine
+        const h1Match =
+          html.match(/<h1[^>]*class=["'][^"']*clipped[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i) ||
+          html.match(/<h1[^>]*class=["'][^"']*(?:store|brand|seller)[^"']*["'][^>]*>([\s\S]*?)<\/h1>/i);
+        if (h1Match?.[1]) {
+          const candidate = cleanSellerName(h1Match[1].replace(/<[^>]+>/g, ""));
+          if (candidate && !isSlugOrGenericStoreName(candidate, null)) {
+            return { storeName: candidate, sellerNickname: slug.toLowerCase() };
+          }
+        }
+
+        // B) <title>NOME DA LOJA | Página do vendedor</title>
+        const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+        if (titleMatch?.[1] && /P[áa]gina\s+do\s+vendedor|Loja\s+Oficial/i.test(titleMatch[1])) {
+          const candidate = cleanSellerName(titleMatch[1]);
+          if (candidate && !isSlugOrGenericStoreName(candidate, null)) {
+            return { storeName: candidate, sellerNickname: slug.toLowerCase() };
+          }
+        }
+
+        // C) <meta property="og:title" content="NOME DA LOJA em Mercado Livre" />
+        const ogTitleMatch =
+          html.match(/property=["']og:title["'][^>]*content=["']([^"']+)["']/i) ||
+          html.match(/content=["']([^"']+)["'][^>]*property=["']og:title["']/i);
+        if (ogTitleMatch?.[1] && /em\s+Mercado\s+Li[vb]re/i.test(ogTitleMatch[1])) {
+          const candidate = cleanSellerName(ogTitleMatch[1]);
+          if (candidate && !isSlugOrGenericStoreName(candidate, null)) {
+            return { storeName: candidate, sellerNickname: slug.toLowerCase() };
+          }
+        }
+
+        // D) <meta name="description" content="Visite a página e encontre todos os produtos de NOME DA LOJA em um só lugar." />
+        const descMatch = html.match(
+          /encontre\s+todos\s+os\s+produtos\s+de\s+([^"'.]+?)\s+em\s+um\s+s[óo]\s+lugar/i
+        );
+        if (descMatch?.[1]) {
+          const candidate = cleanSellerName(descMatch[1]);
+          if (candidate && !isSlugOrGenericStoreName(candidate, null)) {
+            return { storeName: candidate, sellerNickname: slug.toLowerCase() };
+          }
+        }
+      } catch {
+        // continua tentando
+      }
+    }
+  }
+
+  // 2. Fallback: verifica se os itens possuem seller_name válido
+  if (Array.isArray(items)) {
+    for (const it of items) {
+      if (it?.seller_name && !isSlugOrGenericStoreName(it.seller_name, storeUrl)) {
+        return {
+          storeName: cleanSellerName(it.seller_name),
+          sellerNickname: slug ? slug.toLowerCase() : null,
+        };
+      }
+    }
+  }
+
+  return {
+    storeName: cleanedCurrent || (slug ? slug.toUpperCase() : "Loja Concorrente"),
+    sellerNickname: slug ? slug.toLowerCase() : null,
+  };
 }
 
 /**

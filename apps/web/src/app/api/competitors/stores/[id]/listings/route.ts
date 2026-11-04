@@ -21,7 +21,8 @@ export async function GET(
     const maxPrice = searchParams.get("maxPrice") ? parseFloat(searchParams.get("maxPrice")!) : null;
     const minSales = searchParams.get("minSales") ? parseInt(searchParams.get("minSales")!, 10) : null;
 
-    let listings = [];
+    let listings: any[] = [];
+    let dbStores: any[] = [];
 
     try {
       const supabase = createSupabaseAdminClient();
@@ -31,7 +32,13 @@ export async function GET(
         query = query.eq("store_id", id);
       }
 
-      const { data, error } = await query;
+      const [{ data, error }, { data: storesData }] = await Promise.all([
+        query,
+        supabase.from("competitor_stores").select("id, store_name, segment"),
+      ]);
+      if (Array.isArray(storesData)) {
+        dbStores = storesData;
+      }
       if (!error && Array.isArray(data)) {
         // Se a consulta no banco funcionou, respeita fielmente os dados (inclusive lista vazia)
         listings = data;
@@ -42,16 +49,16 @@ export async function GET(
       listings = getMemoryStoreListings(id);
     }
 
-    // Attach store name and segment if not present
-    const allStores = getMemoryStores();
+    // Attach store name and segment from both Supabase and memory cache
+    const allStores = [...getMemoryStores(), ...dbStores];
     const storeMap = new Map(allStores.map((s) => [s.id, s]));
 
     listings = listings.map((l: any) => {
       const parentStore = storeMap.get(l.store_id);
       return {
         ...l,
-        store_name: l.store_name || parentStore?.store_name || "Loja Concorrente",
-        store_segment: l.store_segment || parentStore?.segment || "Geral",
+        store_name: parentStore?.store_name || l.store_name || "Loja Concorrente",
+        store_segment: parentStore?.segment || l.store_segment || "Geral",
       };
     });
 

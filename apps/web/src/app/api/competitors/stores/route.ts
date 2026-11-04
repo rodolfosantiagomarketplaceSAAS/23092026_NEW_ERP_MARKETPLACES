@@ -1,7 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
-import { getMemoryStores, hasDiskCache, upsertMemoryStoreScrape } from "@/lib/data/competitorStoresStore";
+import {
+  getMemoryStores,
+  updateMemoryStore,
+  upsertMemoryStoreScrape,
+} from "@/lib/data/competitorStoresStore";
 import { resolveRequestUser } from "@/lib/extension/auth";
+import {
+  isSlugOrGenericStoreName,
+  resolveMercadoLivreStoreName,
+} from "@/lib/services/competitorScraper";
 
 export const dynamic = "force-dynamic";
 
@@ -49,6 +57,38 @@ export async function GET(req: NextRequest) {
     } catch {
       stores = getMemoryStores();
     }
+
+    // Auto-heal stores whose store_name is still the raw URL slug (e.g. CARVIDROSOM -> CARI-SOM, NUSTRINKSSTOREPREMIUM -> HELIX SHIELD)
+    await Promise.all(
+      stores.map(async (s: any) => {
+        if (
+          (s.platform === "mercadolivre" || !s.platform) &&
+          s.store_url &&
+          isSlugOrGenericStoreName(s.store_name, s.store_url)
+        ) {
+          const resolved = await resolveMercadoLivreStoreName(s.store_url, s.store_name);
+          if (resolved.storeName && resolved.storeName !== s.store_name) {
+            s.store_name = resolved.storeName;
+            if (!s.seller_nickname && resolved.sellerNickname) {
+              s.seller_nickname = resolved.sellerNickname;
+            }
+            updateMemoryStore(s.id, { store_name: resolved.storeName });
+            try {
+              await supabase
+                .from("competitor_stores")
+                .update({
+                  store_name: resolved.storeName,
+                  ...(resolved.sellerNickname ? { seller_nickname: resolved.sellerNickname } : {}),
+                  updated_at: new Date().toISOString(),
+                })
+                .eq("id", s.id);
+            } catch {
+              // ignore DB update errors
+            }
+          }
+        }
+      })
+    );
 
     // Filter in-memory/results
     let filtered = stores;
@@ -116,12 +156,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const resolved =
+      (platform || "mercadolivre") === "mercadolivre"
+        ? await resolveMercadoLivreStoreName(store_url, store_name)
+        : { storeName: store_name, sellerNickname: null };
+    const finalStoreName = resolved.storeName || store_name;
+
     // Upsert in memory
     const { store } = upsertMemoryStoreScrape(
       {
         platform: platform || "mercadolivre",
-        store_name,
+        store_name: finalStoreName,
         seller_id: seller_id || null,
+        seller_nickname: resolved.sellerNickname || null,
         store_url,
         segment: segment || "Geral",
         is_following: is_following !== undefined ? is_following : true,
@@ -137,8 +184,9 @@ export async function POST(req: NextRequest) {
         {
           user_id: userId,
           platform: platform || "mercadolivre",
-          store_name,
+          store_name: finalStoreName,
           seller_id: seller_id || null,
+          seller_nickname: resolved.sellerNickname || null,
           store_url,
           segment: segment || "Geral",
           is_following: is_following !== undefined ? is_following : true,

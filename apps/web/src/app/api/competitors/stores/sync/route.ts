@@ -3,7 +3,10 @@ import { competitorStoreSyncSchema } from "@crm/types";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { upsertMemoryStoreScrape } from "@/lib/data/competitorStoresStore";
 import { resolveRequestUser } from "@/lib/extension/auth";
-import { estimateCompetitorFeesAndShipping } from "@/lib/services/competitorScraper";
+import {
+  estimateCompetitorFeesAndShipping,
+  resolveMercadoLivreStoreName,
+} from "@/lib/services/competitorScraper";
 
 const CORS_HEADERS = {
   "Access-Control-Allow-Origin": "*",
@@ -126,9 +129,9 @@ export async function POST(req: NextRequest) {
 
     const {
       platform,
-      store_name,
+      store_name: rawStoreName,
       seller_id,
-      seller_nickname,
+      seller_nickname: rawSellerNickname,
       store_url,
       segment,
       is_following,
@@ -136,6 +139,14 @@ export async function POST(req: NextRequest) {
       notes,
       items,
     } = parseResult.data;
+
+    // Resolve o nome comercial real da loja (ex: CARVIDROSOM -> CARI-SOM, NUSTRINKSSTOREPREMIUM -> HELIX SHIELD)
+    const resolvedIdentity =
+      platform === "mercadolivre"
+        ? await resolveMercadoLivreStoreName(store_url, rawStoreName, rawItems)
+        : { storeName: rawStoreName, sellerNickname: rawSellerNickname || null };
+    const store_name = resolvedIdentity.storeName || rawStoreName;
+    const seller_nickname = rawSellerNickname || resolvedIdentity.sellerNickname || null;
 
     // Enhance items with fee and net estimates if missing
     const enrichedItems = items.map((item) => {
