@@ -184,6 +184,8 @@ export async function GET(req: NextRequest) {
     const title = searchParams.get("title") || "";
     const rawWeightGrams = parseInt(searchParams.get("weight_grams") || "0", 10);
     const rawSellerId = searchParams.get("seller_id") || "";
+    const sellerStoreUrl = searchParams.get("seller_store_url") || "";
+    const sellerName = searchParams.get("seller_name") || "";
     const thumbnailUrl = searchParams.get("thumbnail_url") || "";
 
     if (!price || isNaN(price) || price <= 0) {
@@ -305,7 +307,59 @@ export async function GET(req: NextRequest) {
       } catch {}
     }
 
-    // Se ainda não temos a localização do concorrente e temos o seller_id dele, consulta /users/{competitorSellerId}
+    // Se ainda não temos o seller_id do concorrente, tenta descobri-lo pela URL da loja (/pagina/...) ou pelo nome da loja
+    if (!competitorSellerId && (sellerStoreUrl || sellerName)) {
+      const candidateStoreUrls: string[] = [];
+      if (sellerStoreUrl && sellerStoreUrl.includes("mercadolivre.com.br")) {
+        candidateStoreUrls.push(sellerStoreUrl.split("?")[0]);
+      }
+      if (sellerName) {
+        const cleanSlug = sellerName
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-z0-9]/g, "");
+        if (cleanSlug && cleanSlug.length >= 3) {
+          const guessedUrl = `https://www.mercadolivre.com.br/pagina/${cleanSlug}`;
+          if (!candidateStoreUrls.includes(guessedUrl)) {
+            candidateStoreUrls.push(guessedUrl);
+          }
+        }
+      }
+
+      for (const sUrl of candidateStoreUrls) {
+        try {
+          const ctrl = new AbortController();
+          const t = setTimeout(() => ctrl.abort(), 2200);
+          const sRes = await fetch(sUrl, {
+            headers: {
+              "User-Agent":
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+              "Accept-Language": "pt-BR,pt;q=0.9",
+            },
+            signal: ctrl.signal,
+            cache: "no-store",
+          }).catch(() => null);
+          clearTimeout(t);
+
+          if (sRes && sRes.ok) {
+            const sHtml = await sRes.text();
+            const idMatch =
+              sHtml.match(/"seller_id"\s*:\s*"?(\d{5,15})"?/i) ||
+              sHtml.match(/\\"seller_id\\"\s*:\s*\\"?(\d{5,15})\\"?/i) ||
+              sHtml.match(/"owner_id"\s*:\s*"?(\d{5,15})"?/i) ||
+              sHtml.match(/\\"owner_id\\"\s*:\s*\\"?(\d{5,15})\\"?/i) ||
+              sHtml.match(/_CustId_(\d{5,15})/i);
+            if (idMatch?.[1]) {
+              competitorSellerId = idMatch[1];
+              break;
+            }
+          }
+        } catch {}
+      }
+    }
+
+    // Consulta /users/{competitorSellerId} na API Oficial do Mercado Livre para obter Cidade - UF real do vendedor
     if (!sellerLocation && competitorSellerId) {
       try {
         const userRes = await fetch(
@@ -485,6 +539,7 @@ export async function GET(req: NextRequest) {
         billable_weight: billableWeight,
         shipping_source: shippingSource,
         net_receivable: netReceivable,
+        seller_id: competitorSellerId || null,
         seller_location: sellerLocation,
         listing_created_at: finalCreatedAt,
         source: "ml_official_api",

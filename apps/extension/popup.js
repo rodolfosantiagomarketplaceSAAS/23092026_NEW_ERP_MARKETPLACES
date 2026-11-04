@@ -317,6 +317,8 @@ document.addEventListener("DOMContentLoaded", async () => {
               title: currentScrapedData.title,
               weight_grams: currentScrapedData.weight_grams,
               seller_id: currentScrapedData.seller_id,
+              seller_store_url: currentScrapedData.seller_store_url,
+              seller_name: currentScrapedData.seller_name,
               thumbnail_url: currentScrapedData.thumbnail_url,
             },
             (feeRes) => {
@@ -333,7 +335,11 @@ document.addEventListener("DOMContentLoaded", async () => {
                 return;
               }
 
-              // 1. Atualiza Localização do Concorrente se retornada pela API
+              if (feeRes.seller_id && !currentScrapedData.seller_id) {
+                currentScrapedData.seller_id = feeRes.seller_id;
+              }
+
+              // 1. Atualiza Localização do Concorrente retornada pela API Oficial (/users/{seller_id})
               if (feeRes.seller_location) {
                 currentScrapedData.seller_location = feeRes.seller_location;
                 if (locEl) locEl.innerText = `📍 ${feeRes.seller_location}`;

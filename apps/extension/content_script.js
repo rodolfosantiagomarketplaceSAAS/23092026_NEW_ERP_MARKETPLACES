@@ -490,8 +490,8 @@
         }
       }
 
-      // Se a localização do vendedor ainda não foi encontrada na PDP, tenta buscar no link de perfil/loja
-      if (!data.seller_location && data.seller_store_url && data.seller_store_url.includes("mercadolivre.com.br")) {
+      // Se o seller_id ou a localização do vendedor ainda não foram encontrados na PDP, consulta o link da loja (/pagina/...)
+      if ((!data.seller_id || !data.seller_location) && data.seller_store_url && data.seller_store_url.includes("mercadolivre.com.br")) {
         try {
           const locCtrl = new AbortController();
           const locTimer = setTimeout(() => locCtrl.abort(), 1400);
@@ -503,13 +503,23 @@
           clearTimeout(locTimer);
           if (storeRes && storeRes.ok) {
             const storeHtml = await storeRes.text();
-            const locFromProfile =
-              storeHtml.match(/Localizado\s+em\s+([^<".\n]{3,45})/i)?.[1] ||
-              storeHtml.match(/"city"\s*:\s*\{\s*(?:"id"\s*:\s*"[^"]*"\s*,\s*)?"name"\s*:\s*"([^"]+)"\s*\}\s*,\s*"state"\s*:\s*\{\s*"id"\s*:\s*"(?:BR-)?([A-Z]{2})"/i);
-            if (Array.isArray(locFromProfile)) {
-              data.seller_location = `${locFromProfile[1]} - ${locFromProfile[2]}`;
-            } else if (typeof locFromProfile === "string" && locFromProfile.trim()) {
-              data.seller_location = locFromProfile.trim();
+            if (!data.seller_id) {
+              const sidMatch =
+                storeHtml.match(/"seller_id"\s*:\s*"?(\d{5,15})"?/i) ||
+                storeHtml.match(/\\"seller_id\\"\s*:\s*\\"?(\d{5,15})\\"?/i) ||
+                storeHtml.match(/"owner_id"\s*:\s*"?(\d{5,15})"?/i) ||
+                storeHtml.match(/\\"owner_id\\"\s*:\s*\\"?(\d{5,15})\\"?/i) ||
+                storeHtml.match(/_CustId_(\d{5,15})/i);
+              if (sidMatch && sidMatch[1]) {
+                data.seller_id = sidMatch[1];
+              }
+            }
+            if (!data.seller_location) {
+              // NUNCA faz match em "city" genérico pois o cabeçalho do ML traz o CEP do comprador ("Enviar para...")
+              const locFromProfile = storeHtml.match(/Localizado\s+em\s+([^<".\n]{3,45})/i)?.[1];
+              if (typeof locFromProfile === "string" && locFromProfile.trim()) {
+                data.seller_location = locFromProfile.trim();
+              }
             }
           }
         } catch {}
@@ -520,10 +530,12 @@
 
   /**
    * Helper: Extrai a localização do vendedor/concorrente no Mercado Livre (Cidade / Estado)
+   * IMPORTANTE: Jamais usa regex genérico de "city"/"state" no HTML global, pois o cabeçalho do ML
+   * injeta o endereço de destino do próprio comprador logado ("Enviar para Passo Fundo - RS").
    */
   function extractMlSellerLocation(scriptsText = "") {
     try {
-      // 1. Containers de informação do vendedor no DOM (.ui-seller-info__status-info)
+      // 1. Containers estritos de informação do vendedor no DOM (.ui-seller-info__status-info)
       const statusBlocks = document.querySelectorAll(
         ".ui-seller-info__status-info, .ui-pdp-seller__status-info, [class*='seller-info__status']"
       );
@@ -540,7 +552,7 @@
         }
       }
 
-      // 2. JSON embutido nos scripts da página (seller_address / city / state)
+      // 2. JSON estrito de seller_address (endereço do VENDEDOR, nunca buyer/destination)
       if (scriptsText) {
         const addrRegex =
           /"seller_address"\s*:\s*\{[\s\S]{0,600}?"city"\s*:\s*\{\s*(?:"id"\s*:\s*"[^"]*"\s*,\s*)?"name"\s*:\s*"([^"]+)"\s*\}[\s\S]{0,200}?"state"\s*:\s*\{\s*"id"\s*:\s*"(?:BR-)?([A-Z]{2})"\s*,\s*"name"\s*:\s*"([^"]+)"/i;
@@ -548,24 +560,15 @@
         if (m && m[1]) {
           return m[2] ? `${m[1]} - ${m[2]}` : `${m[1]} - ${m[3]}`;
         }
-
-        const cityStateMatch = scriptsText.match(
-          /"city"\s*:\s*\{\s*(?:"id"\s*:\s*"[^"]*"\s*,\s*)?"name"\s*:\s*"([^"]+)"\s*\}\s*,\s*"state"\s*:\s*\{\s*"id"\s*:\s*"(?:BR-)?([A-Z]{2})"/i
-        );
-        if (cityStateMatch && cityStateMatch[1]) {
-          return `${cityStateMatch[1]} - ${cityStateMatch[2]}`;
-        }
       }
 
-      // 3. Texto de envio no bloco de frete ("Enviado de São Paulo, SP")
-      const shippingContainers = document.querySelectorAll(
-        ".ui-pdp-media__body, .ui-pdp-shipping, .ui-vpp-seller-profile"
+      // 3. Perfil do vendedor no DOM ("Localizado em ...")
+      const sellerProfileContainers = document.querySelectorAll(
+        ".ui-vpp-seller-profile, .ui-box-component-pdp__seller, [class*='seller-profile']"
       );
-      for (const el of shippingContainers) {
+      for (const el of sellerProfileContainers) {
         const txt = (el.innerText || "").replace(/\s+/g, " ").trim();
-        const m =
-          txt.match(/Enviado\s+de\s+([A-ZÀ-Úa-zà-ú\s]+(?:[,-]\s*[A-ZÀ-Úa-zà-ú]{2,20})?)/i) ||
-          txt.match(/Localizado\s+em\s+([A-ZÀ-Úa-zà-ú\s]+(?:[,-]\s*[A-ZÀ-Úa-zà-ú]{2,20})?)/i);
+        const m = txt.match(/Localizado\s+em\s+([A-ZÀ-Úa-zà-ú\s]+(?:[,-]\s*[A-ZÀ-Úa-zà-ú]{2,20})?)/i);
         if (m && m[1] && m[1].length >= 3 && m[1].length <= 45) {
           return m[1].trim();
         }
@@ -1107,6 +1110,18 @@
         sellerStoreUrl = rawHref.split("?")[0];
         const matchCust = rawHref.match(/_CustId_(\d+)/i);
         if (matchCust) sellerId = matchCust[1];
+      }
+    }
+
+    if (!sellerId) {
+      const htmlScripts = document.documentElement.innerHTML || "";
+      const sidMatch =
+        htmlScripts.match(/"seller_id"\s*:\s*"?(\d{5,15})"?/i) ||
+        htmlScripts.match(/\\"seller_id\\"\s*:\s*\\"?(\d{5,15})\\"?/i) ||
+        htmlScripts.match(/"sellerId"\s*:\s*"?(\d{5,15})"?/i) ||
+        htmlScripts.match(/_CustId_(\d{5,15})/i);
+      if (sidMatch && sidMatch[1]) {
+        sellerId = sidMatch[1];
       }
     }
 

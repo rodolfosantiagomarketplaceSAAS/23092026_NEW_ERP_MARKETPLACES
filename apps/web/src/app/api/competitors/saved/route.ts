@@ -19,6 +19,69 @@ import {
 
 export const dynamic = "force-dynamic";
 
+async function resolveMlSellerRealLocation(
+  sellerIdRaw?: string | number | null,
+  sellerStoreUrlRaw?: string | null,
+  sellerNameRaw?: string | null
+): Promise<string | null> {
+  try {
+    let sellerId = String(sellerIdRaw || "").trim();
+    if (!/^\d{4,15}$/.test(sellerId)) {
+      sellerId = "";
+    }
+
+    if (!sellerId && (sellerStoreUrlRaw || sellerNameRaw)) {
+      const storeUrl =
+        sellerStoreUrlRaw && sellerStoreUrlRaw.includes("mercadolivre.com.br")
+          ? sellerStoreUrlRaw
+          : sellerNameRaw
+          ? `https://www.mercadolivre.com.br/pagina/${String(sellerNameRaw)
+              .toLowerCase()
+              .normalize("NFD")
+              .replace(/[\u0300-\u036f]/g, "")
+              .replace(/[^a-z0-9]/g, "")}`
+          : "";
+      if (storeUrl) {
+        const res = await fetch(storeUrl, {
+          headers: {
+            "User-Agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            Accept: "text/html,application/xhtml+xml",
+          },
+          cache: "no-store",
+        }).catch(() => null);
+        if (res && res.ok) {
+          const html = await res.text();
+          const m =
+            html.match(/"seller_id"\s*:\s*"?(\d{5,15})"?/i) ||
+            html.match(/"owner_id"\s*:\s*"?(\d{5,15})"?/i) ||
+            html.match(/_CustId_(\d{5,15})/i);
+          if (m && m[1]) sellerId = m[1];
+        }
+      }
+    }
+
+    if (!sellerId) return null;
+    const token = await resolveAnyActiveMlToken();
+    const headers: Record<string, string> = { Accept: "application/json" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const userRes = await fetch(
+      `https://api.mercadolibre.com/users/${sellerId}`,
+      { headers, cache: "no-store" }
+    ).catch(() => null);
+    if (userRes && userRes.ok) {
+      const uData = await userRes.json().catch(() => null);
+      const city = uData?.address?.city;
+      const stateRaw = uData?.address?.state || "";
+      const state = String(stateRaw).replace(/^BR-/, "").trim();
+      if (city && state) return `${city} - ${state}`;
+      if (city) return String(city);
+    }
+  } catch {}
+  return null;
+}
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -26,6 +89,31 @@ export async function GET(request: Request) {
     const search = (searchParams.get("search") || "").trim().toLowerCase();
 
     const allItems = await listSavedOpportunityListings();
+
+    // Auto-heal: se algum anúncio salvo anteriormente ficou com "Passo Fundo - RS" (endereço do comprador)
+    // ou sem localização, corrige consultando o endereço real do vendedor na API do ML
+    await Promise.all(
+      allItems.map(async (item) => {
+        if (
+          item.platform === "mercadolivre" &&
+          (!item.seller_location ||
+            item.seller_location.toLowerCase().includes("passo fundo"))
+        ) {
+          const realLoc = await resolveMlSellerRealLocation(
+            null,
+            null,
+            item.seller_name
+          );
+          if (realLoc && realLoc !== item.seller_location) {
+            item.seller_location = realLoc;
+            await upsertSavedOpportunityListing({
+              ...item,
+              seller_location: realLoc,
+            }).catch(() => null);
+          }
+        }
+      })
+    );
 
     const totalCount = allItems.length;
     const pendingCount = allItems.filter((i) => i.status === "pending").length;
@@ -266,9 +354,24 @@ export async function POST(request: Request) {
     const sellerReputation = String(
       body.seller_reputation || scraped.seller_reputation || "platinum"
     );
-    const sellerLocation = body.seller_location
+    let sellerLocation = body.seller_location
       ? String(body.seller_location).trim()
       : null;
+    if (
+      platform === "mercadolivre" &&
+      (!sellerLocation || sellerLocation.toLowerCase().includes("passo fundo"))
+    ) {
+      const resolvedLoc = await resolveMlSellerRealLocation(
+        body.seller_id,
+        body.seller_store_url,
+        sellerName
+      );
+      if (resolvedLoc) {
+        sellerLocation = resolvedLoc;
+      } else if (sellerLocation?.toLowerCase().includes("passo fundo")) {
+        sellerLocation = null;
+      }
+    }
 
     const storeSegment = String(body.store_segment || "Geral");
     const isCatalog = Boolean(

@@ -746,6 +746,8 @@ async function handleGetCompetitorFees(req) {
   if (req.title) params.set("title", req.title);
   if (req.weight_grams) params.set("weight_grams", String(req.weight_grams));
   if (req.seller_id) params.set("seller_id", String(req.seller_id));
+  if (req.seller_store_url) params.set("seller_store_url", String(req.seller_store_url));
+  if (req.seller_name) params.set("seller_name", String(req.seller_name));
   if (req.thumbnail_url) params.set("thumbnail_url", String(req.thumbnail_url));
 
   const res = await fetch(`${config.erpUrl}/api/extension/fees?${params.toString()}`, {
