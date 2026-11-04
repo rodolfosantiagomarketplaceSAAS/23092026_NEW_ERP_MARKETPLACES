@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import {
   Bookmark,
   BookmarkCheck,
@@ -102,17 +102,19 @@ export function SavedOpportunitiesView({
     [externalToast]
   );
 
-  const syncParentCounts = useCallback(
-    (list: SavedOpportunityListing[]) => {
-      if (!onCountChange) return;
-      const total = list.length;
-      const pending = list.filter((i) => i.status === "pending").length;
-      const created = list.filter((i) => i.status === "created").length;
-      const savedExternalIds = new Set(list.map((i) => i.external_id));
-      onCountChange({ total, pending, created, savedExternalIds });
-    },
-    [onCountChange]
-  );
+  const onCountChangeRef = useRef(onCountChange);
+  useEffect(() => {
+    onCountChangeRef.current = onCountChange;
+  }, [onCountChange]);
+
+  const syncParentCounts = useCallback((list: SavedOpportunityListing[]) => {
+    if (!onCountChangeRef.current) return;
+    const total = list.length;
+    const pending = list.filter((i) => i.status === "pending").length;
+    const created = list.filter((i) => i.status === "created").length;
+    const savedExternalIds = new Set(list.map((i) => i.external_id));
+    onCountChangeRef.current({ total, pending, created, savedExternalIds });
+  }, []);
 
   const fetchSavedListings = useCallback(async () => {
     setLoading(true);
@@ -650,7 +652,7 @@ export function SavedOpportunitiesView({
 
       {/* Tabela Completa de Anúncios Salvos para Analisar & Criar */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-        {loading ? (
+        {loading && items.length === 0 ? (
           <div className="p-12 text-center text-slate-400 text-xs">
             Carregando seus anúncios salvos para análise...
           </div>

@@ -145,10 +145,28 @@ export function CompetitorStoresSubTab({
   const [listingToClone, setListingToClone] = useState<CompetitorStoreListing | null>(null);
   const [pairingListing, setPairingListing] = useState<any | null>(null);
 
-  const showToast = (msg: string) => {
+  const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 3500);
-  };
+  }, []);
+
+  const handleSavedCountChange = useCallback(
+    ({
+      total,
+      pending,
+      created,
+      savedExternalIds: extSet,
+    }: {
+      total: number;
+      pending: number;
+      created: number;
+      savedExternalIds: Set<string>;
+    }) => {
+      setSavedCounts({ total, pending, created });
+      setSavedExternalIds(extSet);
+    },
+    []
+  );
 
   const handleColumnSort = (column: SortColumnKey) => {
     let newDir: SortDirection = "desc";
@@ -1306,10 +1324,7 @@ export function CompetitorStoresSubTab({
       {activeView === "saved" && (
         <SavedOpportunitiesView
           externalToast={showToast}
-          onCountChange={({ total, pending, created, savedExternalIds: extSet }) => {
-            setSavedCounts({ total, pending, created });
-            setSavedExternalIds(extSet);
-          }}
+          onCountChange={handleSavedCountChange}
         />
       )}
 
