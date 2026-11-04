@@ -6,24 +6,45 @@ import { Header } from "@/components/layout/Header";
 import { BiDashboard } from "@/components/bi/BiDashboard";
 import { MarketSearchSubTab } from "@/components/bi/MarketSearchSubTab";
 import { CompetitorStoresSubTab } from "@/components/bi/CompetitorStoresSubTab";
-import { Radio, Search, Store, Sparkles } from "lucide-react";
+import { Radio, Search, Store, BookmarkCheck } from "lucide-react";
 
 function InteligenciaContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const rawTab = searchParams.get("tab");
   const initialTab =
-    rawTab === "radar" ? "radar" : rawTab === "lojas" || rawTab === "concorrentes" ? "lojas" : "pesquisa";
-  const [activeSubTab, setActiveSubTab] = useState<"radar" | "pesquisa" | "lojas">(initialTab);
+    rawTab === "radar"
+      ? "radar"
+      : rawTab === "salvos" || rawTab === "criar"
+      ? "salvos"
+      : rawTab === "lojas" || rawTab === "concorrentes"
+      ? "lojas"
+      : "pesquisa";
+  const [activeSubTab, setActiveSubTab] = useState<
+    "radar" | "pesquisa" | "lojas" | "salvos"
+  >(initialTab);
 
   useEffect(() => {
     const tabParam = searchParams.get("tab");
-    if (tabParam === "radar" || tabParam === "pesquisa" || tabParam === "lojas" || tabParam === "concorrentes") {
-      setActiveSubTab(tabParam === "concorrentes" ? "lojas" : (tabParam as any));
+    if (
+      tabParam === "radar" ||
+      tabParam === "pesquisa" ||
+      tabParam === "lojas" ||
+      tabParam === "concorrentes" ||
+      tabParam === "salvos" ||
+      tabParam === "criar"
+    ) {
+      setActiveSubTab(
+        tabParam === "concorrentes"
+          ? "lojas"
+          : tabParam === "criar"
+          ? "salvos"
+          : (tabParam as any)
+      );
     }
   }, [searchParams]);
 
-  const handleSelectTab = (tab: "radar" | "pesquisa" | "lojas") => {
+  const handleSelectTab = (tab: "radar" | "pesquisa" | "lojas" | "salvos") => {
     setActiveSubTab(tab);
     router.replace(`/inteligencia?tab=${tab}`, { scroll: false });
   };
@@ -45,6 +66,8 @@ function InteligenciaContent() {
               <p className="text-xs text-slate-500 mt-0.5">
                 {activeSubTab === "lojas"
                   ? "Espião de lojas concorrentes no Mercado Livre: extração via extensão, análise de datas de criação, vendas e clonagem de anúncios."
+                  : activeSubTab === "salvos"
+                  ? "Fila de anúncios interessantes salvos via webscraping para analisar, criar na sua loja, marcar com OK em verde e gerenciar."
                   : activeSubTab === "pesquisa"
                   ? "Pesquisa ativa de produtos com raio-X estatístico, campanhas, melhores preços e pareamento 1-clique."
                   : "Monitoramento 1:N de anúncios concorrentes pareados com atualização em tempo real (Supabase Realtime)."}
@@ -52,11 +75,11 @@ function InteligenciaContent() {
             </div>
 
             {/* Seletor de Subabas Estilizado */}
-            <div className="flex items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold self-start sm:self-auto shadow-2xs">
+            <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold self-start sm:self-auto shadow-2xs">
               <button
                 type="button"
                 onClick={() => handleSelectTab("lojas")}
-                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 ${
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
                   activeSubTab === "lojas"
                     ? "bg-white text-indigo-700 shadow-sm font-bold"
                     : "text-slate-600 hover:text-slate-900"
@@ -64,6 +87,19 @@ function InteligenciaContent() {
               >
                 <Store className="w-4 h-4 text-indigo-600" />
                 <span>Espião de Concorrentes</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleSelectTab("salvos")}
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
+                  activeSubTab === "salvos"
+                    ? "bg-white text-indigo-700 shadow-sm font-bold"
+                    : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <BookmarkCheck className="w-4 h-4 text-amber-600" />
+                <span>Anúncios p/ Analisar & Criar</span>
                 <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.2 rounded-full font-black">
                   NOVO
                 </span>
@@ -72,7 +108,7 @@ function InteligenciaContent() {
               <button
                 type="button"
                 onClick={() => handleSelectTab("pesquisa")}
-                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 ${
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
                   activeSubTab === "pesquisa"
                     ? "bg-white text-indigo-700 shadow-sm font-bold"
                     : "text-slate-600 hover:text-slate-900"
@@ -88,7 +124,7 @@ function InteligenciaContent() {
               <button
                 type="button"
                 onClick={() => handleSelectTab("radar")}
-                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 ${
+                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
                   activeSubTab === "radar"
                     ? "bg-white text-indigo-700 shadow-sm font-bold"
                     : "text-slate-600 hover:text-slate-900"
@@ -102,7 +138,9 @@ function InteligenciaContent() {
 
           {/* Renderização Condicional da Subaba Ativa */}
           {activeSubTab === "lojas" ? (
-            <CompetitorStoresSubTab />
+            <CompetitorStoresSubTab initialView="stores" />
+          ) : activeSubTab === "salvos" ? (
+            <CompetitorStoresSubTab initialView="saved" />
           ) : activeSubTab === "pesquisa" ? (
             <MarketSearchSubTab />
           ) : (

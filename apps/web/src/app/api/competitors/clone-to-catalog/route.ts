@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cloneListingToCatalogSchema } from "@crm/types";
 import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
+import { updateSavedOpportunityListing } from "@/lib/data/savedListingsStore";
 
 export const dynamic = "force-dynamic";
 
@@ -28,6 +29,8 @@ export async function POST(req: NextRequest) {
     }
 
     const {
+      competitor_listing_id,
+      external_id,
       title,
       suggested_price,
       cost_price,
@@ -101,6 +104,24 @@ export async function POST(req: NextRequest) {
       }
     } catch (e) {
       console.warn("[CloneToCatalog] MyListing creation note:", e);
+    }
+
+    // 3. Se este anúncio estava salvo na aba "Anúncios para Analisar & Criar", marca automaticamente como CRIADO (OK em verde)
+    try {
+      if (external_id) {
+        await updateSavedOpportunityListing(external_id, {
+          status: "created",
+          my_created_sku: sku.toUpperCase(),
+        });
+      }
+      if (competitor_listing_id && competitor_listing_id !== external_id) {
+        await updateSavedOpportunityListing(competitor_listing_id, {
+          status: "created",
+          my_created_sku: sku.toUpperCase(),
+        });
+      }
+    } catch {
+      // ignora erro secundário
     }
 
     return NextResponse.json({

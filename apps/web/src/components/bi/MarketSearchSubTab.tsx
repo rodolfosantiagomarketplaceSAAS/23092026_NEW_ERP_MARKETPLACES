@@ -28,6 +28,8 @@ import {
   ArrowUpDown,
   RotateCcw,
   X,
+  Bookmark,
+  BookmarkCheck,
 } from "lucide-react";
 import type {
   MarketSearchItem,
@@ -77,10 +79,68 @@ export function MarketSearchSubTab() {
 
   // Modal de Pareamento
   const [pairingItem, setPairingItem] = useState<MarketSearchItem | null>(null);
+  const [savedForCreateIds, setSavedForCreateIds] = useState<Set<string>>(new Set());
+  const [savingItemId, setSavingItemId] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
     setTimeout(() => setToastMessage(null), 3500);
+  };
+
+  useEffect(() => {
+    fetch("/api/competitors/saved", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((json) => {
+        if (json?.success && Array.isArray(json.data)) {
+          setSavedForCreateIds(new Set(json.data.map((i: any) => String(i.external_id))));
+        }
+      })
+      .catch(() => null);
+  }, []);
+
+  const handleSaveForCreate = async (item: MarketSearchItem) => {
+    if (savedForCreateIds.has(item.external_id)) {
+      showToast("🔖 Este anúncio já está salvo na aba 'Anúncios p/ Analisar & Criar'!");
+      return;
+    }
+    setSavingItemId(item.external_id);
+    try {
+      const res = await fetch("/api/competitors/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: item.platform,
+          external_id: item.external_id,
+          title: item.title,
+          current_price: item.current_price,
+          original_price: item.original_price ?? null,
+          discount_pct: item.discount_pct ?? null,
+          promo_badge: item.promo_badge ?? null,
+          sales_count_approx: item.sales_count_approx,
+          shipping_type: item.shipping_type,
+          is_full: item.shipping_type === "ml_full",
+          is_free_shipping: item.is_free_shipping,
+          listing_type: item.listing_type,
+          seller_name: item.seller_name,
+          seller_reputation: item.seller_reputation,
+          permalink: item.permalink,
+          thumbnail_url: item.thumbnail_url ?? null,
+          rating: item.rating,
+          reviews_count: item.reviews_count,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setSavedForCreateIds((prev) => new Set(Array.from(prev).concat(item.external_id)));
+        showToast("🔖 Anúncio salvo na aba 'Anúncios p/ Analisar & Criar'!");
+      } else {
+        showToast(json.error || "Erro ao salvar anúncio.");
+      }
+    } catch {
+      showToast("Erro ao salvar anúncio para criação.");
+    } finally {
+      setSavingItemId(null);
+    }
   };
 
   const handleSearch = useCallback(async () => {
@@ -1330,6 +1390,30 @@ export function MarketSearchSubTab() {
                               Monitorar
                             </button>
                           )}
+
+                          <button
+                            type="button"
+                            disabled={savingItemId === item.external_id}
+                            onClick={() => handleSaveForCreate(item)}
+                            className={`px-2.5 py-1 text-[10px] font-bold rounded-lg transition flex items-center gap-1 cursor-pointer ${
+                              savedForCreateIds.has(item.external_id)
+                                ? "bg-emerald-100 text-emerald-800 border border-emerald-300"
+                                : "bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200"
+                            }`}
+                            title="Salvar este anúncio na aba 'Anúncios p/ Analisar & Criar' para criar depois na sua loja"
+                          >
+                            {savedForCreateIds.has(item.external_id) ? (
+                              <>
+                                <BookmarkCheck className="w-3 h-3 text-emerald-700" />
+                                <span>Salvo</span>
+                              </>
+                            ) : (
+                              <>
+                                <Bookmark className="w-3 h-3 text-amber-600" />
+                                <span>Salvar p/ Criar</span>
+                              </>
+                            )}
+                          </button>
 
                           <button
                             type="button"

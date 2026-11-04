@@ -449,4 +449,77 @@ export const cloneListingToCatalogSchema = z.object({
 
 export type CloneListingToCatalogInput = z.infer<typeof cloneListingToCatalogSchema>;
 
+// ==============================================================================
+// 8. ANÚNCIOS SALVOS PARA ANALISAR & CRIAR (OPPORTUNITY BOOKMARKS & SCRAPER)
+// ==============================================================================
+export type SavedOpportunityStatus = "pending" | "created";
+
+export interface SavedOpportunityListing {
+  id: string;
+  user_id: string;
+  platform: MarketplacePlatform;
+  external_id: string;
+  title: string;
+  current_price: number;
+  original_price?: number | null;
+  discount_pct?: number | null;
+  promo_badge?: string | null;
+  sales_count_approx: number;
+  listing_created_at?: string | null;
+  shipping_type: ShippingBadge | string;
+  is_full: boolean;
+  is_free_shipping: boolean;
+  listing_type?: string | null;
+  is_catalog?: boolean;
+  estimated_sale_fee?: number;
+  estimated_shipping?: number | null;
+  estimated_net?: number;
+  seller_name: string;
+  seller_reputation?: string | null;
+  store_segment?: string | null;
+  permalink: string;
+  thumbnail_url?: string | null;
+  rating: number;
+  reviews_count: number;
+  status: SavedOpportunityStatus;
+  notes?: string | null;
+  my_created_sku?: string | null;
+  created_in_store_at?: string | null;
+  last_scraped_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export const saveOpportunityListingSchema = z.object({
+  url: z.string().optional(),
+  platform: z.enum(["mercadolivre", "shopee"]).optional().default("mercadolivre"),
+  external_id: z.string().optional(),
+  title: z.string().optional(),
+  current_price: z.number().nonnegative().optional(),
+  original_price: z.number().nonnegative().nullable().optional(),
+  discount_pct: z.number().nullable().optional(),
+  promo_badge: z.string().nullable().optional(),
+  sales_count_approx: z.number().int().nonnegative().optional(),
+  listing_created_at: z.string().nullable().optional(),
+  shipping_type: z.string().optional(),
+  is_full: z.boolean().optional(),
+  is_free_shipping: z.boolean().optional(),
+  listing_type: z.string().nullable().optional(),
+  is_catalog: z.boolean().optional(),
+  estimated_sale_fee: z.number().nonnegative().optional(),
+  estimated_shipping: z.number().nonnegative().nullable().optional(),
+  estimated_net: z.number().nonnegative().optional(),
+  seller_name: z.string().optional(),
+  seller_reputation: z.string().nullable().optional(),
+  store_segment: z.string().nullable().optional(),
+  permalink: z.string().optional(),
+  thumbnail_url: z.string().nullable().optional(),
+  rating: z.number().min(0).max(5).optional(),
+  reviews_count: z.number().int().nonnegative().optional(),
+  notes: z.string().nullable().optional(),
+});
+
+export type SaveOpportunityListingInput = z.infer<typeof saveOpportunityListingSchema>;
+
+
 

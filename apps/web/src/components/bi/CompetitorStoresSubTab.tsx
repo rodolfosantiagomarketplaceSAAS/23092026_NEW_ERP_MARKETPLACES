@@ -8,6 +8,7 @@ import {
   Flame,
   Sparkles,
   Bookmark,
+  BookmarkCheck,
   Calendar,
   DollarSign,
   TrendingUp,
@@ -36,6 +37,7 @@ import { CloneListingModal } from "./CloneListingModal";
 import { EditCompetitorModal } from "./EditCompetitorModal";
 import { AddCompetitorStoreModal } from "./AddCompetitorStoreModal";
 import { PairFromSearchModal } from "./PairFromSearchModal";
+import { SavedOpportunitiesView } from "./SavedOpportunitiesView";
 
 
 function getSafeListingUrl(item: CompetitorStoreListing): string {
@@ -91,10 +93,18 @@ function computeEstimatedNet(item: CompetitorStoreListing): number {
 type SortColumnKey = "title" | "store" | "date" | "sales" | "price" | "net" | "discount";
 type SortDirection = "asc" | "desc";
 
-export function CompetitorStoresSubTab() {
-  // Navegação Interna: Lojas vs Anúncios
-  const [activeView, setActiveView] = useState<"stores" | "listings">("stores");
+export function CompetitorStoresSubTab({
+  initialView = "stores",
+}: {
+  initialView?: "stores" | "listings" | "saved";
+}) {
+  // Navegação Interna: Lojas vs Anúncios vs Anúncios Salvos p/ Criar
+  const [activeView, setActiveView] = useState<"stores" | "listings" | "saved">(initialView);
   const [selectedStoreId, setSelectedStoreId] = useState<string>("all");
+
+  useEffect(() => {
+    setActiveView(initialView);
+  }, [initialView]);
 
   // Dados
   const [stores, setStores] = useState<CompetitorStore[]>([]);
@@ -102,6 +112,15 @@ export function CompetitorStoresSubTab() {
   const [loadingStores, setLoadingStores] = useState<boolean>(true);
   const [loadingListings, setLoadingListings] = useState<boolean>(false);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Estado dos Anúncios Salvos p/ Analisar & Criar
+  const [savedCounts, setSavedCounts] = useState<{
+    total: number;
+    pending: number;
+    created: number;
+  }>({ total: 0, pending: 0, created: 0 });
+  const [savedExternalIds, setSavedExternalIds] = useState<Set<string>>(new Set());
+  const [savingExtId, setSavingExtId] = useState<string | null>(null);
 
   // Filtros de Lojas
   const [storeSearch, setStoreSearch] = useState<string>("");
@@ -265,6 +284,87 @@ export function CompetitorStoresSubTab() {
   useEffect(() => {
     fetchStores();
   }, [fetchStores]);
+
+  const fetchSavedSummary = useCallback(async () => {
+    try {
+      const res = await fetch("/api/competitors/saved", { cache: "no-store" });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        const list = json.data || [];
+        setSavedCounts(
+          json.counts || {
+            total: list.length,
+            pending: list.filter((i: any) => i.status === "pending").length,
+            created: list.filter((i: any) => i.status === "created").length,
+          }
+        );
+        setSavedExternalIds(new Set(list.map((i: any) => String(i.external_id))));
+      }
+    } catch {
+      // silencioso
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSavedSummary();
+  }, [fetchSavedSummary]);
+
+  const handleSaveForLater = async (item: CompetitorStoreListing) => {
+    if (savedExternalIds.has(item.external_id)) {
+      setActiveView("saved");
+      return;
+    }
+    setSavingExtId(item.external_id);
+    try {
+      const res = await fetch("/api/competitors/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          platform: item.platform || "mercadolivre",
+          external_id: item.external_id,
+          title: item.title,
+          current_price: item.current_price,
+          original_price: item.original_price ?? null,
+          discount_pct: item.discount_pct ?? null,
+          promo_badge: item.promo_badge ?? null,
+          sales_count_approx: item.sales_count_approx,
+          listing_created_at: item.listing_created_at ?? null,
+          shipping_type: item.shipping_type,
+          is_full: item.is_full,
+          is_free_shipping: item.is_free_shipping,
+          listing_type: item.listing_type ?? "gold_pro",
+          is_catalog: item.is_catalog ?? false,
+          estimated_sale_fee: item.estimated_sale_fee,
+          estimated_shipping: item.estimated_shipping,
+          estimated_net: computeEstimatedNet(item),
+          seller_name: item.store_name || "Loja Concorrente",
+          store_segment: item.store_segment || "Geral",
+          permalink: getSafeListingUrl(item),
+          thumbnail_url: item.thumbnail_url ?? null,
+          rating: item.rating ?? 5.0,
+          reviews_count: item.reviews_count ?? 0,
+        }),
+      });
+      const json = await res.json();
+      if (res.ok && json.success) {
+        setSavedExternalIds((prev) => new Set(Array.from(prev).concat(item.external_id)));
+        setSavedCounts((prev) => ({
+          ...prev,
+          total: prev.total + 1,
+          pending: prev.pending + 1,
+        }));
+        showToast(
+          `🔖 Anúncio salvo em "Anúncios p/ Analisar & Criar"!`
+        );
+      } else {
+        showToast(json.error || "Erro ao salvar anúncio.");
+      }
+    } catch {
+      showToast("Erro ao salvar anúncio para análise.");
+    } finally {
+      setSavingExtId(null);
+    }
+  };
 
   useEffect(() => {
     if (activeView === "listings") {
@@ -501,12 +601,12 @@ export function CompetitorStoresSubTab() {
         </div>
       </div>
 
-      {/* Barra de Seleção de Visão: Lojas vs Anúncios */}
+      {/* Barra de Seleção de Visão: Lojas vs Anúncios vs Anúncios Salvos p/ Criar */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-white p-2 rounded-xl border border-slate-200 shadow-2xs">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             onClick={() => setActiveView("stores")}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
               activeView === "stores"
                 ? "bg-indigo-600 text-white shadow-xs"
                 : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -520,7 +620,7 @@ export function CompetitorStoresSubTab() {
             onClick={() => {
               setActiveView("listings");
             }}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
               activeView === "listings"
                 ? "bg-indigo-600 text-white shadow-xs"
                 : "text-slate-600 hover:text-slate-900 hover:bg-slate-100"
@@ -528,9 +628,40 @@ export function CompetitorStoresSubTab() {
           >
             <Eye className="w-4 h-4" />
             <span>Raio-X de Anúncios & Oportunidades</span>
-            <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-500 text-white font-black">
-              NOVO
-            </span>
+          </button>
+
+          <button
+            onClick={() => {
+              setActiveView("saved");
+            }}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+              activeView === "saved"
+                ? "bg-indigo-600 text-white shadow-xs"
+                : "text-slate-700 hover:text-slate-900 bg-amber-50/70 hover:bg-amber-100/80 border border-amber-200/80"
+            }`}
+          >
+            <BookmarkCheck
+              className={`w-4 h-4 ${
+                activeView === "saved" ? "text-white" : "text-amber-600"
+              }`}
+            />
+            <span>Anúncios para Analisar & Criar</span>
+            {savedCounts.total > 0 ? (
+              <span
+                className={`text-[10px] px-1.5 py-0.2 rounded-full font-black ${
+                  activeView === "saved"
+                    ? "bg-white text-indigo-700"
+                    : "bg-amber-500 text-white"
+                }`}
+                title={`${savedCounts.pending} pendente(s) para criar • ${savedCounts.created} já criado(s) em verde`}
+              >
+                {savedCounts.pending}/{savedCounts.total}
+              </span>
+            ) : (
+              <span className="text-[10px] px-1.5 py-0.2 rounded-full bg-emerald-500 text-white font-black">
+                NOVO
+              </span>
+            )}
           </button>
         </div>
 
@@ -1087,17 +1218,49 @@ export function CompetitorStoresSubTab() {
                             })()}
                           </td>
 
-                          {/* Ação: Criar Meu Anúncio a partir Deste */}
+                          {/* Ação: Criar Meu Anúncio / Salvar para Criar Depois */}
                           <td className="py-2.5 px-3 text-center">
                             <div className="flex flex-col gap-1.5 items-center">
                               <button
                                 type="button"
                                 onClick={() => setListingToClone(item)}
-                                className="w-full py-1.5 px-2.5 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-1"
+                                className="w-full py-1.5 px-2.5 text-[11px] font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg shadow-2xs transition-colors flex items-center justify-center gap-1 cursor-pointer"
                                 title="Criar meu anúncio no catálogo baseado nas fotos e dados deste concorrente"
                               >
                                 <Sparkles className="w-3.5 h-3.5" />
                                 <span>Criar Meu Anúncio</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                disabled={savingExtId === item.external_id}
+                                onClick={() => handleSaveForLater(item)}
+                                className={`w-full py-1 px-2 text-[10px] font-bold rounded-lg transition-colors flex items-center justify-center gap-1 cursor-pointer ${
+                                  savedExternalIds.has(item.external_id)
+                                    ? "bg-emerald-100 text-emerald-800 border border-emerald-300 hover:bg-emerald-200"
+                                    : "bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100"
+                                }`}
+                                title={
+                                  savedExternalIds.has(item.external_id)
+                                    ? "Já está salvo! Clique para abrir a aba 'Anúncios para Analisar & Criar'"
+                                    : "Salvar este anúncio interessante para analisar e criar mais tarde na sua loja"
+                                }
+                              >
+                                {savedExternalIds.has(item.external_id) ? (
+                                  <>
+                                    <BookmarkCheck className="w-3 h-3 text-emerald-700" />
+                                    <span>Salvo p/ Criar (Ver)</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Bookmark className="w-3 h-3 text-amber-600" />
+                                    <span>
+                                      {savingExtId === item.external_id
+                                        ? "Salvando..."
+                                        : "Salvar p/ Criar"}
+                                    </span>
+                                  </>
+                                )}
                               </button>
 
                               <button
@@ -1120,7 +1283,7 @@ export function CompetitorStoresSubTab() {
                                     rating: item.rating,
                                   });
                                 }}
-                                className="text-[10px] text-slate-500 hover:text-slate-800 font-semibold hover:underline"
+                                className="text-[10px] text-slate-500 hover:text-slate-800 font-semibold hover:underline cursor-pointer"
                               >
                                 Monitorar no Radar 1:N
                               </button>
@@ -1135,6 +1298,19 @@ export function CompetitorStoresSubTab() {
             )}
           </div>
         </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* VISÃO 3: ANÚNCIOS SALVOS PARA ANALISAR & CRIAR (OPPORTUNITIES) */}
+      {/* ========================================================================= */}
+      {activeView === "saved" && (
+        <SavedOpportunitiesView
+          externalToast={showToast}
+          onCountChange={({ total, pending, created, savedExternalIds: extSet }) => {
+            setSavedCounts({ total, pending, created });
+            setSavedExternalIds(extSet);
+          }}
+        />
       )}
 
       {/* Modal de Criação / Clonagem do Anúncio */}
