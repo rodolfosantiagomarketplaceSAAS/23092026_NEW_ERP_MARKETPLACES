@@ -91,24 +91,42 @@ export async function GET(request: Request) {
     const allItems = await listSavedOpportunityListings();
 
     // Auto-heal: se algum anúncio salvo anteriormente ficou com "Passo Fundo - RS" (endereço do comprador)
-    // ou sem localização, corrige consultando o endereço real do vendedor na API do ML
+    // ou com data de criação da imagem em vez da data oficial do anúncio, corrige consultando a API do ML
     await Promise.all(
       allItems.map(async (item) => {
-        if (
-          item.platform === "mercadolivre" &&
-          (!item.seller_location ||
-            item.seller_location.toLowerCase().includes("passo fundo"))
-        ) {
-          const realLoc = await resolveMlSellerRealLocation(
-            null,
-            null,
-            item.seller_name
-          );
-          if (realLoc && realLoc !== item.seller_location) {
-            item.seller_location = realLoc;
+        if (item.platform === "mercadolivre") {
+          let changed = false;
+          if (
+            !item.seller_location ||
+            item.seller_location.toLowerCase().includes("passo fundo")
+          ) {
+            const realLoc = await resolveMlSellerRealLocation(
+              null,
+              null,
+              item.seller_name
+            );
+            if (realLoc && realLoc !== item.seller_location) {
+              item.seller_location = realLoc;
+              changed = true;
+            }
+          }
+
+          if (/^MLB\d{9,12}$/i.test(item.external_id)) {
+            const officialDate = await refineMlCreationDateFromImage(
+              item.external_id,
+              item.thumbnail_url
+            ).catch(() => null);
+            if (officialDate && officialDate !== item.listing_created_at) {
+              item.listing_created_at = officialDate;
+              changed = true;
+            }
+          }
+
+          if (changed) {
             await upsertSavedOpportunityListing({
               ...item,
-              seller_location: realLoc,
+              seller_location: item.seller_location,
+              listing_created_at: item.listing_created_at,
             }).catch(() => null);
           }
         }
@@ -292,11 +310,14 @@ export async function POST(request: Request) {
 
     let listingCreatedAt: string | null =
       body.listing_created_at || scraped.listing_created_at || null;
-    if (!listingCreatedAt && platform === "mercadolivre") {
-      listingCreatedAt = await refineMlCreationDateFromImage(
+    if (platform === "mercadolivre") {
+      const officialDate = await refineMlCreationDateFromImage(
         externalId,
         thumbnailUrl
       ).catch(() => estimateMlCreationDate(externalId, thumbnailUrl));
+      if (officialDate) {
+        listingCreatedAt = officialDate;
+      }
     }
 
     const shippingType = String(

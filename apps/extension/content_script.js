@@ -210,12 +210,19 @@
     [1000000001, 1520000000],
     [2000000001, 1630000000],
     [3000000001, 1672531200],
-    [3500000001, 1717200000],
-    [4000000001, 1747267200],
+    [3500000001, 1704067200],
+    [3604088865, 1708614317],
+    [3677706001, 1714672144],
+    [3775570601, 1720721286],
+    [3870433327, 1728306310],
+    [3878354037, 1729017450],
+    [4000000001, 1740000000],
+    [4405079191, 1767714028],
     [4473157969, 1770897600],
+    [4516465031, 1773081053],
     [4680140101, 1778774182],
     [4729260091, 1780401600],
-    [4907118005, 1784289600],
+    [4907118005, 1784298505],
     [4949688649, 1785118614],
     [5007001935, 1786033623],
     [5049362965, 1786580776],
@@ -224,10 +231,11 @@
     [5180213341, 1788400367],
     [5215384915, 1789056122],
     [5261622325, 1789846455],
+    [5281070631, 1790166636],
     [5309734189, 1790683356],
     [5342125297, 1791301373],
     [5371657083, 1791737346],
-    [5390836089, 1791980576],
+    [5390836089, 1791979815],
     [5392217295, 1791993935],
     [5425017267, 1792428203],
     [5451861735, 1792759331],
@@ -235,11 +243,23 @@
   ];
 
   const EVEN_MLB_ANCHORS = [
-    [4000000000, 1715000000],
-    [5302227582, 1740744000],
+    [4000000000, 1692000000],
+    [4057151224, 1695323882],
+    [4239931650, 1701085623],
+    [4323562446, 1703681117],
+    [4440840978, 1707647181],
+    [5279238968, 1738893724],
+    [5302227582, 1740690198],
+    [5478913174, 1751758357],
+    [5803698714, 1760521760],
+    [5933540874, 1763057982],
+    [6168219740, 1772019365],
+    [6257283512, 1772400000],
+    [6662209498, 1776978982],
     [6776418892, 1778775181],
-    [6936719092, 1781092800],
-    [7071688620, 1782907200],
+    [6936719092, 1781103327],
+    [7032025666, 1782369862],
+    [7071688620, 1782920858],
     [7136348316, 1783638496],
     [7259550226, 1785118538],
     [7349483204, 1786059234],
@@ -251,6 +271,7 @@
     [7669930830, 1789847705],
     [7721699724, 1790681669],
     [7757951996, 1791302312],
+    [7777671248, 1791565814],
     [7790395684, 1791740343],
     [7819244990, 1792079149],
     [7846016296, 1792426830],
@@ -260,25 +281,12 @@
 
   function interpolateMlbCreationDate(externalId, thumbnailUrl = null) {
     try {
-      let imgMonthYear = null;
-      if (thumbnailUrl) {
-        const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
-        if (imgDateMatch) {
-          const month = parseInt(imgDateMatch[1], 10);
-          const year = parseInt(imgDateMatch[2], 10);
-          if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
-            const startOfMonthMs = new Date(Date.UTC(year, month - 1, 1, 0, 0, 0)).getTime();
-            const endOfMonthMs = new Date(Date.UTC(year, month, 0, 12, 0, 0)).getTime();
-            const defaultMs = Math.min(endOfMonthMs, Date.now());
-            imgMonthYear = { month, year, startOfMonthMs, endOfMonthMs, defaultMs };
-          }
-        }
-      }
-
       const m = String(externalId || "").match(/MLB(?!U)-?(\d{8,12})/i);
       if (m) {
         const num = parseInt(m[1], 10);
-        if (!isNaN(num) && num >= 500000000) {
+        // IDs reais de anúncios MLB possuem 9 ou 10 dígitos (>= 1.000.000.000).
+        // IDs de 8 dígitos (ex: MLB19582312) são códigos de produto de catálogo (/p/MLB...).
+        if (!isNaN(num) && num >= 1000000000) {
           const anchors = num % 2 === 0 && num >= 4000000000 ? EVEN_MLB_ANCHORS : ODD_MLB_ANCHORS;
           let sec = 0;
 
@@ -304,21 +312,23 @@
           const nowSec = Math.floor(Date.now() / 1000);
           const clamped = Math.min(Math.round(sec), nowSec);
           if (clamped > 1200000000) {
-            const interpMs = clamped * 1000;
-            if (
-              imgMonthYear &&
-              (interpMs > imgMonthYear.endOfMonthMs + 30 * 86400000 ||
-                interpMs < imgMonthYear.startOfMonthMs - 15 * 86400000)
-            ) {
-              return new Date(imgMonthYear.defaultMs).toISOString();
-            }
-            return new Date(interpMs).toISOString();
+            return new Date(clamped * 1000).toISOString();
           }
         }
       }
 
-      if (imgMonthYear) {
-        return new Date(imgMonthYear.defaultMs).toISOString();
+      // Fallback apenas para itens de catálogo puro (MLBU ou MLB de 8 dígitos) sem ID de anúncio de 10 dígitos
+      if (thumbnailUrl) {
+        const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
+        if (imgDateMatch) {
+          const month = parseInt(imgDateMatch[1], 10);
+          const year = parseInt(imgDateMatch[2], 10);
+          if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+            const endOfMonthMs = new Date(Date.UTC(year, month, 0, 12, 0, 0)).getTime();
+            const defaultMs = Math.min(endOfMonthMs, Date.now());
+            return new Date(defaultMs).toISOString();
+          }
+        }
       }
     } catch {}
     return null;
@@ -431,61 +441,66 @@
   }
 
   /**
-   * Refina a data de criação consultando o cabeçalho HTTP Last-Modified da imagem no mlstatic.com
-   * e tenta resolver a localização do concorrente na página de perfil/loja se ainda não detectada.
+   * Refina a localização/seller_id do concorrente na página da loja e só usa Last-Modified da imagem
+   * caso o anúncio não possua um ID de anúncio MLB de 9-12 dígitos (ex: página de catálogo MLBU pura).
+   * IMPORTANTE: Jamais sobrescreve a data de um ID MLB válido com Last-Modified da foto de capa,
+   * pois vendedores frequentemente trocam a foto de capa meses depois de criar o anúncio!
    */
   async function refineMlCreationDateAsync(data) {
     if (!data || data.platform !== "mercadolivre") return data;
     try {
-      // Seleciona a imagem com o sufixo _MMYYYY mais antigo da galeria ou thumbnail principal
-      let candidateUrls = [];
-      if (Array.isArray(data.pictures)) {
-        for (const p of data.pictures) {
-          const u = p?.originalUrl || p?.primaryUrl || (typeof p === "string" ? p : null);
-          if (u && u.includes("mlstatic.com")) candidateUrls.push(u);
-        }
-      }
-      const fallbackImg =
-        data.thumbnail_url ||
-        document.querySelector('meta[property="og:image"]')?.getAttribute("content") ||
-        document.querySelector(".ui-pdp-gallery__figure img")?.getAttribute("src");
-      if (fallbackImg && fallbackImg.includes("mlstatic.com")) {
-        candidateUrls.unshift(fallbackImg);
-      }
+      const targetId = String(data.resolved_item_id || data.external_id || "");
+      const hasValidMlbListingId = /^MLB-?\d{9,12}$/i.test(targetId);
 
-      let bestImgUrl = candidateUrls[0] || null;
-      let earliestYm = 999999;
-      for (const u of candidateUrls) {
-        const ymMatch = String(u).match(/_(\d{2})(20\d{2})-/);
-        if (ymMatch) {
-          const ymVal = parseInt(ymMatch[2], 10) * 100 + parseInt(ymMatch[1], 10);
-          if (ymVal < earliestYm) {
-            earliestYm = ymVal;
-            bestImgUrl = u;
+      if (!data.listing_created_at && !hasValidMlbListingId) {
+        let candidateUrls = [];
+        if (Array.isArray(data.pictures)) {
+          for (const p of data.pictures) {
+            const u = p?.originalUrl || p?.primaryUrl || (typeof p === "string" ? p : null);
+            if (u && u.includes("mlstatic.com")) candidateUrls.push(u);
           }
         }
-      }
+        const fallbackImg =
+          data.thumbnail_url ||
+          document.querySelector('meta[property="og:image"]')?.getAttribute("content") ||
+          document.querySelector(".ui-pdp-gallery__figure img")?.getAttribute("src");
+        if (fallbackImg && fallbackImg.includes("mlstatic.com")) {
+          candidateUrls.unshift(fallbackImg);
+        }
 
-      if (bestImgUrl && bestImgUrl.includes("mlstatic.com")) {
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 1400);
-        const res = await fetch(bestImgUrl.replace(/^http:\/\//i, "https://"), {
-          method: "GET",
-          headers: { Range: "bytes=0-1" },
-          signal: controller.signal,
-        }).catch(() => null);
-        clearTimeout(timer);
+        let bestImgUrl = candidateUrls[0] || null;
+        let earliestYm = 999999;
+        for (const u of candidateUrls) {
+          const ymMatch = String(u).match(/_(\d{2})(20\d{2})-/);
+          if (ymMatch) {
+            const ymVal = parseInt(ymMatch[2], 10) * 100 + parseInt(ymMatch[1], 10);
+            if (ymVal < earliestYm) {
+              earliestYm = ymVal;
+              bestImgUrl = u;
+            }
+          }
+        }
 
-        const lastMod = res?.headers?.get("last-modified");
-        if (lastMod) {
-          const imgDate = new Date(lastMod);
-          if (
-            !isNaN(imgDate.getTime()) &&
-            imgDate.getFullYear() >= 2015 &&
-            imgDate.getTime() <= Date.now() + 86400000
-          ) {
-            // O cabeçalho Last-Modified da imagem no mlstatic.com reflete a data exata de upload da foto do anúncio
-            data.listing_created_at = imgDate.toISOString();
+        if (bestImgUrl && bestImgUrl.includes("mlstatic.com")) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 1400);
+          const res = await fetch(bestImgUrl.replace(/^http:\/\//i, "https://"), {
+            method: "GET",
+            headers: { Range: "bytes=0-1" },
+            signal: controller.signal,
+          }).catch(() => null);
+          clearTimeout(timer);
+
+          const lastMod = res?.headers?.get("last-modified");
+          if (lastMod) {
+            const imgDate = new Date(lastMod);
+            if (
+              !isNaN(imgDate.getTime()) &&
+              imgDate.getFullYear() >= 2015 &&
+              imgDate.getTime() <= Date.now() + 86400000
+            ) {
+              data.listing_created_at = imgDate.toISOString();
+            }
           }
         }
       }
@@ -1212,13 +1227,23 @@
     let permalink = canonical.split("?")[0];
     permalink = normalizeUrl(permalink) || window.location.href.split("?")[0];
 
-    // 10. Vendas e Data de Criação
-    const salesCount = extractMlSalesCount();
-    const creationDate = extractMlCreationDate(externalId, thumbnailUrl);
-
-    // 11. Tipo de Anúncio (Clássico vs Premium), Categoria, Tarifa ML e Frete
-    let listingType = "gold_special"; // Clássico por padrão
+    // 10. Identifica item_id real mesmo em páginas de catálogo (/p/MLB...) antes de calcular a data
     const scriptsText = bodyHtml;
+    let resolvedItemId = externalId;
+    const urlItemMatch =
+      window.location.href.match(/item_id[:=](MLB-?\d{9,12})/i) ||
+      window.location.href.match(/[?&]wid=(MLB-?\d{9,12})/i) ||
+      scriptsText.match(/"item_id"\s*:\s*"(MLB\d{9,12})"/i);
+    if (urlItemMatch && urlItemMatch[1]) {
+      resolvedItemId = urlItemMatch[1].replace("-", "").toUpperCase();
+    }
+
+    // 11. Vendas e Data de Criação
+    const salesCount = extractMlSalesCount();
+    const creationDate = extractMlCreationDate(resolvedItemId || externalId, thumbnailUrl);
+
+    // 12. Tipo de Anúncio (Clássico vs Premium), Categoria, Tarifa ML e Frete
+    let listingType = "gold_special"; // Clássico por padrão
     const scriptListingTypeMatch = scriptsText.match(/"listing_type_id"\s*:\s*"(gold_pro|gold_special)"/i);
     if (scriptListingTypeMatch) {
       listingType = scriptListingTypeMatch[1].toLowerCase();
@@ -1265,16 +1290,6 @@
     const sellerLocation = extractMlSellerLocation(scriptsText);
     const weightGrams = extractMlProductWeightGrams(title, scriptsText);
     let shippingCost = estimateMlShippingByPriceAndWeight(currentPrice, weightGrams);
-
-    // Identifica item_id real mesmo em páginas de catálogo (/p/MLB...)
-    let resolvedItemId = externalId;
-    const urlItemMatch =
-      window.location.href.match(/item_id[:=](MLB-?\d+)/i) ||
-      window.location.href.match(/[?&]wid=(MLB-?\d+)/i) ||
-      scriptsText.match(/"item_id"\s*:\s*"(MLB\d+)"/i);
-    if (urlItemMatch && urlItemMatch[1]) {
-      resolvedItemId = urlItemMatch[1].replace("-", "").toUpperCase();
-    }
 
     // Se houver informação explícita de Tarifa/Frete já renderizada no DOM, aproveita os valores exatos
     let feeFromDom = false;

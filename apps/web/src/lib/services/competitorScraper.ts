@@ -456,12 +456,19 @@ const ODD_MLB_ANCHORS: [number, number][] = [
   [1000000001, 1520000000],
   [2000000001, 1630000000],
   [3000000001, 1672531200],
-  [3500000001, 1717200000],
-  [4000000001, 1747267200],
+  [3500000001, 1704067200],
+  [3604088865, 1708614317],
+  [3677706001, 1714672144],
+  [3775570601, 1720721286],
+  [3870433327, 1728306310],
+  [3878354037, 1729017450],
+  [4000000001, 1740000000],
+  [4405079191, 1767714028],
   [4473157969, 1770897600],
+  [4516465031, 1773081053],
   [4680140101, 1778774182],
   [4729260091, 1780401600],
-  [4907118005, 1784289600],
+  [4907118005, 1784298505],
   [4949688649, 1785118614],
   [5007001935, 1786033623],
   [5049362965, 1786580776],
@@ -470,10 +477,11 @@ const ODD_MLB_ANCHORS: [number, number][] = [
   [5180213341, 1788400367],
   [5215384915, 1789056122],
   [5261622325, 1789846455],
+  [5281070631, 1790166636],
   [5309734189, 1790683356],
   [5342125297, 1791301373],
   [5371657083, 1791737346],
-  [5390836089, 1791980576],
+  [5390836089, 1791979815],
   [5392217295, 1791993935],
   [5425017267, 1792428203],
   [5451861735, 1792759331],
@@ -481,11 +489,23 @@ const ODD_MLB_ANCHORS: [number, number][] = [
 ];
 
 const EVEN_MLB_ANCHORS: [number, number][] = [
-  [4000000000, 1715000000],
-  [5302227582, 1740744000],
+  [4000000000, 1692000000],
+  [4057151224, 1695323882],
+  [4239931650, 1701085623],
+  [4323562446, 1703681117],
+  [4440840978, 1707647181],
+  [5279238968, 1738893724],
+  [5302227582, 1740690198],
+  [5478913174, 1751758357],
+  [5803698714, 1760521760],
+  [5933540874, 1763057982],
+  [6168219740, 1772019365],
+  [6257283512, 1772400000],
+  [6662209498, 1776978982],
   [6776418892, 1778775181],
-  [6936719092, 1781092800],
-  [7071688620, 1782907200],
+  [6936719092, 1781103327],
+  [7032025666, 1782369862],
+  [7071688620, 1782920858],
   [7136348316, 1783638496],
   [7259550226, 1785118538],
   [7349483204, 1786059234],
@@ -497,6 +517,7 @@ const EVEN_MLB_ANCHORS: [number, number][] = [
   [7669930830, 1789847705],
   [7721699724, 1790681669],
   [7757951996, 1791302312],
+  [7777671248, 1791565814],
   [7790395684, 1791740343],
   [7819244990, 1792079149],
   [7846016296, 1792426830],
@@ -507,8 +528,8 @@ const EVEN_MLB_ANCHORS: [number, number][] = [
 /**
  * Estima a data real de criação de um anúncio do Mercado Livre via:
  * 1) JSON/DOM no HTML (startTime / date_created / Publicado há X dias)
- * 2) Interpolação Dual-Shard do ID MLB (Ímpar / Par) validada contra o sufixo _MMYYYY da foto
- * 3) Sufixo _MMYYYY da URL da foto no mlstatic.com
+ * 2) Interpolação Dual-Shard do ID MLB de 9-12 dígitos (Ímpar / Par)
+ * 3) Sufixo _MMYYYY da URL da foto no mlstatic.com (apenas para itens de catálogo MLBU sem ID MLB de 10 dígitos)
  */
 export function estimateMlCreationDate(
   externalIdOrUrl?: string | null,
@@ -544,32 +565,11 @@ export function estimateMlCreationDate(
     }
   }
 
-  let imgMonthYear: {
-    month: number;
-    year: number;
-    startOfMonthMs: number;
-    endOfMonthMs: number;
-    defaultMs: number;
-  } | null = null;
-  if (thumbnailUrl) {
-    const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
-    if (imgDateMatch) {
-      const month = parseInt(imgDateMatch[1], 10);
-      const year = parseInt(imgDateMatch[2], 10);
-      if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
-        const startOfMonthMs = new Date(Date.UTC(year, month - 1, 1, 12, 0, 0)).getTime();
-        const endOfMonthMs = new Date(Date.UTC(year, month, 0, 12, 0, 0)).getTime();
-        const midMonthMs = new Date(Date.UTC(year, month - 1, 15, 12, 0, 0)).getTime();
-        const defaultMs = Math.min(midMonthMs, Date.now());
-        imgMonthYear = { month, year, startOfMonthMs, endOfMonthMs, defaultMs };
-      }
-    }
-  }
-
   const m = String(externalIdOrUrl || "").match(/MLB(?!U)-?(\d{8,12})/i);
   if (m) {
     const num = parseInt(m[1], 10);
-    if (!isNaN(num) && num >= 500000000) {
+    // IDs reais de anúncios MLB possuem 9 ou 10 dígitos (>= 1.000.000.000)
+    if (!isNaN(num) && num >= 1000000000) {
       const anchors =
         num % 2 === 0 && num >= 4000000000 ? EVEN_MLB_ANCHORS : ODD_MLB_ANCHORS;
       let sec = 0;
@@ -596,38 +596,80 @@ export function estimateMlCreationDate(
       const nowSec = Math.floor(Date.now() / 1000);
       const clamped = Math.min(Math.round(sec), nowSec);
       if (clamped > 1200000000) {
-        const interpMs = clamped * 1000;
-        // Se a URL da foto possui _MMYYYY fora da janela da interpolação (antes ou depois),
-        // respeita o mês/ano real de upload da foto no mlstatic.com
-        if (
-          imgMonthYear &&
-          (interpMs > imgMonthYear.endOfMonthMs + 30 * 86400000 ||
-            interpMs < imgMonthYear.startOfMonthMs - 15 * 86400000)
-        ) {
-          return new Date(imgMonthYear.defaultMs).toISOString();
-        }
-        return new Date(interpMs).toISOString();
+        return new Date(clamped * 1000).toISOString();
       }
     }
   }
 
-  if (imgMonthYear) {
-    return new Date(imgMonthYear.defaultMs).toISOString();
+  // Fallback para páginas de catálogo (MLBU ou MLB de 8 dígitos) sem ID de anúncio de 10 dígitos
+  if (thumbnailUrl) {
+    const imgDateMatch = String(thumbnailUrl).match(/_(\d{2})(20\d{2})-/);
+    if (imgDateMatch) {
+      const month = parseInt(imgDateMatch[1], 10);
+      const year = parseInt(imgDateMatch[2], 10);
+      if (month >= 1 && month <= 12 && year >= 2015 && year <= 2030) {
+        const midMonthMs = new Date(Date.UTC(year, month - 1, 15, 12, 0, 0)).getTime();
+        const defaultMs = Math.min(midMonthMs, Date.now());
+        return new Date(defaultMs).toISOString();
+      }
+    }
   }
 
   return null;
 }
 
 /**
- * Refina a data de criação consultando o header Last-Modified da imagem no http2.mlstatic.com
- * O timestamp HTTP Last-Modified do CDN do Mercado Livre é o momento exato do upload da foto pelo vendedor.
+ * Resolve a data oficial de criação do anúncio do Mercado Livre:
+ * 1) Consulta o endpoint oficial `GET https://api.mercadolibre.com/items/{id}/description`,
+ *    que retorna `date_created` exato (ao milissegundo) para QUALQUER anúncio de concorrente (200 OK).
+ * 2) Caso o anúncio não possua descrição (404), usa a interpolação Dual-Shard calibrada do ID MLB.
+ * 3) Só usa `Last-Modified` da imagem caso não exista ID MLB de 9-12 dígitos (ex: MLBU puro).
  */
 export async function refineMlCreationDateFromImage(
   externalIdOrUrl?: string | null,
   thumbnailUrl?: string | null,
   html?: string | null
 ): Promise<string | null> {
+  const mlbMatch = String(externalIdOrUrl || "").match(/MLB(?!U)-?(\d{9,12})/i);
+  const normalizedMlbId = mlbMatch ? `MLB${mlbMatch[1]}` : "";
+
+  if (normalizedMlbId) {
+    try {
+      const token = await resolveAnyActiveMlToken();
+      if (token) {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 2200);
+        const descRes = await fetch(
+          `https://api.mercadolibre.com/items/${normalizedMlbId}/description`,
+          {
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: "application/json",
+            },
+            cache: "no-store",
+            signal: controller.signal,
+          }
+        ).catch(() => null);
+        clearTimeout(timer);
+
+        if (descRes && descRes.ok) {
+          const descData = await descRes.json().catch(() => null);
+          if (descData?.date_created) {
+            const d = new Date(descData.date_created);
+            if (!isNaN(d.getTime()) && d.getFullYear() >= 2015) {
+              return d.toISOString();
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+
   const baseEst = estimateMlCreationDate(externalIdOrUrl, thumbnailUrl, html);
+  if (baseEst || normalizedMlbId) {
+    return baseEst;
+  }
+
   if (!thumbnailUrl || !thumbnailUrl.includes("mlstatic.com")) {
     return baseEst;
   }

@@ -218,10 +218,11 @@ export async function GET(req: NextRequest) {
     const itemMatch = rawItemId.match(/MLB-?(\d+)/i);
     const normalizedItemId = itemMatch ? `MLB${itemMatch[1]}` : "";
 
-    // Refina data de criação pela imagem no CDN mlstatic.com em paralelo
-    const refinedDatePromise = thumbnailUrl
-      ? refineMlCreationDateFromImage(normalizedItemId, thumbnailUrl).catch(() => null)
-      : Promise.resolve(null);
+    // Refina data de criação oficial (/items/{id}/description + interpolação Dual-Shard MLB) em paralelo
+    const refinedDatePromise =
+      normalizedItemId || thumbnailUrl
+        ? refineMlCreationDateFromImage(normalizedItemId, thumbnailUrl).catch(() => null)
+        : Promise.resolve(null);
 
     const authUser = await resolveRequestUser(req).catch(() => null);
     const accessToken = await resolveAnyActiveMlToken(authUser?.id || null, null);
@@ -277,10 +278,24 @@ export async function GET(req: NextRequest) {
 
     if (normalizedItemId) {
       try {
-        const itemRes = await fetch(
-          `https://api.mercadolibre.com/items/${normalizedItemId}`,
-          { headers, cache: "no-store" }
-        ).catch(() => null);
+        const [itemRes, descRes] = await Promise.all([
+          fetch(`https://api.mercadolibre.com/items/${normalizedItemId}`, {
+            headers,
+            cache: "no-store",
+          }).catch(() => null),
+          fetch(`https://api.mercadolibre.com/items/${normalizedItemId}/description`, {
+            headers,
+            cache: "no-store",
+          }).catch(() => null),
+        ]);
+
+        if (descRes && descRes.ok) {
+          const descData = await descRes.json().catch(() => null);
+          if (descData?.date_created) {
+            apiCreatedAt = String(descData.date_created);
+          }
+        }
+
         if (itemRes && itemRes.ok) {
           const itemData = await itemRes.json().catch(() => null);
           if (itemData) {
@@ -290,7 +305,7 @@ export async function GET(req: NextRequest) {
             if (itemData.seller_id && !competitorSellerId) {
               competitorSellerId = String(itemData.seller_id);
             }
-            if (itemData.date_created || itemData.start_time) {
+            if (!apiCreatedAt && (itemData.date_created || itemData.start_time)) {
               apiCreatedAt = itemData.date_created || itemData.start_time;
             }
             const city = itemData.seller_address?.city?.name;
