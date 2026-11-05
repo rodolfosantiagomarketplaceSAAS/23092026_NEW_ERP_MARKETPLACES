@@ -776,7 +776,16 @@ export function CompetitorStoresSubTab({
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {stores.map((store) => (
+              {stores.map((store) => {
+                const displayName = (store.store_name || "Loja Concorrente")
+                  .replace(/^\s*\(\d+\+?\)\s*/i, "")
+                  .trim();
+                const initials = (displayName || store.seller_nickname || "CO")
+                  .replace(/[^a-zA-Z0-9]/g, "")
+                  .slice(0, 2)
+                  .toUpperCase() || "CO";
+
+                return (
                 <div
                   key={store.id}
                   className="bg-white rounded-xl border border-slate-200/90 shadow-2xs hover:shadow-md hover:border-indigo-200 transition-all flex flex-col justify-between overflow-hidden group"
@@ -786,11 +795,11 @@ export function CompetitorStoresSubTab({
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex items-center gap-2">
                         <div className="w-10 h-10 rounded-xl bg-slate-100 border border-slate-200 flex items-center justify-center text-slate-700 font-black text-sm group-hover:bg-indigo-50 group-hover:text-indigo-600 transition-colors">
-                          {store.store_name.slice(0, 2).toUpperCase()}
+                          {initials}
                         </div>
                         <div>
                           <h4 className="font-bold text-slate-900 text-sm tracking-tight leading-tight group-hover:text-indigo-600 transition-colors">
-                            {store.store_name}
+                            {displayName}
                           </h4>
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <span className="text-[10px] font-bold px-1.5 py-0.2 rounded-full bg-slate-100 text-slate-700 border border-slate-200">
@@ -904,7 +913,8 @@ export function CompetitorStoresSubTab({
                     </button>
                   </div>
                 </div>
-              ))}
+              );
+              })}
             </div>
           )}
         </div>

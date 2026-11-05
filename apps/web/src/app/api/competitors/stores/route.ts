@@ -58,27 +58,44 @@ export async function GET(req: NextRequest) {
       stores = getMemoryStores();
     }
 
-    // Auto-heal stores whose store_name is still the raw URL slug (e.g. CARVIDROSOM -> CARI-SOM, NUSTRINKSSTOREPREMIUM -> HELIX SHIELD)
+    // Auto-heal stores whose store_name is generic, raw URL slug, or contains notification badges (e.g. "(9+) ")
     await Promise.all(
       stores.map(async (s: any) => {
+        const rawName = s.store_name || "";
+        const cleanedBadgeName = rawName.replace(/^\s*\(\d+\+?\)\s*/i, "").trim();
+        const hasNotificationBadge = cleanedBadgeName !== rawName;
+        const isGeneric = isSlugOrGenericStoreName(cleanedBadgeName, s.store_url);
+
         if (
           (s.platform === "mercadolivre" || !s.platform) &&
           s.store_url &&
-          isSlugOrGenericStoreName(s.store_name, s.store_url)
+          (isGeneric || hasNotificationBadge || !s.seller_nickname)
         ) {
-          const resolved = await resolveMercadoLivreStoreName(s.store_url, s.store_name);
-          if (resolved.storeName && resolved.storeName !== s.store_name) {
-            s.store_name = resolved.storeName;
-            if (!s.seller_nickname && resolved.sellerNickname) {
-              s.seller_nickname = resolved.sellerNickname;
-            }
-            updateMemoryStore(s.id, { store_name: resolved.storeName });
+          const resolved = await resolveMercadoLivreStoreName(
+            s.store_url,
+            cleanedBadgeName,
+            undefined,
+            s.seller_id
+          );
+
+          let finalName = resolved.storeName;
+          if (!finalName || isSlugOrGenericStoreName(finalName, null)) {
+            finalName = hasNotificationBadge ? cleanedBadgeName : s.store_name;
+          }
+
+          const finalNickname = s.seller_nickname || resolved.sellerNickname || null;
+
+          if (finalName !== s.store_name || finalNickname !== s.seller_nickname) {
+            s.store_name = finalName;
+            if (finalNickname) s.seller_nickname = finalNickname;
+
+            updateMemoryStore(s.id, { store_name: finalName });
             try {
               await supabase
                 .from("competitor_stores")
                 .update({
-                  store_name: resolved.storeName,
-                  ...(resolved.sellerNickname ? { seller_nickname: resolved.sellerNickname } : {}),
+                  store_name: finalName,
+                  ...(finalNickname ? { seller_nickname: finalNickname } : {}),
                   updated_at: new Date().toISOString(),
                 })
                 .eq("id", s.id);

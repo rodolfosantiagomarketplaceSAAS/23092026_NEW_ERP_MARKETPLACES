@@ -190,42 +190,79 @@ export function parsePrice(val: unknown): number {
 export function cleanSellerName(raw?: string | null): string {
   if (!raw) return "Concorrente";
   const cleaned = String(raw)
+    .replace(/^\s*\(\d+\+?\)\s*/i, "") // Remove badges de notificação da aba (ex: "(9+) Loja")
     .replace(/^(Vendido\s+por|Loja\s+oficial|Loja:?|Por)\s+/i, "")
+    .replace(/^(?:Mais\s+)?An[uú]ncios?\s+(?:do\s+vendedor|da\s+loja)\s*:?\s*/i, "")
+    .replace(/^Produtos?\s+(?:do\s+vendedor|da\s+loja)\s*:?\s*/i, "")
+    .replace(/^Publicaci[oó]n(?:es)?\s+del\s+vendedor\s*:?\s*/i, "")
     .replace(/\s*\|\s*P[áa]gina\s+do\s+vendedor.*$/i, "")
     .replace(/\s+em\s+Mercado\s+Li[vb]re.*$/i, "")
     .replace(/\s*\|\s*Mercado\s+Li[vb]re.*$/i, "")
+    .replace(/\s*-\s*Mercado\s+Li[vb]re.*$/i, "")
+    .replace(/\s*no\s+Mercado\s+Li[vb]re.*$/i, "")
+    .replace(/\s*em\s+um\s+s[óo]\s+lugar.*$/i, "")
     .replace(/\s+/g, " ")
     .trim();
   return cleaned || "Concorrente";
 }
 
 /**
- * Extrai o slug da URL da loja do Mercado Livre (/pagina/<slug>, /loja/<slug>, /perfil/<slug>)
+ * Extrai o slug da URL da loja do Mercado Livre (/pagina/<slug>, /loja/<slug>, /perfil/<slug>, eshops.<domain>/<slug>)
  */
 export function extractStoreSlugFromUrl(storeUrl?: string | null): string | null {
   if (!storeUrl) return null;
   const match = String(storeUrl).match(/\/(?:pagina|loja|perfil)\/([^/?#]+)/i);
-  if (!match?.[1]) return null;
-  return decodeURIComponent(match[1]).replace(/_Desde_\d+.*$/i, "").trim() || null;
+  if (match?.[1]) {
+    return decodeURIComponent(match[1]).replace(/_Desde_\d+.*$/i, "").trim() || null;
+  }
+  // Subdomínio eshops ou loja
+  const eshopMatch = String(storeUrl).match(/eshops\.mercadolivre\.com\.br\/([^/?#]+)/i);
+  if (eshopMatch?.[1]) {
+    return decodeURIComponent(eshopMatch[1]).replace(/_Desde_\d+.*$/i, "").trim() || null;
+  }
+  return null;
+}
+
+/**
+ * Extrai o ID do vendedor (seller_id / CustId) a partir da URL da loja ou permalink
+ */
+export function extractSellerIdFromUrl(storeUrl?: string | null): string | null {
+  if (!storeUrl) return null;
+  const match =
+    String(storeUrl).match(/_CustId_(\d+)/i) ||
+    String(storeUrl).match(/[?&](?:seller_id|client_id)=(\d+)/i);
+  return match?.[1] || null;
 }
 
 /**
  * Verifica se o nome da loja é apenas o slug da URL (ex: "CARVIDROSOM" para "/pagina/carvidrosom")
- * ou um nome genérico de fallback.
+ * ou um nome genérico de fallback / cabeçalho padrão de listagem (ex: "Concorrente Mercado Livre").
  */
 export function isSlugOrGenericStoreName(
   storeName?: string | null,
   storeUrl?: string | null
 ): boolean {
   const name = (storeName || "").trim();
-  if (!name) return true;
+  if (!name || name.length < 2) return true;
+
+  // 1. Termos genéricos conhecidos (incluindo "Concorrente Mercado Livre")
   if (
-    /^(loja\s+concorrente|vendedor\s+mercado\s+livre|mercado\s+li[vb]re|concorrente|loja\s+oficial)$/i.test(
+    /concorrente/i.test(name) ||
+    /mercado\s*li[vb]re/i.test(name) ||
+    /vendedor/i.test(name) ||
+    /^(loja|loja\s+oficial|produtos|pagina|página|resultado|resultados|busca|loja\s+concorrente)$/i.test(
       name
-    )
+    ) ||
+    /an[uú]ncios?\s+(do\s+vendedor|da\s+loja|deste\s+vendedor)/i.test(name) ||
+    /produtos?\s+(do\s+vendedor|da\s+loja)/i.test(name) ||
+    /publicaci[oó]n(?:es)?\s+del\s+vendedor/i.test(name) ||
+    /frete\s+gr[áa]tis/i.test(name) ||
+    /parcelamento\s+sem\s+juros/i.test(name)
   ) {
     return true;
   }
+
+  // 2. Slug puro
   const slug = extractStoreSlugFromUrl(storeUrl);
   if (slug) {
     const normName = name.toLowerCase().replace(/[\s\-_]/g, "");
@@ -236,16 +273,19 @@ export function isSlugOrGenericStoreName(
 }
 
 /**
- * Resolve o nome comercial real da loja no Mercado Livre consultando a página pública
- * https://www.mercadolivre.com.br/pagina/<slug> (ou /loja/<slug>, /perfil/<slug>)
- * quando o nome capturado for apenas o slug da URL (ex: CARVIDROSOM -> CARI-SOM, NUSTRINKSSTOREPREMIUM -> HELIX SHIELD).
+ * Resolve o nome comercial real da loja no Mercado Livre:
+ * 1) Consultando o endpoint oficial de usuário do ML se tiver seller_id (ex: /users/209930438 -> eshop_nome ou nickname)
+ * 2) Consultando a página pública https://www.mercadolivre.com.br/pagina/<slug> (ou /loja/<slug>, /perfil/<slug>)
+ * 3) Extraindo de itens com seller_name preenchido
  */
 export async function resolveMercadoLivreStoreName(
   storeUrl?: string | null,
   currentStoreName?: string | null,
-  items?: Array<{ seller_name?: string | null }>
+  items?: Array<{ seller_name?: string | null }>,
+  sellerId?: string | null
 ): Promise<{ storeName: string; sellerNickname: string | null }> {
-  const slug = extractStoreSlugFromUrl(storeUrl);
+  let slug = extractStoreSlugFromUrl(storeUrl);
+  const resolvedSellerId = sellerId || extractSellerIdFromUrl(storeUrl);
   const cleanedCurrent = cleanSellerName(currentStoreName);
 
   // Se já temos um nome real que não é o slug nem genérico, preserva
@@ -256,7 +296,41 @@ export async function resolveMercadoLivreStoreName(
     };
   }
 
-  // 1. Tenta consultar a vitrine pública www.mercadolivre.com.br/pagina/<slug>
+  // 1. Tenta consultar a API oficial do vendedor se houver sellerId ou _CustId_
+  if (resolvedSellerId) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 3500);
+      const userRes = await fetch(`https://api.mercadolibre.com/users/${resolvedSellerId}`, {
+        headers: {
+          "User-Agent":
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+          Accept: "application/json",
+        },
+        signal: controller.signal,
+        cache: "no-store",
+      });
+      clearTimeout(timer);
+
+      if (userRes.ok) {
+        const uData = await userRes.json();
+        const eshopName = cleanSellerName(uData.eshop?.eshop_nome);
+        const nick = uData.nickname ? String(uData.nickname).trim() : null;
+        if (!slug && nick) slug = nick;
+
+        if (eshopName && !isSlugOrGenericStoreName(eshopName, null)) {
+          return {
+            storeName: eshopName,
+            sellerNickname: nick ? nick.toLowerCase() : (slug ? slug.toLowerCase() : null),
+          };
+        }
+      }
+    } catch {
+      // continua para próximas tentativas
+    }
+  }
+
+  // 2. Tenta consultar a vitrine pública www.mercadolivre.com.br/pagina/<slug>
   if (slug) {
     const candidateUrls = [
       `https://www.mercadolivre.com.br/pagina/${encodeURIComponent(slug)}`,
@@ -331,7 +405,7 @@ export async function resolveMercadoLivreStoreName(
     }
   }
 
-  // 2. Fallback: verifica se os itens possuem seller_name válido
+  // 3. Fallback: verifica se os itens possuem seller_name válido
   if (Array.isArray(items)) {
     for (const it of items) {
       if (it?.seller_name && !isSlugOrGenericStoreName(it.seller_name, storeUrl)) {
@@ -343,9 +417,23 @@ export async function resolveMercadoLivreStoreName(
     }
   }
 
+  // 4. Se tiver slug ou nickname, formata como nome da loja em vez de título genérico
+  if (slug) {
+    const formattedSlug = slug
+      .replace(/[-_]+/g, " ")
+      .trim()
+      .split(" ")
+      .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+      .join(" ");
+    return {
+      storeName: formattedSlug,
+      sellerNickname: slug.toLowerCase(),
+    };
+  }
+
   return {
-    storeName: cleanedCurrent || (slug ? slug.toUpperCase() : "Loja Concorrente"),
-    sellerNickname: slug ? slug.toLowerCase() : null,
+    storeName: !isSlugOrGenericStoreName(cleanedCurrent, null) ? cleanedCurrent : "Loja Concorrente",
+    sellerNickname: null,
   };
 }
 

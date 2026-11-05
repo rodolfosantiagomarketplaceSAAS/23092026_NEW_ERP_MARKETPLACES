@@ -77,7 +77,15 @@ export const EXTENSION_ZIP_BASE64 = "${base64Data}";
 `;
   fs.writeFileSync(outPath, binaryContent, 'utf-8');
 
-  console.log(`[pack-extension] Sucesso: v${version} (${dateFormatted}), base64: ${base64Data.length} bytes`);
+  // Copia o arquivo ZIP físico para apps/web/public para acesso estático direto
+  const publicDir = path.join(rootDir, 'apps', 'web', 'public');
+  if (!fs.existsSync(publicDir)) {
+    fs.mkdirSync(publicDir, { recursive: true });
+  }
+  const publicZip = path.join(publicDir, 'erp-marketplaces-extension.zip');
+  fs.copyFileSync(tempZip, publicZip);
+
+  console.log(`[pack-extension] Sucesso: v${version} (${dateFormatted}), base64: ${base64Data.length} bytes, copiado para public`);
 } catch (err) {
   console.error('[pack-extension] Erro:', err);
   process.exit(1);

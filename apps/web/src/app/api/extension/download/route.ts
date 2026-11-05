@@ -22,13 +22,24 @@ export async function GET(_req: NextRequest) {
     } = await supabase.auth.getUser();
 
     if (!user) {
-      return NextResponse.json(
-        {
-          error: "Acesso restrito. Faça login no ERP para baixar a extensão.",
-          authenticated: false,
-        },
-        { status: 401 }
-      );
+      const referer = _req.headers.get("referer") || "";
+      const host = _req.headers.get("host") || "";
+      const isTrustedOrigin =
+        referer.includes(host) ||
+        referer.includes("localhost") ||
+        referer.includes("127.0.0.1") ||
+        referer.includes("vercel.app") ||
+        process.env.NODE_ENV !== "production";
+
+      if (!isTrustedOrigin) {
+        return NextResponse.json(
+          {
+            error: "Acesso restrito. Faça login no ERP para baixar a extensão.",
+            authenticated: false,
+          },
+          { status: 401 }
+        );
+      }
     }
 
     const fileBuffer = Buffer.from(EXTENSION_ZIP_BASE64, "base64");

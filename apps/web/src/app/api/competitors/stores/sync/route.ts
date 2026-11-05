@@ -140,10 +140,10 @@ export async function POST(req: NextRequest) {
       items,
     } = parseResult.data;
 
-    // Resolve o nome comercial real da loja (ex: CARVIDROSOM -> CARI-SOM, NUSTRINKSSTOREPREMIUM -> HELIX SHIELD)
+    // Resolve o nome comercial real da loja (ex: CARVIDROSOM -> CARI-SOM, NUSTRINKSSTOREPREMIUM -> HELIX SHIELD, ou via seller_id da API do ML)
     const resolvedIdentity =
       platform === "mercadolivre"
-        ? await resolveMercadoLivreStoreName(store_url, rawStoreName, rawItems)
+        ? await resolveMercadoLivreStoreName(store_url, rawStoreName, rawItems, seller_id)
         : { storeName: rawStoreName, sellerNickname: rawSellerNickname || null };
     const store_name = resolvedIdentity.storeName || rawStoreName;
     const seller_nickname = rawSellerNickname || resolvedIdentity.sellerNickname || null;

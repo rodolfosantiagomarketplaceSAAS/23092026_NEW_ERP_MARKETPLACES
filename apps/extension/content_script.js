@@ -55,7 +55,7 @@
     document.documentElement.setAttribute("data-crm-extension-installed", "true");
     window.dispatchEvent(
       new CustomEvent("CRM_EXTENSION_DETECTED", {
-        detail: { version: (typeof chrome !== "undefined" && chrome.runtime?.getManifest?.()?.version) || "1.1.0", origin: currentErpUrl },
+        detail: { version: (typeof chrome !== "undefined" && chrome.runtime?.getManifest?.()?.version) || "1.4.0", origin: currentErpUrl },
       })
     );
 
@@ -2035,11 +2035,17 @@
   function cleanExtractedStoreName(raw) {
     if (!raw) return "";
     return String(raw)
+      .replace(/^\s*\(\d+\+?\)\s*/i, "") // Remove badges de notificação da aba do navegador (ex: "(9+) Loja")
       .replace(/^(Loja\s+oficial|Vendido\s+por|Loja|Oficial|Por)\s*:?\s*/i, "")
+      .replace(/^(?:Mais\s+)?An[uú]ncios?\s+(?:do\s+vendedor|da\s+loja|deste\s+vendedor)\s*:?\s*/i, "")
+      .replace(/^Produtos?\s+(?:do\s+vendedor|da\s+loja)\s*:?\s*/i, "")
+      .replace(/^Publicaci[oó]n(?:es)?\s+del\s+vendedor\s*:?\s*/i, "")
       .replace(/\s*\|\s*P[áa]gina\s+do\s+vendedor.*$/i, "")
       .replace(/\s+em\s+Mercado\s+Li[vb]re.*$/i, "")
       .replace(/\s*\|\s*Mercado\s+Li[vb]re.*$/i, "")
       .replace(/\s*-\s*Mercado\s+Li[vb]re.*$/i, "")
+      .replace(/\s*no\s+Mercado\s+Li[vb]re.*$/i, "")
+      .replace(/\s*em\s+um\s+s[óo]\s+lugar.*$/i, "")
       .replace(/\s+/g, " ")
       .trim();
   }
@@ -2049,21 +2055,54 @@
     if (m && m[1]) {
       return decodeURIComponent(m[1]).replace(/_Desde_\d+.*$/i, "").trim().toLowerCase();
     }
+    // Subdomínios oficiais de eshops/lojas
+    if (window.location.hostname.startsWith("eshops.") || window.location.hostname.startsWith("loja.")) {
+      const parts = window.location.pathname.replace(/^\/+|\/+$/g, "").split("/");
+      if (parts[0] && !parts[0].includes(".")) {
+        return decodeURIComponent(parts[0]).replace(/_Desde_\d+.*$/i, "").trim().toLowerCase();
+      }
+    }
     return null;
   }
 
   function isGenericStoreTitle(val) {
-    const t = cleanExtractedStoreName(val);
-    if (!t || t.length < 2) return true;
-    return /^(mercado\s+li[vb]re|loja\s+concorrente|vendedor\s+mercado\s+livre|p[áa]gina\s+do\s+vendedor|mais\s+informa[çc][õo]es|frete\s+gr[áa]tis|parcelamento\s+sem\s+juros|produtos)$/i.test(
-      t
+    if (!val) return true;
+    const t = cleanExtractedStoreName(val).toLowerCase().trim();
+    if (t.length < 2) return true;
+    // Nomes genéricos que NUNCA devem ser aceitos como nome comercial do concorrente
+    if (
+      /concorrente/i.test(t) ||
+      /mercado\s*li[vb]re/i.test(t) ||
+      /vendedor/i.test(t) ||
+      /^(loja|loja\s+oficial|produtos|pagina|página|resultado|resultados|busca|loja\s+concorrente)$/i.test(t) ||
+      /an[uú]ncios?\s+(do\s+vendedor|da\s+loja|deste\s+vendedor)/i.test(t) ||
+      /produtos?\s+(do\s+vendedor|da\s+loja)/i.test(t) ||
+      /publicaci[oó]n(?:es)?\s+del\s+vendedor/i.test(t) ||
+      /frete\s+gr[áa]tis/i.test(t) ||
+      /parcelamento\s+sem\s+juros/i.test(t)
+    ) {
+      return true;
+    }
+    return false;
+  }
+
+  function extractSellerFromCards(doc = document) {
+    const sellerEls = Array.from(
+      doc.querySelectorAll(".poly-component__seller, .ui-search-item__seller-info, [class*='seller-name'], [class*='seller-info']")
     );
+    for (const el of sellerEls) {
+      const candidate = cleanExtractedStoreName(el.innerText || el.textContent || "");
+      if (candidate && !isGenericStoreTitle(candidate)) {
+        return candidate;
+      }
+    }
+    return null;
   }
 
   function extractStoreNameFromDoc(doc = document) {
-    // 1. Seletores de cabeçalho de loja (incluindo h1.clipped da nova vitrine ML)
+    // 1. Seletores de cabeçalho de loja (incluindo h1.clipped da vitrine oficial moderna ML)
     const storeTitleEl = doc.querySelector(
-      "h1.clipped, .ui-seller-data-header__title, .official-store-header h1, h1.store-header__title, .store-info__title, .header-store__title, h1.brand-title, .ui-pdp-seller__link-trigger, .ui-seller-data-header__brand-title, [class*='seller-header'] h1, [class*='store-header'] h1"
+      "h1.clipped, .ui-seller-data-header__title, .official-store-header h1, h1.store-header__title, .store-info__title, .header-store__title, h1.brand-title, .ui-pdp-seller__link-trigger, .ui-seller-data-header__brand-title, [data-testid='store-name'], [class*='seller-header'] h1, [class*='store-header'] h1, .ui-search-breadcrumb__title"
     );
     if (storeTitleEl) {
       const candidate = cleanExtractedStoreName(storeTitleEl.innerText || storeTitleEl.textContent || "");
@@ -2075,7 +2114,7 @@
       doc.querySelector('meta[property="og:title"]')?.getAttribute("content") ||
       doc.querySelector('meta[name="twitter:title"]')?.getAttribute("content") ||
       doc.querySelector('meta[name="title"]')?.getAttribute("content");
-    if (ogTitle && /em\s+Mercado\s+Li[vb]re|P[áa]gina\s+do\s+vendedor/i.test(ogTitle)) {
+    if (ogTitle && /em\s+Mercado\s+Li[vb]re|P[áa]gina\s+do\s+vendedor|Mercado\s+Li[vb]re/i.test(ogTitle)) {
       const candidate = cleanExtractedStoreName(ogTitle);
       if (!isGenericStoreTitle(candidate)) return candidate;
     }
@@ -2093,7 +2132,7 @@
       }
     }
 
-    // 3. Document Title (ex: "CARI-SOM | Página do vendedor" ou "HELIX SHIELD | Página do vendedor")
+    // 3. Document Title (ex: "(9+) CARI-SOM | Página do vendedor" ou "HELIX SHIELD | Página do vendedor")
     const docTitle = doc.title || "";
     if (docTitle) {
       const titleCandidate = cleanExtractedStoreName(docTitle.split("|")[0].split(" - ")[0]);
@@ -2103,15 +2142,25 @@
     }
 
     // 4. Vendedor exibido nos próprios cards da vitrine/lista (.poly-component__seller)
-    const sellerEls = Array.from(
-      doc.querySelectorAll(".poly-component__seller, .ui-search-item__seller-info")
-    );
-    for (const el of sellerEls) {
-      const candidate = cleanExtractedStoreName(el.innerText || el.textContent || "");
-      if (!isGenericStoreTitle(candidate)) {
-        return candidate;
-      }
+    const cardSeller = extractSellerFromCards(doc);
+    if (cardSeller && !isGenericStoreTitle(cardSeller)) {
+      return cardSeller;
     }
+
+    // 5. Inspeciona scripts internos da página por nickname ou store_name embutido
+    try {
+      const scripts = doc.querySelectorAll('script:not([src])');
+      for (const s of scripts) {
+        const txt = s.textContent || "";
+        if (txt.includes("seller_name") || txt.includes("official_store_name") || txt.includes("brand_name") || txt.includes("eshop_name")) {
+          const m = txt.match(/"(?:seller_name|official_store_name|brand_name|eshop_name)"\s*:\s*"([^"]{2,60})"/i);
+          if (m && m[1]) {
+            const cand = cleanExtractedStoreName(m[1]);
+            if (cand && !isGenericStoreTitle(cand)) return cand;
+          }
+        }
+      }
+    } catch {}
 
     return null;
   }
@@ -2124,61 +2173,153 @@
     }
 
     const fromDom = extractStoreNameFromDoc(document);
-    if (fromDom) {
+    if (fromDom && !isGenericStoreTitle(fromDom)) {
       __CACHED_STORE_NAME__ = fromDom;
       return fromDom;
     }
 
-    // Fallback final: slug da URL (/pagina/<loja>, /loja/<loja>, /perfil/<loja>)
+    // 1. Tenta extrair de cards de anúncios da página atual
+    const cardSeller = extractSellerFromCards(document);
+    if (cardSeller && !isGenericStoreTitle(cardSeller)) {
+      __CACHED_STORE_NAME__ = cardSeller;
+      return cardSeller;
+    }
+
+    // 2. Fallback intermediário: slug da URL formatado
     const slug = extractSellerNickname();
     if (slug) {
-      return slug.replace(/[-_]/g, " ").toUpperCase();
+      const formatted = slug
+        .replace(/[-_]+/g, " ")
+        .trim()
+        .split(" ")
+        .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+        .join(" ");
+      __CACHED_STORE_NAME__ = formatted;
+      return formatted;
     }
 
-    return "Loja Concorrente Mercado Livre";
-  }
-
-  async function resolveStoreNameAsync() {
-    const current = extractStoreName();
-    const slug = extractSellerNickname();
-    if (!slug) return current;
-
-    const normCurrent = current.toLowerCase().replace(/[\s\-_]/g, "");
-    const normSlug = slug.toLowerCase().replace(/[\s\-_]/g, "");
-    if (normCurrent !== normSlug && !isGenericStoreTitle(current)) {
-      return current;
+    // 3. Fallback por seller_id
+    const sellerId = extractSellerId();
+    if (sellerId) {
+      return `Vendedor #${sellerId}`;
     }
 
-    // Se estiver em lista.mercadolivre.com.br/pagina/<slug> e o nome ainda for apenas o slug,
-    // consulta a vitrine www.mercadolivre.com.br/pagina/<slug> para obter o nome comercial real
-    try {
-      const res = await fetch(`https://www.mercadolivre.com.br/pagina/${encodeURIComponent(slug)}`, {
-        credentials: "omit",
-      });
-      if (res.ok) {
-        const html = await res.text();
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(html, "text/html");
-        const realName = extractStoreNameFromDoc(doc);
-        if (realName && !isGenericStoreTitle(realName)) {
-          __CACHED_STORE_NAME__ = realName;
-          return realName;
-        }
-      }
-    } catch {
-      // mantém fallback e deixa o backend resolver
-    }
-    return current;
+    return "Loja Concorrente";
   }
 
   function extractSellerId() {
+    // 1. URL pattern _CustId_
     const matchCustId = window.location.href.match(/_CustId_(\d+)/i);
     if (matchCustId) return matchCustId[1];
 
+    // 2. Query param
+    const matchParam = window.location.search.match(/[?&](?:seller_id|client_id)=(\d+)/i);
+    if (matchParam) return matchParam[1];
+
+    // 3. Meta or input
     const metaCust = document.querySelector('meta[name="seller-id"], input[name="seller_id"]');
-    if (metaCust) return metaCust.getAttribute("content") || metaCust.value;
+    if (metaCust) {
+      const val = metaCust.getAttribute("content") || metaCust.value;
+      if (val && /^\d+$/.test(val)) return val;
+    }
+
+    // 4. Links na página contendo _CustId_ ou seller_id
+    const sellerLink = document.querySelector('a[href*="_CustId_"], a[href*="seller_id="]');
+    if (sellerLink) {
+      const m = sellerLink.href.match(/_CustId_(\d+)/i) || sellerLink.href.match(/[?&]seller_id=(\d+)/i);
+      if (m) return m[1];
+    }
+
+    // 5. Inspeciona scripts internos da página por seller_id, owner_id ou cust_id
+    try {
+      const htmlText = document.documentElement.innerHTML;
+      const scriptMatch =
+        htmlText.match(/"seller_id"\s*:\s*"?(\d{5,15})"?/i) ||
+        htmlText.match(/\\"seller_id\\"\s*:\s*\\"?(\d{5,15})\\"?/i) ||
+        htmlText.match(/"owner_id"\s*:\s*"?(\d{5,15})"?/i) ||
+        htmlText.match(/\\"owner_id\\"\s*:\s*\\"?(\d{5,15})\\"?/i) ||
+        htmlText.match(/"cust_id"\s*:\s*"?(\d{5,15})"?/i) ||
+        htmlText.match(/_CustId_(\d{5,15})/i);
+      if (scriptMatch && scriptMatch[1]) {
+        return scriptMatch[1];
+      }
+    } catch {}
 
     return null;
+  }
+
+  async function resolveStoreNameAsync() {
+    let current = extractStoreName();
+    let slug = extractSellerNickname();
+    const sellerId = extractSellerId();
+
+    // Se o nome atual já for específico e não genérico nem igual ao slug puro
+    if (current && !isGenericStoreTitle(current)) {
+      const normCurrent = current.toLowerCase().replace(/[\s\-_]/g, "");
+      const normSlug = (slug || "").toLowerCase().replace(/[\s\-_]/g, "");
+      if (normCurrent !== normSlug) {
+        return current;
+      }
+    }
+
+    // 1. Tenta extrair da vitrine pública www.mercadolivre.com.br/pagina/<slug>
+    if (slug) {
+      try {
+        const candidateUrls = [
+          `https://www.mercadolivre.com.br/pagina/${encodeURIComponent(slug)}`,
+          `https://www.mercadolivre.com.br/loja/${encodeURIComponent(slug)}`,
+          `https://www.mercadolivre.com.br/perfil/${encodeURIComponent(slug)}`,
+        ];
+        for (const url of candidateUrls) {
+          const controller = new AbortController();
+          const timer = setTimeout(() => controller.abort(), 3500);
+          const res = await fetch(url, {
+            credentials: "omit",
+            signal: controller.signal,
+          });
+          clearTimeout(timer);
+
+          if (res.ok) {
+            const html = await res.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, "text/html");
+            const realName = extractStoreNameFromDoc(doc);
+            if (realName && !isGenericStoreTitle(realName)) {
+              __CACHED_STORE_NAME__ = realName;
+              return realName;
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[resolveStoreNameAsync] Falha ao consultar vitrine do vendedor:", e);
+      }
+    }
+
+    // 2. Fallback: extrai dos cards de anúncios da página atual
+    const cardSeller = extractSellerFromCards(document);
+    if (cardSeller && !isGenericStoreTitle(cardSeller)) {
+      __CACHED_STORE_NAME__ = cardSeller;
+      return cardSeller;
+    }
+
+    // 3. Se tiver slug, formata o nome de forma humanizada
+    if (slug) {
+      const formatted = slug
+        .replace(/[-_]+/g, " ")
+        .trim()
+        .split(" ")
+        .map((w) => (w.length <= 3 ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()))
+        .join(" ");
+      __CACHED_STORE_NAME__ = formatted;
+      return formatted;
+    }
+
+    // 4. Se tiver sellerId
+    if (sellerId) {
+      return `Vendedor #${sellerId}`;
+    }
+
+    return "Loja Concorrente";
   }
 
   function extractStoreUrl() {
@@ -2854,42 +2995,81 @@
   /**
    * Encontra a URL da próxima página de resultados da loja (DOM + Offset ML)
    */
-  function findNextPageUrl(nextPageNum) {
-    const selectors = [
-      "li.andes-pagination__button--next a",
-      "li.andes-pagination__button--next span a",
-      "a.andes-pagination__link[title*='Seguinte']",
-      "a.andes-pagination__link[title*='Próxim']",
-      "a.andes-pagination__link[title*='seguinte' i]",
-      "a.andes-pagination__link[title*='próxim' i]",
-      "a[title*='Página seguinte']",
-      "a[title*='Página próxima']",
-      "a[title*='Siguiente']",
-      ".andes-pagination__button--next a",
-      "a[class*='pagination__next']",
-      "li[class*='pagination__button--next'] a",
-      "a[rel='next']",
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el) {
-        let h = el.getAttribute("href") || el.href;
-        if (h && !h.startsWith("#") && !h.startsWith("javascript:")) {
-          if (h.startsWith("/")) h = `${window.location.origin}${h}`;
-          return h;
+  /**
+   * Encontra a URL da próxima página de resultados da loja com validação Anti-Drift e Offset Seguro do ML
+   */
+  function findNextPageUrl(nextPageNum, crawl = null) {
+    const expectedSellerId = crawl?.sellerId || extractSellerId();
+    const expectedSlug = crawl?.slug || extractSellerNickname();
+
+    // 1. Procura STRICTLY dentro do container de paginação principal (NUNCA em carrosséis ou links soltos)
+    const paginationContainer = document.querySelector(
+      ".ui-search-pagination, nav.andes-pagination, ul.andes-pagination, .andes-pagination"
+    );
+
+    if (paginationContainer) {
+      const nextSelectors = [
+        "li.andes-pagination__button--next a",
+        "li.andes-pagination__button--next span a",
+        "a.andes-pagination__link[title*='Seguinte' i]",
+        "a.andes-pagination__link[title*='Próxim' i]",
+        "a[title*='Página seguinte' i]",
+        "a[title*='Página próxima' i]",
+        "a[title*='Siguiente' i]",
+        "a.andes-pagination__arrow--next",
+        "a[rel='next']",
+        `a.andes-pagination__link[data-page='${nextPageNum}']`,
+      ];
+
+      for (const sel of nextSelectors) {
+        const el = paginationContainer.querySelector(sel);
+        if (el) {
+          let h = el.getAttribute("href") || el.href;
+          if (h && !h.startsWith("#") && !h.startsWith("javascript:")) {
+            if (h.startsWith("/")) h = `${window.location.origin}${h}`;
+
+            // Validação Anti-Drift: garante que o link NÃO aponta para outra loja/categoria ou carrossel
+            try {
+              const targetUrl = new URL(h);
+              if (targetUrl.hostname.includes("mercadolivre.com.br")) {
+                const targetSellerId = (h.match(/_CustId_(\d+)/i) || h.match(/[?&]seller_id=(\d+)/i))?.[1];
+                if (expectedSellerId && targetSellerId && targetSellerId !== expectedSellerId) {
+                  console.warn("[Crawler] Link descartado por pertencer a outro vendedor:", targetSellerId);
+                  continue;
+                }
+                const targetSlug = h.match(/\/(?:pagina|loja)\/([^/?#]+)/i)?.[1];
+                if (expectedSlug && targetSlug && targetSlug.toLowerCase() !== expectedSlug.toLowerCase()) {
+                  console.warn("[Crawler] Link descartado por pertencer a outro slug:", targetSlug);
+                  continue;
+                }
+                if (/\/ajuda|\/login|\/registration|\/gz\//i.test(targetUrl.pathname)) {
+                  continue;
+                }
+                return h;
+              }
+            } catch {}
+          }
         }
       }
     }
 
-    // Fallback matemático pelo offset do Mercado Livre (_Desde_)
+    // 2. Fallback matemático ROBUSTO pelo offset oficial do Mercado Livre (_Desde_)
     const offset = (nextPageNum - 1) * 48 + 1;
     try {
+      // Se sabemos o sellerId, a rota canônica mais universal e livre de 404 do Mercado Livre é _CustId_:
+      if (expectedSellerId) {
+        return `https://lista.mercadolivre.com.br/_CustId_${expectedSellerId}_Desde_${offset}_NoIndex_True`;
+      }
+
       const u = new URL(window.location.href);
-      let p = u.pathname.replace(/\/$/, "");
+      let p = u.pathname;
+
       if (p.includes("_Desde_")) {
         p = p.replace(/_Desde_\d+/, `_Desde_${offset}`);
       } else {
-        p = `${p}/_Desde_${offset}`;
+        // Remove barras finais para NÃO criar rota inválida /_Desde_49
+        p = p.replace(/\/+$/, "");
+        p = `${p}_Desde_${offset}_NoIndex_True`;
       }
       u.pathname = p;
       return u.toString();
@@ -2906,6 +3086,22 @@
     if (Date.now() - crawl.startedAt > 5 * 60 * 1000) {
       await chrome.storage.local.remove("crm_store_crawl");
       injectStoreSyncFloatingBar();
+      return;
+    }
+
+    // Anti-Drift Guard: se a página atual navegou para outra loja ou página inválida, aborta o desvio com segurança
+    const currentSlug = extractSellerNickname();
+    const currentSellerId = extractSellerId();
+    if (crawl.sellerId && currentSellerId && currentSellerId !== crawl.sellerId) {
+      console.warn("[Crawler] Desvio detectado: página atual é do sellerId", currentSellerId, "esperado:", crawl.sellerId);
+      await chrome.storage.local.remove("crm_store_crawl");
+      renderCrawlFinishedSuccess(crawl, await resolveErpUrl());
+      return;
+    }
+    if (crawl.slug && currentSlug && currentSlug.toLowerCase() !== crawl.slug.toLowerCase()) {
+      console.warn("[Crawler] Desvio detectado: página atual é do slug", currentSlug, "esperado:", crawl.slug);
+      await chrome.storage.local.remove("crm_store_crawl");
+      renderCrawlFinishedSuccess(crawl, await resolveErpUrl());
       return;
     }
 
@@ -2930,6 +3126,7 @@
       platform: "mercadolivre",
       store_name: crawl.storeName,
       seller_id: crawl.sellerId,
+      seller_nickname: crawl.slug || null,
       store_url: crawl.storeUrl,
       segment: crawl.segment || "Acessórios Automotivos",
       is_following: true,
@@ -2952,7 +3149,7 @@
       (newItemsCount === 0 && crawl.currentPage > 1);
 
     if (!isFinished) {
-      const nextUrl = findNextPageUrl(crawl.currentPage + 1);
+      const nextUrl = findNextPageUrl(crawl.currentPage + 1, crawl);
       if (nextUrl) {
         crawl.currentPage++;
         await chrome.storage.local.set({ crm_store_crawl: crawl });
@@ -3187,12 +3384,16 @@
 
         try {
           if (totalCount > items.length) {
+            const sellerId = extractSellerId();
+            const sellerNickname = extractSellerNickname();
+
             // Inicia crawl de múltiplas páginas com navegação real
             const crawl = {
               active: true,
               storeName,
               storeUrl: extractStoreUrl(),
-              sellerId: extractSellerId(),
+              sellerId: sellerId,
+              slug: sellerNickname,
               totalExpected: totalCount,
               currentPage: 1,
               accumulatedItems: items,
@@ -3205,6 +3406,7 @@
               platform: "mercadolivre",
               store_name: storeName,
               seller_id: crawl.sellerId,
+              seller_nickname: crawl.slug || null,
               store_url: crawl.storeUrl,
               segment: "Acessórios Automotivos",
               is_following: true,
@@ -3216,7 +3418,7 @@
             await sendStorePayloadToErp(erpUrl, payload);
             await chrome.storage.local.set({ crm_store_crawl: crawl });
 
-            const nextUrl = findNextPageUrl(2);
+            const nextUrl = findNextPageUrl(2, crawl);
             if (nextUrl) {
               syncBtn.innerText = `Pág. 1 salva (${items.length}/${totalCount}). Avançando...`;
               setTimeout(() => {
