@@ -9,15 +9,21 @@ import {
   Clock,
   Receipt,
   Sparkles,
+  Truck,
   Wallet,
 } from "lucide-react";
-import type { MlSalesSummaryKpis, SellerTransferSummary } from "@/types/ml-sales";
+import type {
+  MlSalesSummaryKpis,
+  SalesAnalysisMode,
+  SellerTransferSummary,
+} from "@/types/ml-sales";
 import { formatBRL, formatPct } from "./formatters";
 
 interface SalesKpiSectionProps {
   kpis: MlSalesSummaryKpis;
   sellerSummaries: SellerTransferSummary[];
   selectedSellerId: string;
+  analysisMode?: SalesAnalysisMode;
   onSelectSeller: (sellerId: string) => void;
 }
 
@@ -25,8 +31,10 @@ export function SalesKpiSection({
   kpis,
   sellerSummaries,
   selectedSellerId,
+  analysisMode = "order_date",
   onSelectSeller,
 }: SalesKpiSectionProps) {
+  const isShippingMode = analysisMode === "shipping_date";
   const hasCotaAdjustment =
     Math.abs(kpis.seller_transfer_base_total - kpis.effective_seller_transfer_total) > 0.01;
 
@@ -34,13 +42,17 @@ export function SalesKpiSection({
     <div className="space-y-3">
       {/* 4 Cards Principais de Resumo Financeiro */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        {/* 1. Vendas Brutas Válidas */}
+        {/* 1. Vendas Brutas Válidas / Enviadas */}
         <div className="bg-white border border-[#E2E8F0] rounded p-3.5 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              1. Vendas Brutas Válidas
+              {isShippingMode ? "1. Vendas Enviadas no Período" : "1. Vendas Brutas Válidas"}
             </span>
-            <BadgeDollarSign className="w-4 h-4 text-slate-700" />
+            {isShippingMode ? (
+              <Truck className="w-4 h-4 text-emerald-700" />
+            ) : (
+              <BadgeDollarSign className="w-4 h-4 text-slate-700" />
+            )}
           </div>
           <div className="mt-2">
             <div className="text-xl font-black text-slate-900 font-mono tabular-nums tracking-tight">
@@ -49,7 +61,13 @@ export function SalesKpiSection({
             <div className="mt-1.5 flex items-center justify-between text-[11px] text-slate-500">
               <span>
                 <strong className="text-slate-800 font-mono">{kpis.valid_orders_count}</strong>{" "}
-                {kpis.valid_orders_count === 1 ? "pedido válido" : "pedidos válidos"}
+                {isShippingMode
+                  ? kpis.valid_orders_count === 1
+                    ? "pedido enviado válido"
+                    : "pedidos enviados válidos"
+                  : kpis.valid_orders_count === 1
+                  ? "pedido válido"
+                  : "pedidos válidos"}
               </span>
               {kpis.cancelled_orders_count > 0 && (
                 <span className="px-1.5 py-0.5 rounded-xs bg-rose-50 text-rose-700 border border-rose-200 font-mono text-[10px] font-semibold">
@@ -194,7 +212,14 @@ export function SalesKpiSection({
                     )}
                   </div>
                   <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded-xs bg-slate-100 text-slate-700 shrink-0">
-                    {s.valid_orders_count} {s.valid_orders_count === 1 ? "venda" : "vendas"}
+                    {s.valid_orders_count}{" "}
+                    {isShippingMode
+                      ? s.valid_orders_count === 1
+                        ? "envio"
+                        : "envios"
+                      : s.valid_orders_count === 1
+                      ? "venda"
+                      : "vendas"}
                   </span>
                 </div>
 
@@ -229,4 +254,3 @@ export function SalesKpiSection({
     </div>
   );
 }
-

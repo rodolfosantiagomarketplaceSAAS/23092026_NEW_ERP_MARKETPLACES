@@ -12,21 +12,30 @@ import {
   RefreshCw,
   Search,
   Settings,
+  ShieldAlert,
+  Truck,
   Wallet,
 } from "lucide-react";
-import type { MlSaleOrder, MlSaleOrderStatus, MlSalesDashboardResponse } from "@/types/ml-sales";
+import type {
+  MlSaleOrder,
+  MlSaleOrderStatus,
+  MlSalesDashboardResponse,
+  SalesAnalysisMode,
+} from "@/types/ml-sales";
 import {
   computeDatePresetRange,
   formatBRL,
   formatDateTimeBR,
+  formatLogisticTypeLabel,
   getOfficialMlSaleCode,
 } from "@/components/vendas/formatters";
+import { AnalysisModeToggle } from "@/components/vendas/AnalysisModeToggle";
 import {
   markSalesSyncedNow,
   useRealtimeSalesOrders,
 } from "@/hooks/useRealtimeSalesOrders";
 
-type RangeOption = "today" | "last7" | "thisMonth";
+type RangeOption = "today" | "yesterday" | "last7" | "thisMonth";
 
 const STATUS_BADGE: Record<
   MlSaleOrderStatus,
@@ -55,13 +64,19 @@ const STATUS_BADGE: Record<
 };
 
 export default function PedidosPage() {
+  const [analysisMode, setAnalysisMode] = useState<SalesAnalysisMode>("order_date");
   const [rangePreset, setRangePreset] = useState<RangeOption>("last7");
   const [search, setSearch] = useState("");
   const [orders, setOrders] = useState<MlSaleOrder[]>([]);
   const [hasConnectedAccount, setHasConnectedAccount] = useState(false);
   const [schemaReady, setSchemaReady] = useState(true);
+  const [shippingSchemaReady, setShippingSchemaReady] = useState(true);
+  const [pendingShipmentCount, setPendingShipmentCount] = useState(0);
+  const [backfillMissingCount, setBackfillMissingCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+
+  const isShippingMode = analysisMode === "shipping_date";
 
   const loadOrders = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -74,6 +89,7 @@ export default function PedidosPage() {
           seller: "all",
           status: "all",
           store: "all",
+          analysisBy: analysisMode,
         });
         if (search.trim()) qs.set("q", search.trim());
 
@@ -84,6 +100,9 @@ export default function PedidosPage() {
         if (res.ok && json.success) {
           setOrders(json.orders ?? []);
           setSchemaReady(json.schemaReady !== false);
+          setShippingSchemaReady(json.shippingDateSchemaReady !== false);
+          setPendingShipmentCount(json.pendingShipmentCount ?? 0);
+          setBackfillMissingCount(json.backfillMissingShippedAtCount ?? 0);
           setHasConnectedAccount(
             (json.accounts ?? []).some((a) => a.status === "online")
           );
@@ -94,7 +113,7 @@ export default function PedidosPage() {
         if (!options?.silent) setLoading(false);
       }
     },
-    [rangePreset, search]
+    [rangePreset, search, analysisMode]
   );
 
   useEffect(() => {
@@ -121,7 +140,10 @@ export default function PedidosPage() {
       const res = await fetch("/api/ml/sales/sync", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(range),
+        body: JSON.stringify({
+          ...range,
+          analysisMode,
+        }),
       });
       const json = await res.json().catch(() => null);
       if (res.ok && json?.success) {
@@ -168,7 +190,8 @@ export default function PedidosPage() {
                 </span>
               </div>
               <p className="text-xs text-slate-500">
-                Pedidos reais recebidos automaticamente da sua loja vinculada ao ERP.
+                Pedidos reais da sua loja ML com visualização por{" "}
+                <strong>Data da Venda</strong> ou <strong>Dia Real do Envio</strong>.
               </p>
             </div>
 
@@ -198,41 +221,67 @@ export default function PedidosPage() {
             </div>
           </div>
 
-          {/* Barra rápida de período e busca */}
-          <div className="bg-white border border-[#E2E8F0] rounded p-3 shadow-2xs flex flex-wrap items-center justify-between gap-2.5">
-            <div className="flex items-center gap-1.5">
-              {(
-                [
-                  { id: "today", label: "Hoje" },
-                  { id: "last7", label: "Últimos 7 dias" },
-                  { id: "thisMonth", label: "Este Mês" },
-                ] as const
-              ).map((opt) => (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => setRangePreset(opt.id)}
-                  className={`px-2.5 py-1 rounded-xs text-[11px] font-bold border transition-colors ${
-                    rangePreset === opt.id
-                      ? "bg-slate-900 text-white border-slate-900"
-                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
-                  }`}
-                >
-                  {opt.label}
-                </button>
-              ))}
+          {schemaReady && !shippingSchemaReady && (
+            <div className="p-3 rounded bg-amber-50 border border-amber-300 text-amber-950 flex items-start gap-2 text-xs">
+              <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <span className="font-bold">Migration SQL pendente no Supabase:</span>{" "}
+                Execute{" "}
+                <code className="font-mono bg-amber-100 px-1 py-0.5 rounded">
+                  supabase/migrations/20261124180000_add_shipped_at_to_ml_sales_orders.sql
+                </code>{" "}
+                no SQL Editor para ativar a coluna <code>shipped_at</code>.
+              </div>
             </div>
+          )}
 
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1.5" />
-              <input
-                type="text"
-                aria-label="Buscar pedido, MLB, SKU ou cliente"
-                placeholder="Buscar pedido, MLB, SKU ou cliente..."
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                className="pl-7 pr-2.5 py-1 w-64 border border-slate-300 rounded-xs text-[11px] focus:outline-none focus:border-sky-600"
-              />
+          {/* Barra rápida de modo de análise, período e busca */}
+          <div className="bg-white border border-[#E2E8F0] rounded p-3 shadow-2xs space-y-2.5">
+            <AnalysisModeToggle
+              value={analysisMode}
+              onChange={setAnalysisMode}
+              pendingShipmentCount={pendingShipmentCount}
+              backfillMissingCount={backfillMissingCount}
+              syncing={syncing || autoSyncing}
+              onRequestBackfillSync={handleManualSync}
+            />
+
+            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {(
+                  [
+                    { id: "today", label: "Hoje" },
+                    { id: "yesterday", label: "Ontem" },
+                    { id: "last7", label: "Últimos 7 dias" },
+                    { id: "thisMonth", label: "Este Mês" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => setRangePreset(opt.id)}
+                    className={`px-2.5 py-1 rounded-xs text-[11px] font-bold border transition-colors ${
+                      rangePreset === opt.id
+                        ? "bg-slate-900 text-white border-slate-900"
+                        : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1.5" />
+                <input
+                  type="text"
+                  aria-label="Buscar pedido, MLB, SKU ou cliente"
+                  placeholder="Buscar pedido, MLB, SKU ou cliente..."
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  className="pl-7 pr-2.5 py-1 w-64 border border-slate-300 rounded-xs text-[11px] focus:outline-none focus:border-sky-600"
+                />
+              </div>
             </div>
           </div>
 
@@ -244,12 +293,20 @@ export default function PedidosPage() {
               </div>
             ) : orders.length === 0 ? (
               <div className="p-10 text-center space-y-2.5">
-                <PackageCheck className="w-7 h-7 text-slate-400 mx-auto" />
+                {isShippingMode ? (
+                  <Truck className="w-7 h-7 text-slate-400 mx-auto" />
+                ) : (
+                  <PackageCheck className="w-7 h-7 text-slate-400 mx-auto" />
+                )}
                 <div className="text-xs font-bold text-slate-800">
-                  Nenhum pedido encontrado no período selecionado
+                  {isShippingMode
+                    ? "Nenhum pedido enviado (bipado/coletado) no período selecionado"
+                    : "Nenhum pedido encontrado no período selecionado"}
                 </div>
                 <p className="text-[11px] text-slate-500 max-w-md mx-auto">
-                  {hasConnectedAccount
+                  {isShippingMode
+                    ? "Clique em 'Atualizar Agora' para buscar na API do Mercado Livre os despachos mais recentes (com lookback automático de 14 dias)."
+                    : hasConnectedAccount
                     ? "Assim que sair uma venda no Mercado Livre, ela aparecerá automaticamente aqui via Webhook ou Auto-Sync."
                     : "Conecte sua conta do Mercado Livre e configure o Webhook gratuito em Configurações & APIs."}
                 </p>
@@ -275,12 +332,15 @@ export default function PedidosPage() {
                       <th className="py-2.5 px-3 text-right">Valor Bruto</th>
                       <th className="py-2.5 px-3 text-right">Repasse Limpo</th>
                       <th className="py-2.5 px-3">Status</th>
-                      <th className="py-2.5 px-3 text-right">Data/Hora</th>
+                      <th className="py-2.5 px-3 text-right">
+                        {isShippingMode ? "Dia do Envio / Compra" : "Data Venda / Envio"}
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {orders.map((o) => {
                       const badge = STATUS_BADGE[o.status] ?? STATUS_BADGE.paid;
+                      const logisticLabel = formatLogisticTypeLabel(o.logistic_type);
                       return (
                         <tr key={o.id} className="hover:bg-slate-50 transition-colors">
                           <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
@@ -295,7 +355,9 @@ export default function PedidosPage() {
                             </span>
                           </td>
                           <td className="py-2.5 px-3 text-slate-700 min-w-[170px] max-w-[220px]">
-                            <div className="font-semibold text-slate-900 break-words">{o.buyer_name}</div>
+                            <div className="font-semibold text-slate-900 break-words">
+                              {o.buyer_name}
+                            </div>
                             {o.is_business_buyer && (
                               <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded-xs bg-slate-100 text-slate-700 text-[9px] font-bold">
                                 CNPJ
@@ -351,14 +413,41 @@ export default function PedidosPage() {
                             {formatBRL(o.seller_transfer_profit)}
                           </td>
                           <td className="py-2.5 px-3">
-                            <span
-                              className={`px-2 py-0.5 rounded-xs text-[10px] font-semibold border ${badge.className}`}
-                            >
-                              {badge.label}
-                            </span>
+                            <div className="flex flex-wrap items-center gap-1">
+                              <span
+                                className={`px-2 py-0.5 rounded-xs text-[10px] font-semibold border ${badge.className}`}
+                              >
+                                {badge.label}
+                              </span>
+                              {logisticLabel && (
+                                <span className="px-1.5 py-0.5 rounded-xs bg-slate-100 border border-slate-200 text-slate-600 font-mono text-[9px] font-bold">
+                                  {logisticLabel}
+                                </span>
+                              )}
+                            </div>
                           </td>
-                          <td className="py-2.5 px-3 text-right text-slate-500 font-mono text-[11px]">
-                            {formatDateTimeBR(o.order_date)}
+                          <td className="py-2.5 px-3 text-right font-mono text-[11px] whitespace-nowrap">
+                            {isShippingMode ? (
+                              <>
+                                <div className="font-bold text-emerald-800">
+                                  Env: {formatDateTimeBR(o.shipped_at)}
+                                </div>
+                                <div className="text-[10px] text-slate-400">
+                                  Venda: {formatDateTimeBR(o.order_date)}
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className="text-slate-700 font-semibold">
+                                  {formatDateTimeBR(o.order_date)}
+                                </div>
+                                {o.shipped_at && (
+                                  <div className="text-[10px] text-emerald-700 font-semibold">
+                                    Env: {formatDateTimeBR(o.shipped_at)}
+                                  </div>
+                                )}
+                              </>
+                            )}
                           </td>
                         </tr>
                       );

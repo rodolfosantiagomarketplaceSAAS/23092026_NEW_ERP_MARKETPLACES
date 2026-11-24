@@ -4,6 +4,7 @@ export const syncSalesRequestSchema = z.object({
   from: z.string().min(10, "Data inicial inválida"),
   to: z.string().min(10, "Data final inválida"),
   sellerAccountId: z.string().optional(),
+  analysisMode: z.enum(["order_date", "shipping_date"]).optional().default("order_date"),
 });
 
 export const createSellerSchema = z.object({
@@ -54,4 +55,3 @@ export const updateOrderCostsSchema = z.object({
   cost_accessories_kit: z.coerce.number().min(0),
   saveAsMlbTemplate: z.boolean().optional().default(false),
 });
-

@@ -42,6 +42,9 @@ export interface ExtractedOrderDraft {
   store_name: string;
   order_date: string;
   shipping_deadline: string | null;
+  shipped_at?: string | null;
+  delivered_at?: string | null;
+  logistic_type?: string | null;
   status: MlSaleOrderStatus;
   cancellation_reason: string | null;
   mlb_id: string;

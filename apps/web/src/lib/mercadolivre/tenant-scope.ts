@@ -11,8 +11,25 @@ export function applyTenantFilter<T extends { eq: Function; is: Function }>(
     : query.is("organization_id", null).eq("user_id", ctx.userId);
 }
 
+export function isMissingColumnError(
+  error: { code?: string; message?: string } | null,
+  columnName?: string
+): boolean {
+  if (!error) return false;
+  const msg = (error.message || "").toLowerCase();
+  const isColErr =
+    error.code === "42703" ||
+    error.code === "PGRST204" ||
+    (msg.includes("column") && (msg.includes("does not exist") || msg.includes("schema cache")));
+
+  if (!isColErr) return false;
+  if (!columnName) return true;
+  return msg.includes(columnName.toLowerCase());
+}
+
 export function isMissingTableError(error: { code?: string; message?: string } | null): boolean {
   if (!error) return false;
+  if (isMissingColumnError(error)) return false;
   const msg = (error.message || "").toLowerCase();
   return (
     error.code === "42P01" ||
@@ -103,4 +120,3 @@ export async function upsertTenantCostTemplate(
   }
   return data as ProductCostTemplate;
 }
-

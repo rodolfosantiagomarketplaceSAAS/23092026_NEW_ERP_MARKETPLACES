@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
       from: parsed.data.from,
       to: parsed.data.to,
       sellerAccountId: parsed.data.sellerAccountId,
+      analysisMode: parsed.data.analysisMode,
     });
 
     if (!result.success && result.accountsSynced === 0) {
@@ -60,4 +61,3 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ success: false, error: message }, { status: 500 });
   }
 }
-

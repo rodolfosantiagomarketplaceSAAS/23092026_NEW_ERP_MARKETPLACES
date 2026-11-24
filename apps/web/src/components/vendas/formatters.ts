@@ -1,4 +1,9 @@
-import type { DailyClosingRow, MlSaleOrder, Seller } from "@/types/ml-sales";
+import type {
+  DailyClosingRow,
+  MlSaleOrder,
+  SalesAnalysisMode,
+  Seller,
+} from "@/types/ml-sales";
 import { getOrderOperationalCostsOnly } from "@/lib/mercadolivre/sales-analytics";
 
 /**
@@ -9,6 +14,28 @@ export function getOfficialMlSaleCode(
   order: Pick<MlSaleOrder, "ml_order_id" | "ml_pack_id">
 ): string {
   return String(order.ml_pack_id ?? order.ml_order_id);
+}
+
+export function formatLogisticTypeLabel(logisticType?: string | null): string | null {
+  if (!logisticType) return null;
+  const key = logisticType.trim().toLowerCase();
+  switch (key) {
+    case "fulfillment":
+      return "Full";
+    case "xd_drop_off":
+      return "Agência ML";
+    case "cross_docking":
+      return "Coleta ML";
+    case "self_service":
+      return "Flex";
+    case "drop_off":
+      return "Correios";
+    case "custom":
+    case "me1":
+      return "Envio Próprio";
+    default:
+      return null;
+  }
 }
 
 const brlFormatter = new Intl.NumberFormat("pt-BR", {
@@ -137,15 +164,17 @@ export function exportDailyClosingToCsv(params: {
   sellers: Seller[];
   from: string;
   to: string;
+  analysisMode?: SalesAnalysisMode;
 }): void {
-  const { rows, sellers, from, to } = params;
+  const { rows, sellers, from, to, analysisMode = "order_date" } = params;
   const activeSellers = sellers.filter(
     (s) => s.active || rows.some((r) => (r.seller_transfers[s.id] ?? 0) > 0)
   );
   const includeUnassigned = rows.some((r) => r.unassigned_transfer_total > 0);
+  const dateHeader = analysisMode === "shipping_date" ? "Dia do Envio" : "Data da Venda";
 
   const headers = [
-    "Data",
+    dateHeader,
     "Qtd Vendas Validas",
     "Canceladas/Devolvidas",
     "Faturamento Bruto (R$)",
@@ -176,12 +205,13 @@ export function exportDailyClosingToCsv(params: {
     lines.push(rowCells.map(escapeCsvCell).join(";"));
   }
 
+  const modeSlug = analysisMode === "shipping_date" ? "por-dia-envio" : "por-data-venda";
   const csvContent = "\uFEFF" + lines.join("\r\n");
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `fechamento-repasse-ml-${from}-a-${to}.csv`;
+  link.download = `fechamento-repasse-ml-${modeSlug}-${from}-a-${to}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -193,12 +223,15 @@ export function exportDetailedOrdersToCsv(params: {
   sellers: Seller[];
   from: string;
   to: string;
+  analysisMode?: SalesAnalysisMode;
 }): void {
-  const { orders, sellers, from, to } = params;
+  const { orders, sellers, from, to, analysisMode = "order_date" } = params;
   const sellerMap = new Map(sellers.map((s) => [s.id, s]));
 
   const headers = [
     "Data Venda",
+    "Data Real do Envio",
+    "Modalidade Logistica",
     "Codigo Venda ML",
     "ID Subpedido API",
     "Loja",
@@ -228,8 +261,11 @@ export function exportDetailedOrdersToCsv(params: {
     const sellerName = o.assigned_seller_id
       ? sellerMap.get(o.assigned_seller_id)?.name || "—"
       : "Sem Vendedor";
+    const logisticLabel = formatLogisticTypeLabel(o.logistic_type) || o.logistic_type || "—";
     const cells: Array<string | number> = [
       formatDateTimeBR(o.order_date),
+      o.shipped_at ? formatDateTimeBR(o.shipped_at) : "Pendente",
+      logisticLabel,
       getOfficialMlSaleCode(o),
       String(o.ml_order_id),
       o.store_name,
@@ -255,12 +291,13 @@ export function exportDetailedOrdersToCsv(params: {
     lines.push(cells.map(escapeCsvCell).join(";"));
   }
 
+  const modeSlug = analysisMode === "shipping_date" ? "por-dia-envio" : "por-data-venda";
   const csvContent = "\uFEFF" + lines.join("\r\n");
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
-  link.download = `vendas-detalhadas-ml-${from}-a-${to}.csv`;
+  link.download = `vendas-detalhadas-ml-${modeSlug}-${from}-a-${to}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);

@@ -6,12 +6,17 @@ import {
   computeSalesDashboardAnalytics,
   isCancelledOrReturned,
 } from "@/lib/mercadolivre/sales-analytics";
-import { applyTenantFilter, isMissingTableError } from "@/lib/mercadolivre/tenant-scope";
+import {
+  applyTenantFilter,
+  isMissingColumnError,
+  isMissingTableError,
+} from "@/lib/mercadolivre/tenant-scope";
 import type {
   MlConnectedAccountOption,
   MlSaleOrder,
   MlSalesDashboardResponse,
   ProductCostTemplate,
+  SalesAnalysisMode,
   Seller,
 } from "@/types/ml-sales";
 
@@ -30,6 +35,9 @@ function normalizeOrderRow(row: Record<string, unknown>): MlSaleOrder {
     store_name: String(row.store_name || "Mercado Livre"),
     order_date: String(row.order_date),
     shipping_deadline: row.shipping_deadline ? String(row.shipping_deadline) : null,
+    shipped_at: row.shipped_at ? String(row.shipped_at) : null,
+    delivered_at: row.delivered_at ? String(row.delivered_at) : null,
+    logistic_type: row.logistic_type ? String(row.logistic_type) : null,
     status: (row.status as MlSaleOrder["status"]) || "paid",
     cancellation_reason: row.cancellation_reason ? String(row.cancellation_reason) : null,
     mlb_id: String(row.mlb_id || ""),
@@ -81,6 +89,8 @@ export async function GET(request: NextRequest) {
   const sellerFilter = searchParams.get("seller") || "all";
   const statusFilter = searchParams.get("status") || "all";
   const storeFilter = searchParams.get("store") || "all";
+  const analysisMode: SalesAnalysisMode =
+    searchParams.get("analysisBy") === "shipping_date" ? "shipping_date" : "order_date";
   const searchQuery = (searchParams.get("q") || "").trim().replace(/^#+/, "").toLowerCase();
 
   const now = new Date();
@@ -113,16 +123,47 @@ export async function GET(request: NextRequest) {
       status: i.status,
     }));
 
-  const [ordersRes, sellersRes, templatesRes] = await Promise.all([
-    applyTenantFilter(
-      admin
-        .from("ml_sales_orders")
-        .select("*")
-        .gte("order_date", isoStart)
-        .lte("order_date", isoEnd)
-        .order("order_date", { ascending: false }),
-      ctx
-    ),
+  const ordersQuery =
+    analysisMode === "shipping_date"
+      ? applyTenantFilter(
+          admin
+            .from("ml_sales_orders")
+            .select("*")
+            .not("shipped_at", "is", null)
+            .gte("shipped_at", isoStart)
+            .lte("shipped_at", isoEnd)
+            .order("shipped_at", { ascending: false }),
+          ctx
+        )
+      : applyTenantFilter(
+          admin
+            .from("ml_sales_orders")
+            .select("*")
+            .gte("order_date", isoStart)
+            .lte("order_date", isoEnd)
+            .order("order_date", { ascending: false }),
+          ctx
+        );
+
+  const pendingShipmentCountQuery = applyTenantFilter(
+    admin
+      .from("ml_sales_orders")
+      .select("id", { count: "exact", head: true })
+      .eq("status", "paid"),
+    ctx
+  );
+
+  const backfillCountQuery = applyTenantFilter(
+    admin
+      .from("ml_sales_orders")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["shipped", "delivered"])
+      .is("shipped_at", null),
+    ctx
+  );
+
+  const [ordersRes, sellersRes, templatesRes, pendingRes, backfillRes] = await Promise.all([
+    ordersQuery,
     applyTenantFilter(
       admin.from("sellers").select("*").order("name", { ascending: true }),
       ctx
@@ -134,6 +175,8 @@ export async function GET(request: NextRequest) {
         .order("updated_at", { ascending: false }),
       ctx
     ),
+    pendingShipmentCountQuery,
+    backfillCountQuery,
   ]);
 
   if (
@@ -144,10 +187,15 @@ export async function GET(request: NextRequest) {
     const emptyAnalytics = computeSalesDashboardAnalytics({
       filteredOrders: [],
       sellers: [],
+      analysisMode,
     });
     const emptyResponse: MlSalesDashboardResponse = {
       success: true,
       schemaReady: false,
+      shippingDateSchemaReady: false,
+      analysisMode,
+      pendingShipmentCount: 0,
+      backfillMissingShippedAtCount: 0,
       orders: [],
       sellers: [],
       templates: [],
@@ -160,12 +208,9 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(emptyResponse);
   }
 
-  if (ordersRes.error) {
-    return NextResponse.json(
-      { success: false, error: ordersRes.error.message },
-      { status: 500 }
-    );
-  }
+  const shippingDateSchemaReady =
+    !isMissingColumnError(ordersRes.error, "shipped_at") &&
+    !isMissingColumnError(backfillRes.error, "shipped_at");
 
   const sellers: Seller[] = ((sellersRes.data ?? []) as Array<Record<string, unknown>>).map(
     (s) => ({
@@ -199,6 +244,42 @@ export async function GET(request: NextRequest) {
     created_at: String(t.created_at),
     updated_at: String(t.updated_at),
   }));
+
+  const pendingShipmentCount = pendingRes.count ?? 0;
+  const backfillMissingShippedAtCount = shippingDateSchemaReady ? backfillRes.count ?? 0 : 0;
+
+  // Caso o usuário selecione "Dia do Envio" antes de executar a nova migration SQL 20261124180000
+  if (ordersRes.error && isMissingColumnError(ordersRes.error, "shipped_at")) {
+    const emptyAnalytics = computeSalesDashboardAnalytics({
+      filteredOrders: [],
+      sellers,
+      analysisMode,
+    });
+    const missingColPayload: MlSalesDashboardResponse = {
+      success: true,
+      schemaReady: true,
+      shippingDateSchemaReady: false,
+      analysisMode,
+      pendingShipmentCount,
+      backfillMissingShippedAtCount: 0,
+      orders: [],
+      sellers,
+      templates,
+      accounts,
+      stores: accounts.map((a) => a.account_name),
+      sellerOrderCounts: {},
+      unassignedCount: 0,
+      ...emptyAnalytics,
+    };
+    return NextResponse.json(missingColPayload);
+  }
+
+  if (ordersRes.error) {
+    return NextResponse.json(
+      { success: false, error: ordersRes.error.message },
+      { status: 500 }
+    );
+  }
 
   const allPeriodOrders = ((ordersRes.data ?? []) as Array<Record<string, unknown>>).map(
     normalizeOrderRow
@@ -251,11 +332,16 @@ export async function GET(request: NextRequest) {
         ? baseFilteredForPills
         : filteredOrders,
     sellers,
+    analysisMode,
   });
 
   const payload: MlSalesDashboardResponse = {
     success: true,
     schemaReady: true,
+    shippingDateSchemaReady,
+    analysisMode,
+    pendingShipmentCount,
+    backfillMissingShippedAtCount,
     orders: filteredOrders,
     sellers,
     templates,
@@ -268,4 +354,3 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json(payload);
 }
-

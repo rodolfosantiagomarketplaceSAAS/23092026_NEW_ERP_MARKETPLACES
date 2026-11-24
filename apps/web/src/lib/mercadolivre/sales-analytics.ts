@@ -2,9 +2,10 @@ import type {
   DailyClosingRow,
   MlSaleOrder,
   MlSalesSummaryKpis,
+  SalesAnalysisMode,
   Seller,
   SellerTransferSummary,
-} from "@/types/ml-sales";
+} from "../../types/ml-sales";
 
 export function roundCurrency(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -15,7 +16,9 @@ export function isCancelledOrReturned(status: string): boolean {
   return status === "cancelled" || status === "returned";
 }
 
-export function isMpMoneyReleased(order: Pick<MlSaleOrder, "mp_release_status" | "mp_release_date">): boolean {
+export function isMpMoneyReleased(
+  order: Pick<MlSaleOrder, "mp_release_status" | "mp_release_date">
+): boolean {
   if (order.mp_release_status === "released") return true;
   if (order.mp_release_date) {
     const parsed = Date.parse(order.mp_release_date);
@@ -58,17 +61,64 @@ export function toBrazilDateKeyAndLabel(isoDate: string): { dateKey: string; dat
   };
 }
 
+/**
+ * Retorna a data de referência do pedido conforme o modo de análise selecionado:
+ * - `order_date`: Data/hora da venda (`order.order_date`)
+ * - `shipping_date`: Data/hora real de postagem/coleta (`order.shipped_at`, ou `null` se ainda não enviado)
+ */
+export function getOrderAnalysisDateIso(
+  order: Pick<MlSaleOrder, "order_date" | "shipped_at">,
+  analysisMode: SalesAnalysisMode = "order_date"
+): string | null {
+  if (analysisMode === "shipping_date") {
+    return order.shipped_at || null;
+  }
+  return order.order_date;
+}
+
+/**
+ * Filtra e ordena uma coleção de pedidos pelo intervalo `[fromDate, toDate]` (YYYY-MM-DD no fuso `America/Sao_Paulo`)
+ * respeitando estritamente o modo `order_date` (data da venda) ou `shipping_date` (dia real do envio).
+ */
+export function filterOrdersByAnalysisMode(params: {
+  orders: MlSaleOrder[];
+  fromDate: string;
+  toDate: string;
+  analysisMode: SalesAnalysisMode;
+}): MlSaleOrder[] {
+  const { orders, fromDate, toDate, analysisMode } = params;
+
+  return orders
+    .filter((order) => {
+      const refIso = getOrderAnalysisDateIso(order, analysisMode);
+      if (!refIso) return false;
+      const { dateKey } = toBrazilDateKeyAndLabel(refIso);
+      return dateKey >= fromDate && dateKey <= toDate;
+    })
+    .sort((a, b) => {
+      const isoA = getOrderAnalysisDateIso(a, analysisMode) || "";
+      const isoB = getOrderAnalysisDateIso(b, analysisMode) || "";
+      return Date.parse(isoB) - Date.parse(isoA);
+    });
+}
+
 export function computeSalesDashboardAnalytics(params: {
   filteredOrders: MlSaleOrder[];
   periodOrdersForSellerCards?: MlSaleOrder[];
   sellers: Seller[];
+  analysisMode?: SalesAnalysisMode;
 }): {
   kpis: MlSalesSummaryKpis;
   sellerSummaries: SellerTransferSummary[];
   dailyClosing: DailyClosingRow[];
 } {
-  const { filteredOrders, sellers } = params;
+  const { filteredOrders, sellers, analysisMode = "order_date" } = params;
   const sellerMap = new Map<string, Seller>(sellers.map((s) => [s.id, s]));
+
+  const effectiveOrders =
+    analysisMode === "shipping_date"
+      ? filteredOrders.filter((o) => Boolean(o.shipped_at))
+      : filteredOrders;
 
   let validOrdersCount = 0;
   let cancelledOrdersCount = 0;
@@ -85,7 +135,7 @@ export function computeSalesDashboardAnalytics(params: {
   let operationalCostsTotal = 0;
   let netOperationalProfitTotal = 0;
 
-  for (const order of filteredOrders) {
+  for (const order of effectiveOrders) {
     if (!order.verified_at) unverifiedOrdersCount += 1;
     if (!order.assigned_seller_id) unassignedOrdersCount += 1;
 
@@ -143,8 +193,12 @@ export function computeSalesDashboardAnalytics(params: {
     net_margin_pct: netMarginPct,
   };
 
-  // Resumo Individual por Vendedor (baseado nos pedidos filtrados ativos)
-  const sellerSourceOrders = params.periodOrdersForSellerCards ?? filteredOrders;
+  // Resumo Individual por Vendedor (baseado nos pedidos filtrados ativos do modo atual)
+  const rawSellerSource = params.periodOrdersForSellerCards ?? effectiveOrders;
+  const sellerSourceOrders =
+    analysisMode === "shipping_date"
+      ? rawSellerSource.filter((o) => Boolean(o.shipped_at))
+      : rawSellerSource;
   const sellerSummariesMap = new Map<string, SellerTransferSummary>();
 
   for (const s of sellers) {
@@ -205,11 +259,14 @@ export function computeSalesDashboardAnalytics(params: {
 
   const sellerSummaries = Array.from(sellerSummariesMap.values());
 
-  // Consolidado Dia a Dia (Fechamento)
+  // Consolidado Dia a Dia (Fechamento agrupado por Data da Venda OU Dia do Envio)
   const dailyMap = new Map<string, DailyClosingRow>();
 
-  for (const order of filteredOrders) {
-    const { dateKey, dateLabel } = toBrazilDateKeyAndLabel(order.order_date);
+  for (const order of effectiveOrders) {
+    const refIso = getOrderAnalysisDateIso(order, analysisMode);
+    if (!refIso) continue;
+
+    const { dateKey, dateLabel } = toBrazilDateKeyAndLabel(refIso);
     let row = dailyMap.get(dateKey);
     if (!row) {
       row = {
@@ -271,4 +328,3 @@ export function computeSalesDashboardAnalytics(params: {
 
   return { kpis, sellerSummaries, dailyClosing };
 }
-

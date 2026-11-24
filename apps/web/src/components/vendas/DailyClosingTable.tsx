@@ -1,8 +1,8 @@
 "use client";
 
 import React, { useMemo } from "react";
-import { CalendarDays, Download } from "lucide-react";
-import type { DailyClosingRow, Seller } from "@/types/ml-sales";
+import { CalendarDays, Download, Truck } from "lucide-react";
+import type { DailyClosingRow, SalesAnalysisMode, Seller } from "@/types/ml-sales";
 import { exportDailyClosingToCsv, formatBRL } from "./formatters";
 
 interface DailyClosingTableProps {
@@ -10,9 +10,18 @@ interface DailyClosingTableProps {
   sellers: Seller[];
   from: string;
   to: string;
+  analysisMode?: SalesAnalysisMode;
 }
 
-export function DailyClosingTable({ rows, sellers, from, to }: DailyClosingTableProps) {
+export function DailyClosingTable({
+  rows,
+  sellers,
+  from,
+  to,
+  analysisMode = "order_date",
+}: DailyClosingTableProps) {
+  const isShippingMode = analysisMode === "shipping_date";
+
   const dynamicSellers = useMemo(
     () =>
       sellers.filter(
@@ -68,13 +77,21 @@ export function DailyClosingTable({ rows, sellers, from, to }: DailyClosingTable
     <div className="space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-2 bg-white border border-[#E2E8F0] rounded px-4 py-3">
         <div className="flex items-center gap-2">
-          <CalendarDays className="w-4 h-4 text-sky-600" />
+          {isShippingMode ? (
+            <Truck className="w-4 h-4 text-emerald-700" />
+          ) : (
+            <CalendarDays className="w-4 h-4 text-sky-600" />
+          )}
           <div>
             <h2 className="text-xs font-bold text-slate-900">
-              Consolidado Dia a Dia (Fechamento de Caixa & Repasses)
+              {isShippingMode
+                ? "Consolidado Dia a Dia por Data de Envio (Expedição & Repasses)"
+                : "Consolidado Dia a Dia por Data da Venda (Fechamento de Caixa & Repasses)"}
             </h2>
             <p className="text-[11px] text-slate-500">
-              Agrupamento diário das vendas válidas com colunas dinâmicas por vendedor/sócio.
+              {isShippingMode
+                ? "Agrupamento diário baseado no dia real em que você despachou os produtos (fuso Brasília)."
+                : "Agrupamento diário das vendas válidas pela data da compra com colunas dinâmicas por vendedor/sócio."}
             </p>
           </div>
         </div>
@@ -83,7 +100,7 @@ export function DailyClosingTable({ rows, sellers, from, to }: DailyClosingTable
           type="button"
           disabled={rows.length === 0}
           onClick={() =>
-            exportDailyClosingToCsv({ rows, sellers, from, to })
+            exportDailyClosingToCsv({ rows, sellers, from, to, analysisMode })
           }
           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-xs font-bold transition-colors shadow-2xs"
         >
@@ -94,15 +111,21 @@ export function DailyClosingTable({ rows, sellers, from, to }: DailyClosingTable
 
       {rows.length === 0 ? (
         <div className="bg-white border border-[#E2E8F0] rounded p-8 text-center text-xs text-slate-500">
-          Nenhum dado diário disponível no período filtrado.
+          {isShippingMode
+            ? "Nenhum envio registrado no período filtrado. Sincronize para buscar postagens recentes."
+            : "Nenhum dado diário disponível no período filtrado."}
         </div>
       ) : (
         <div className="bg-white border border-[#E2E8F0] rounded shadow-2xs overflow-x-auto">
           <table className="w-full text-left border-collapse text-xs min-w-[1000px]">
             <thead>
               <tr className="bg-slate-900 text-slate-200 border-b border-slate-800 uppercase text-[10px] font-bold tracking-wider">
-                <th className="py-2.5 px-3">Data</th>
-                <th className="py-2.5 px-3 text-center">Qtd Vendas</th>
+                <th className="py-2.5 px-3">
+                  {isShippingMode ? "Dia do Envio" : "Data da Venda"}
+                </th>
+                <th className="py-2.5 px-3 text-center">
+                  {isShippingMode ? "Qtd Enviadas" : "Qtd Vendas"}
+                </th>
                 <th className="py-2.5 px-3 text-center">Canceladas</th>
                 <th className="py-2.5 px-3 text-right">Faturamento Bruto</th>
                 <th className="py-2.5 px-3 text-right">Taxas/Frete Líq. ML</th>
@@ -223,4 +246,3 @@ export function DailyClosingTable({ rows, sellers, from, to }: DailyClosingTable
     </div>
   );
 }
-

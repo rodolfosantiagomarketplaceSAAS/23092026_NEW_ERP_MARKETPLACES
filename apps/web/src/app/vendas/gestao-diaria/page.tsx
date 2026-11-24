@@ -17,12 +17,16 @@ import {
   Store,
   Table2,
 } from "lucide-react";
-import type { MlSalesDashboardResponse } from "@/types/ml-sales";
+import type {
+  MlSalesDashboardResponse,
+  SalesAnalysisMode,
+} from "@/types/ml-sales";
 import {
   computeDatePresetRange,
   exportDetailedOrdersToCsv,
   getTodayBrazilISO,
 } from "@/components/vendas/formatters";
+import { AnalysisModeToggle } from "@/components/vendas/AnalysisModeToggle";
 import { SalesKpiSection } from "@/components/vendas/SalesKpiSection";
 import { DailySalesTable } from "@/components/vendas/DailySalesTable";
 import { DailyClosingTable } from "@/components/vendas/DailyClosingTable";
@@ -39,6 +43,10 @@ type SubTab = "operational" | "closing";
 const EMPTY_DASHBOARD: MlSalesDashboardResponse = {
   success: true,
   schemaReady: true,
+  shippingDateSchemaReady: true,
+  analysisMode: "order_date",
+  pendingShipmentCount: 0,
+  backfillMissingShippedAtCount: 0,
   orders: [],
   sellers: [],
   templates: [],
@@ -70,6 +78,7 @@ const EMPTY_DASHBOARD: MlSalesDashboardResponse = {
 export default function GestaoDiariaVendasPage() {
   const initialRange = computeDatePresetRange("last7");
 
+  const [analysisMode, setAnalysisMode] = useState<SalesAnalysisMode>("order_date");
   const [preset, setPreset] = useState<DatePreset>("last7");
   const [fromDate, setFromDate] = useState<string>(initialRange.from);
   const [toDate, setToDate] = useState<string>(initialRange.to);
@@ -107,6 +116,7 @@ export default function GestaoDiariaVendasPage() {
           seller: sellerFilter,
           status: statusFilter,
           store: storeFilter,
+          analysisBy: analysisMode,
         });
         if (debouncedQuery) qs.set("q", debouncedQuery);
 
@@ -130,7 +140,7 @@ export default function GestaoDiariaVendasPage() {
         if (!options?.silent) setLoading(false);
       }
     },
-    [fromDate, toDate, sellerFilter, statusFilter, storeFilter, debouncedQuery]
+    [fromDate, toDate, sellerFilter, statusFilter, storeFilter, analysisMode, debouncedQuery]
   );
 
   useEffect(() => {
@@ -169,6 +179,7 @@ export default function GestaoDiariaVendasPage() {
         body: JSON.stringify({
           from: fromDate || getTodayBrazilISO(),
           to: toDate || getTodayBrazilISO(),
+          analysisMode,
         }),
       });
       const json = await res.json();
@@ -184,10 +195,12 @@ export default function GestaoDiariaVendasPage() {
         Array.isArray(json.errors) && json.errors.length > 0
           ? ` (${json.errors.length} alerta: ${json.errors[0].message})`
           : "";
+      const modeNote =
+        analysisMode === "shipping_date" ? " (com lookback de 14 dias + pendentes)" : "";
 
       setFeedback({
         type: "success",
-        message: `Sincronização Read-Only concluída: ${json.ordersUpserted} pedidos processados em ${json.accountsSynced} conta(s) ML${warnSuffix}.`,
+        message: `Sincronização Read-Only concluída${modeNote}: ${json.ordersUpserted} pedidos processados em ${json.accountsSynced} conta(s) ML${warnSuffix}.`,
       });
 
       await loadDashboard({ silent: true });
@@ -252,7 +265,8 @@ export default function GestaoDiariaVendasPage() {
               </div>
               <p className="text-xs text-slate-500">
                 Conciliação automática em tempo real (pós-taxas ML, frete + estornos promocionais),
-                custos operacionais e fechamento por sócio/operador.
+                com análise alternável por <strong>Data da Venda</strong> ou{" "}
+                <strong>Dia Real do Envio</strong>.
               </p>
             </div>
 
@@ -282,7 +296,7 @@ export default function GestaoDiariaVendasPage() {
             </div>
           </div>
 
-          {/* Alerta se a migration SQL ainda não foi executada no Supabase */}
+          {/* Alerta se a migration SQL inicial ainda não foi executada no Supabase */}
           {!data.schemaReady && (
             <div className="p-3.5 rounded bg-amber-50 border border-amber-300 text-amber-950 flex items-start gap-2.5 text-xs">
               <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
@@ -291,12 +305,35 @@ export default function GestaoDiariaVendasPage() {
                   Tabelas do módulo ainda não encontradas no Supabase
                 </div>
                 <p className="text-[11px] text-amber-900 mt-0.5">
-                  Execute o arquivo de migration{" "}
+                  Execute as migrations{" "}
                   <code className="font-mono bg-amber-100 px-1 py-0.5 rounded">
                     supabase/migrations/20261124120000_create_ml_sales_and_seller_transfers.sql
                   </code>{" "}
-                  no <strong>SQL Editor</strong> do seu painel Supabase para ativar a persistência
-                  de vendedores, custos padrão e pedidos sincronizados.
+                  e{" "}
+                  <code className="font-mono bg-amber-100 px-1 py-0.5 rounded">
+                    supabase/migrations/20261124180000_add_shipped_at_to_ml_sales_orders.sql
+                  </code>{" "}
+                  no <strong>SQL Editor</strong> do painel Supabase.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Alerta caso a nova migration de Data de Envio (shipped_at) ainda não tenha sido rodada */}
+          {data.schemaReady && data.shippingDateSchemaReady === false && (
+            <div className="p-3.5 rounded bg-amber-50 border border-amber-300 text-amber-950 flex items-start gap-2.5 text-xs">
+              <ShieldAlert className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <div>
+                <div className="font-bold">
+                  Coluna de Data Real de Envio (<code>shipped_at</code>) pendente no Supabase
+                </div>
+                <p className="text-[11px] text-amber-900 mt-0.5">
+                  Para ativar a nova análise <strong>Por Dia do Envio</strong>, execute a migration{" "}
+                  <code className="font-mono bg-amber-100 px-1 py-0.5 rounded">
+                    supabase/migrations/20261124180000_add_shipped_at_to_ml_sales_orders.sql
+                  </code>{" "}
+                  no <strong>SQL Editor</strong> do seu painel Supabase e em seguida clique em{" "}
+                  <strong>Forçar Sincronização ML</strong>.
                 </p>
               </div>
             </div>
@@ -329,14 +366,43 @@ export default function GestaoDiariaVendasPage() {
             </div>
           )}
 
-          {/* Barra Superior de Filtros (Datas, Loja, Status, Busca e Pills de Vendedor) */}
+          {/* Barra Superior de Filtros (Seletor Venda vs Envio, Datas, Loja, Status, Busca e Pills de Vendedor) */}
           <div className="bg-white border border-[#E2E8F0] rounded p-3 shadow-2xs space-y-3">
+            {/* Linha 1: Seletor de Tipo de Análise (Data da Venda vs Dia do Envio) */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pb-2.5 border-b border-slate-100">
+              <AnalysisModeToggle
+                value={analysisMode}
+                onChange={setAnalysisMode}
+                pendingShipmentCount={data.pendingShipmentCount ?? 0}
+                backfillMissingCount={data.backfillMissingShippedAtCount ?? 0}
+                syncing={syncing || autoSyncing}
+                onRequestBackfillSync={handleSyncMercadoLivre}
+              />
+
+              <span className="text-[11px] text-slate-500">
+                {analysisMode === "shipping_date" ? (
+                  <>
+                    Exibindo vendas <strong>enviadas (bipadas/coletadas)</strong> entre{" "}
+                    <span className="font-mono font-semibold text-slate-700">{fromDate}</span> e{" "}
+                    <span className="font-mono font-semibold text-slate-700">{toDate}</span>
+                  </>
+                ) : (
+                  <>
+                    Exibindo vendas <strong>realizadas pelo comprador</strong> entre{" "}
+                    <span className="font-mono font-semibold text-slate-700">{fromDate}</span> e{" "}
+                    <span className="font-mono font-semibold text-slate-700">{toDate}</span>
+                  </>
+                )}
+              </span>
+            </div>
+
+            {/* Linha 2: Período, Loja, Status e Busca */}
             <div className="flex flex-wrap items-center justify-between gap-2.5">
               {/* Atalhos de Datas + Intervalo Customizado */}
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-600 mr-1">
                   <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  Período:
+                  {analysisMode === "shipping_date" ? "Data de Envio:" : "Período:"}
                 </span>
 
                 {(
@@ -531,6 +597,7 @@ export default function GestaoDiariaVendasPage() {
             kpis={data.kpis}
             sellerSummaries={data.sellerSummaries}
             selectedSellerId={sellerFilter}
+            analysisMode={analysisMode}
             onSelectSeller={(id) => setSellerFilter(id)}
           />
 
@@ -547,7 +614,9 @@ export default function GestaoDiariaVendasPage() {
                 }`}
               >
                 <ListChecks className="w-3.5 h-3.5" />
-                Visão Operacional Dia a Dia ({data.orders.length})
+                {analysisMode === "shipping_date"
+                  ? `Envios Operacionais Dia a Dia (${data.orders.length})`
+                  : `Visão Operacional Dia a Dia (${data.orders.length})`}
               </button>
 
               <button
@@ -560,7 +629,9 @@ export default function GestaoDiariaVendasPage() {
                 }`}
               >
                 <Table2 className="w-3.5 h-3.5" />
-                Consolidado Dia a Dia (Fechamento) ({data.dailyClosing.length})
+                {analysisMode === "shipping_date"
+                  ? `Consolidado por Dia do Envio (${data.dailyClosing.length})`
+                  : `Consolidado Dia a Dia (Fechamento) (${data.dailyClosing.length})`}
               </button>
             </div>
 
@@ -573,6 +644,7 @@ export default function GestaoDiariaVendasPage() {
                     sellers: data.sellers,
                     from: fromDate,
                     to: toDate,
+                    analysisMode,
                   })
                 }
                 className="inline-flex items-center gap-1.5 px-2.5 py-1 mb-1 rounded-xs border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700"
@@ -587,13 +659,18 @@ export default function GestaoDiariaVendasPage() {
           {loading ? (
             <div className="bg-white border border-[#E2E8F0] rounded p-12 flex items-center justify-center gap-2 text-xs text-slate-500">
               <Loader2 className="w-4 h-4 animate-spin text-sky-600" />
-              <span>Calculando repasses, taxas ML e fechamento do período...</span>
+              <span>
+                {analysisMode === "shipping_date"
+                  ? "Calculando apuração por data real de envio..."
+                  : "Calculando repasses, taxas ML e fechamento do período..."}
+              </span>
             </div>
           ) : activeSubTab === "operational" ? (
             <DailySalesTable
               orders={data.orders}
               sellers={data.sellers}
               templates={data.templates}
+              analysisMode={analysisMode}
               onRefresh={() => loadDashboard({ silent: true })}
             />
           ) : (
@@ -602,6 +679,7 @@ export default function GestaoDiariaVendasPage() {
               sellers={data.sellers}
               from={fromDate}
               to={toDate}
+              analysisMode={analysisMode}
             />
           )}
         </div>

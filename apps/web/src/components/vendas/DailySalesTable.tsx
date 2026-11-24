@@ -19,7 +19,12 @@ import {
   UserCheck,
   X,
 } from "lucide-react";
-import type { MlSaleOrder, ProductCostTemplate, Seller } from "@/types/ml-sales";
+import type {
+  MlSaleOrder,
+  ProductCostTemplate,
+  SalesAnalysisMode,
+  Seller,
+} from "@/types/ml-sales";
 import {
   getOrderOperationalCostsOnly,
   isCancelledOrReturned,
@@ -30,6 +35,7 @@ import {
   formatBRL,
   formatDateTimeBR,
   formatDeadlineBR,
+  formatLogisticTypeLabel,
   formatPct,
   formatShortDateBR,
   getOfficialMlSaleCode,
@@ -40,6 +46,7 @@ interface DailySalesTableProps {
   orders: MlSaleOrder[];
   sellers: Seller[];
   templates: ProductCostTemplate[];
+  analysisMode?: SalesAnalysisMode;
   onRefresh: () => void;
 }
 
@@ -47,6 +54,7 @@ export function DailySalesTable({
   orders,
   sellers,
   templates,
+  analysisMode = "order_date",
   onRefresh,
 }: DailySalesTableProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -54,6 +62,8 @@ export function DailySalesTable({
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [batchBusy, setBatchBusy] = useState<boolean>(false);
   const [editingCostsOrder, setEditingCostsOrder] = useState<MlSaleOrder | null>(null);
+
+  const isShippingMode = analysisMode === "shipping_date";
 
   const activeSellers = useMemo(
     () => sellers.filter((s) => s.active),
@@ -193,13 +203,31 @@ export function DailySalesTable({
   if (orders.length === 0) {
     return (
       <div className="bg-white border border-[#E2E8F0] rounded p-10 text-center space-y-2">
-        <Package className="w-8 h-8 text-slate-300 mx-auto" />
+        {isShippingMode ? (
+          <Truck className="w-8 h-8 text-slate-300 mx-auto" />
+        ) : (
+          <Package className="w-8 h-8 text-slate-300 mx-auto" />
+        )}
         <div className="text-sm font-bold text-slate-800">
-          Nenhuma venda encontrada para os filtros selecionados
+          {isShippingMode
+            ? "Nenhum pedido enviado (bipado/coletado) encontrado neste período"
+            : "Nenhuma venda encontrada para os filtros selecionados"}
         </div>
-        <p className="text-xs text-slate-500 max-w-md mx-auto">
-          Clique em <strong>&ldquo;Sincronizar Vendas ML&rdquo;</strong> no topo para buscar os
-          pedidos mais recentes na API oficial do Mercado Livre ou ajuste o intervalo de datas.
+        <p className="text-xs text-slate-500 max-w-lg mx-auto">
+          {isShippingMode ? (
+            <>
+              No modo <strong>Por Dia do Envio</strong> aparecem exclusivamente as vendas já
+              despachadas na transportadora/agência dentro das datas filtradas. Clique em{" "}
+              <strong>&ldquo;Forçar Sincronização ML&rdquo;</strong> no topo para buscar envios
+              recentes (com lookback automático de 14 dias) ou ajuste o intervalo.
+            </>
+          ) : (
+            <>
+              Clique em <strong>&ldquo;Forçar Sincronização ML&rdquo;</strong> no topo para buscar
+              os pedidos mais recentes na API oficial do Mercado Livre ou ajuste o intervalo de
+              datas.
+            </>
+          )}
         </p>
       </div>
     );
@@ -220,7 +248,9 @@ export function DailySalesTable({
                   className="rounded border-slate-600 bg-slate-800 text-sky-500 cursor-pointer"
                 />
               </th>
-              <th className="py-2.5 px-2.5">Data / Enviar Dia</th>
+              <th className="py-2.5 px-2.5">
+                {isShippingMode ? "Enviado Dia / Data Venda" : "Data Venda / Envio"}
+              </th>
               <th className="py-2.5 px-2.5 min-w-[340px] max-w-[480px]">Produto / Variação</th>
               <th className="py-2.5 px-2.5 min-w-[185px]">Vendedor (Repasse)</th>
               <th className="py-2.5 px-2.5 min-w-[170px] max-w-[240px]">Comprador</th>
@@ -247,6 +277,7 @@ export function DailySalesTable({
                 Boolean(assignedSeller) && tpl?.default_seller_id === assignedSeller?.id;
 
               const deadline = formatDeadlineBR(order.shipping_deadline);
+              const logisticLabel = formatLogisticTypeLabel(order.logistic_type);
               const netMlDiscount = roundCurrency(
                 order.ml_commission_amount + order.ml_shipping_cost - order.ml_promo_rebate
               );
@@ -267,12 +298,13 @@ export function DailySalesTable({
               return (
                 <tr
                   key={order.id}
-                  className={`transition-colors ${cancelled
-                    ? "bg-rose-50/35 hover:bg-rose-50/60"
-                    : isSelected
+                  className={`transition-colors ${
+                    cancelled
+                      ? "bg-rose-50/35 hover:bg-rose-50/60"
+                      : isSelected
                       ? "bg-sky-50/60 hover:bg-sky-50"
                       : "hover:bg-slate-50/90"
-                    }`}
+                  }`}
                 >
                   {/* 1. Checkbox */}
                   <td className="py-2.5 px-2.5 text-center align-top pt-3.5">
@@ -285,12 +317,38 @@ export function DailySalesTable({
                     />
                   </td>
 
-                  {/* 2. Data Venda / Enviar Dia */}
+                  {/* 2. Data Venda / Dia do Envio */}
                   <td className="py-2.5 px-2.5 align-top whitespace-nowrap">
-                    <div className="font-mono font-bold text-slate-900 text-[11px]">
-                      {formatDateTimeBR(order.order_date)}
-                    </div>
-                    <div className="text-[10px] font-mono text-slate-500">
+                    {isShippingMode ? (
+                      <>
+                        <div
+                          className="inline-flex items-center gap-1 font-mono font-black text-emerald-800 text-[11px]"
+                          title="Data e hora real em que o produto foi postado/coletado no Mercado Livre"
+                        >
+                          <Truck className="w-3 h-3 text-emerald-700 shrink-0" />
+                          <span>Env: {formatDateTimeBR(order.shipped_at)}</span>
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-500">
+                          Venda: {formatDateTimeBR(order.order_date)}
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="font-mono font-bold text-slate-900 text-[11px]">
+                          {formatDateTimeBR(order.order_date)}
+                        </div>
+                        {order.shipped_at && (
+                          <div
+                            className="text-[10px] font-mono font-semibold text-emerald-700"
+                            title="Data e hora real em que o produto foi postado/coletado"
+                          >
+                            Enviado: {formatDateTimeBR(order.shipped_at)}
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    <div className="text-[10px] font-mono text-slate-500 mt-0.5">
                       <span
                         className="font-semibold text-slate-700"
                         title={
@@ -303,7 +361,8 @@ export function DailySalesTable({
                       </span>{" "}
                       · {order.store_name}
                     </div>
-                    <div className="mt-1">
+
+                    <div className="mt-1 flex flex-wrap items-center gap-1">
                       {cancelled ? (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200">
                           <AlertTriangle className="w-2.5 h-2.5" />
@@ -321,15 +380,22 @@ export function DailySalesTable({
                         </span>
                       ) : (
                         <span
-                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs text-[10px] font-semibold border ${deadline.isOverdue
-                            ? "bg-rose-100 text-rose-800 border-rose-300"
-                            : deadline.isUrgent
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs text-[10px] font-semibold border ${
+                            deadline.isOverdue
+                              ? "bg-rose-100 text-rose-800 border-rose-300"
+                              : deadline.isUrgent
                               ? "bg-amber-100 text-amber-900 border-amber-300"
                               : "bg-slate-100 text-slate-700 border-slate-200"
-                            }`}
+                          }`}
                         >
                           <Clock className="w-2.5 h-2.5" />
                           {deadline.label}
+                        </span>
+                      )}
+
+                      {logisticLabel && (
+                        <span className="px-1.5 py-0.5 rounded-xs text-[9px] font-mono font-bold bg-slate-100 text-slate-600 border border-slate-200">
+                          {logisticLabel}
                         </span>
                       )}
                     </div>
@@ -415,10 +481,11 @@ export function DailySalesTable({
                           )}
 
                           <span
-                            className={`px-1.5 py-0.2 rounded-xs font-bold ${order.quantity > 1
-                              ? "bg-amber-100 text-amber-900 border border-amber-300"
-                              : "bg-slate-100 text-slate-700"
-                              }`}
+                            className={`px-1.5 py-0.2 rounded-xs font-bold ${
+                              order.quantity > 1
+                                ? "bg-amber-100 text-amber-900 border border-amber-300"
+                                : "bg-slate-100 text-slate-700"
+                            }`}
                           >
                             {order.quantity}x
                           </span>
@@ -456,15 +523,16 @@ export function DailySalesTable({
                           style={
                             assignedSeller
                               ? {
-                                borderColor: assignedSeller.color_hex,
-                                backgroundColor: `${assignedSeller.color_hex}12`,
-                              }
+                                  borderColor: assignedSeller.color_hex,
+                                  backgroundColor: `${assignedSeller.color_hex}12`,
+                                }
                               : undefined
                           }
-                          className={`w-full text-[11px] font-bold rounded-xs border px-2 py-1 focus:outline-none cursor-pointer ${assignedSeller
-                            ? "text-slate-900"
-                            : "bg-amber-50/70 border-amber-300 text-amber-900"
-                            }`}
+                          className={`w-full text-[11px] font-bold rounded-xs border px-2 py-1 focus:outline-none cursor-pointer ${
+                            assignedSeller
+                              ? "text-slate-900"
+                              : "bg-amber-50/70 border-amber-300 text-amber-900"
+                          }`}
                         >
                           <option value="">— Sem Vendedor —</option>
                           {activeSellers.map((s) => (
@@ -534,8 +602,9 @@ export function DailySalesTable({
                   {/* 6. Venda Bruta */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap">
                     <div
-                      className={`font-bold text-[11px] ${cancelled ? "line-through text-slate-400" : "text-slate-900"
-                        }`}
+                      className={`font-bold text-[11px] ${
+                        cancelled ? "line-through text-slate-400" : "text-slate-900"
+                      }`}
                     >
                       {formatBRL(order.gross_sale_amount)}
                     </div>
@@ -631,23 +700,25 @@ export function DailySalesTable({
                   {/* 10. Lucro Limpo */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap">
                     <div
-                      className={`text-xs font-black ${cancelled
-                        ? "text-slate-400 line-through"
-                        : order.net_operational_profit >= 0
+                      className={`text-xs font-black ${
+                        cancelled
+                          ? "text-slate-400 line-through"
+                          : order.net_operational_profit >= 0
                           ? "text-slate-900"
                           : "text-rose-700"
-                        }`}
+                      }`}
                     >
                       {formatBRL(order.net_operational_profit)}
                     </div>
                     {!cancelled && (
                       <div
-                        className={`text-[10px] font-semibold ${marginPct >= 15
-                          ? "text-emerald-700"
-                          : marginPct >= 0
+                        className={`text-[10px] font-semibold ${
+                          marginPct >= 15
+                            ? "text-emerald-700"
+                            : marginPct >= 0
                             ? "text-amber-700"
                             : "text-rose-700"
-                          }`}
+                        }`}
                       >
                         {formatPct(marginPct)}
                       </div>
@@ -679,10 +750,11 @@ export function DailySalesTable({
                       )}
 
                       <label
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border text-[10px] font-semibold cursor-pointer select-none transition-colors ${order.verified_at
-                          ? "bg-sky-50 border-sky-300 text-sky-800"
-                          : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
-                          }`}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border text-[10px] font-semibold cursor-pointer select-none transition-colors ${
+                          order.verified_at
+                            ? "bg-sky-50 border-sky-300 text-sky-800"
+                            : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                        }`}
                       >
                         <input
                           type="checkbox"
@@ -778,4 +850,3 @@ export function DailySalesTable({
     </div>
   );
 }
-

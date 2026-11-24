@@ -5,6 +5,8 @@ export type MlSaleOrderStatus =
   | "cancelled"
   | "returned";
 
+export type SalesAnalysisMode = "order_date" | "shipping_date";
+
 export interface Seller {
   id: string;
   organization_id: string | null;
@@ -45,6 +47,9 @@ export interface MlSaleOrder {
   store_name: string;
   order_date: string;
   shipping_deadline: string | null;
+  shipped_at: string | null;
+  delivered_at?: string | null;
+  logistic_type?: string | null;
   status: MlSaleOrderStatus;
   cancellation_reason: string | null;
 
@@ -141,6 +146,10 @@ export interface MlConnectedAccountOption {
 export interface MlSalesDashboardResponse {
   success: boolean;
   schemaReady: boolean;
+  shippingDateSchemaReady?: boolean;
+  analysisMode?: SalesAnalysisMode;
+  pendingShipmentCount?: number;
+  backfillMissingShippedAtCount?: number;
   orders: MlSaleOrder[];
   sellers: Seller[];
   templates: ProductCostTemplate[];
@@ -158,6 +167,6 @@ export interface MlSalesSyncSummary {
   accountsSynced: number;
   ordersFetched: number;
   ordersUpserted: number;
+  pendingOrdersChecked?: number;
   errors: Array<{ account: string; message: string }>;
 }
-

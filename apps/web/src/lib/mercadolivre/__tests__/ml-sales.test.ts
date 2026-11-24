@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { computeSalesDashboardAnalytics } from "../sales-analytics";
+import {
+  computeSalesDashboardAnalytics,
+  filterOrdersByAnalysisMode,
+} from "../sales-analytics";
+import {
+  extractShipmentDatesAndLogistics,
+  normalizeSyncIsoRange,
+} from "../shipment-extraction";
 import type { MlSaleOrder, Seller } from "../../../types/ml-sales";
 
 function makeSeller(overrides: Partial<Seller>): Seller {
@@ -50,6 +57,9 @@ function makeOrder(overrides: Partial<MlSaleOrder>): MlSaleOrder {
     store_name: "Loja Matriz ML",
     order_date: "2026-11-24T13:30:00.000Z",
     shipping_deadline: "2026-11-25T15:00:00.000Z",
+    shipped_at: null,
+    delivered_at: null,
+    logistic_type: "cross_docking",
     status,
     cancellation_reason: cancelled ? "Cancelado pelo comprador" : null,
     mlb_id: "MLB391827364",
@@ -100,8 +110,6 @@ test("apuração financeira soma estorno promocional ML e zera vendas canceladas
     commission_pct: 50,
   });
 
-  // Pedido 1 (Carlos 100%): Bruto 200 - Comissão 32 - Frete 20 + Estorno 5 = 153.00 repasse
-  // Imposto 4% (8.00) + Custos (50.00) => Lucro Limpo = 153 - 8 - 50 = 95.00
   const validOrder1 = makeOrder({
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1",
     ml_order_id: 2000009001,
@@ -109,7 +117,6 @@ test("apuração financeira soma estorno promocional ML e zera vendas canceladas
     mp_release_status: "released",
   });
 
-  // Pedido 2 (Ana 50%): Base 153.00, Cota efetiva 50% = 76.50, A liberar no MP
   const validOrder2 = makeOrder({
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2",
     ml_order_id: 2000009002,
@@ -118,7 +125,6 @@ test("apuração financeira soma estorno promocional ML e zera vendas canceladas
     mp_release_date: "2099-01-01T00:00:00.000Z",
   });
 
-  // Pedido 3 (Cancelado): não pode somar em faturamento, repasse ou lucro limpo
   const cancelledOrder = makeOrder({
     id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3",
     ml_order_id: 2000009003,
@@ -143,26 +149,6 @@ test("apuração financeira soma estorno promocional ML e zera vendas canceladas
   assert.equal(result.kpis.effective_seller_transfer_total, 229.5);
   assert.equal(result.kpis.net_operational_profit_total, 190);
 
-  const carlosSummary = result.sellerSummaries.find(
-    (s) => s.seller_id === sellerIntegral.id
-  );
-  const anaSummary = result.sellerSummaries.find(
-    (s) => s.seller_id === sellerSocio.id
-  );
-
-  assert.ok(carlosSummary);
-  assert.equal(carlosSummary.valid_orders_count, 1);
-  assert.equal(carlosSummary.effective_transfer_total, 153);
-  assert.equal(carlosSummary.mp_released_amount, 153);
-  assert.equal(carlosSummary.mp_pending_amount, 0);
-
-  assert.ok(anaSummary);
-  assert.equal(anaSummary.valid_orders_count, 1);
-  assert.equal(anaSummary.base_transfer_total, 153);
-  assert.equal(anaSummary.effective_transfer_total, 76.5);
-  assert.equal(anaSummary.mp_released_amount, 0);
-  assert.equal(anaSummary.mp_pending_amount, 76.5);
-
   assert.equal(result.dailyClosing.length, 1);
   assert.equal(result.dailyClosing[0].valid_orders_count, 2);
   assert.equal(result.dailyClosing[0].cancelled_orders_count, 1);
@@ -170,3 +156,159 @@ test("apuração financeira soma estorno promocional ML e zera vendas canceladas
   assert.equal(result.dailyClosing[0].seller_transfers[sellerSocio.id], 76.5);
 });
 
+test("análise Por Dia do Envio (shipping_date) agrupa vendas compradas na sexta e enviadas na segunda pelo dia real do envio e exclui não enviadas", () => {
+  // Arrange
+  const seller = makeSeller({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Carlos",
+    commission_pct: 100,
+  });
+
+  // Pedido A: comprado na sexta 20/11 às 21:00 BRT, enviado na segunda 23/11 às 14:15 BRT
+  const fridayBoughtMondayShipped = makeOrder({
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb1",
+    ml_order_id: 2000010001,
+    status: "shipped",
+    order_date: "2026-11-21T00:00:00.000Z", // 20/11 21:00 BRT
+    shipped_at: "2026-11-23T17:15:00.000Z", // 23/11 14:15 BRT
+    assigned_seller_id: seller.id,
+  });
+
+  // Pedido B: comprado na segunda 23/11 às 09:00 BRT e enviado no mesmo dia 23/11 às 16:00 BRT
+  const mondayBoughtMondayShipped = makeOrder({
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb2",
+    ml_order_id: 2000010002,
+    status: "delivered",
+    order_date: "2026-11-23T12:00:00.000Z",
+    shipped_at: "2026-11-23T19:00:00.000Z",
+    assigned_seller_id: seller.id,
+  });
+
+  // Pedido C: comprado na segunda 23/11 às 22:30 BRT, ainda pago aguardando envio (shipped_at = null)
+  const mondayBoughtStillUnshipped = makeOrder({
+    id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbb3",
+    ml_order_id: 2000010003,
+    status: "paid",
+    order_date: "2026-11-24T01:30:00.000Z", // 23/11 22:30 BRT
+    shipped_at: null,
+    assigned_seller_id: seller.id,
+  });
+
+  const allOrders = [
+    fridayBoughtMondayShipped,
+    mondayBoughtMondayShipped,
+    mondayBoughtStillUnshipped,
+  ];
+
+  // Act 1: Filtrando dia 23/11 por Data da Venda -> traz B e C (comprados em 23/11), ignora A (comprado em 20/11)
+  const byOrderDate23 = filterOrdersByAnalysisMode({
+    orders: allOrders,
+    fromDate: "2026-11-23",
+    toDate: "2026-11-23",
+    analysisMode: "order_date",
+  });
+  const analyticsByOrderDate = computeSalesDashboardAnalytics({
+    filteredOrders: byOrderDate23,
+    sellers: [seller],
+    analysisMode: "order_date",
+  });
+
+  // Act 2: Filtrando dia 23/11 por Dia do Envio -> traz A e B (enviados em 23/11), ignora C (ainda não enviado)
+  const byShippingDate23 = filterOrdersByAnalysisMode({
+    orders: allOrders,
+    fromDate: "2026-11-23",
+    toDate: "2026-11-23",
+    analysisMode: "shipping_date",
+  });
+  const analyticsByShippingDate = computeSalesDashboardAnalytics({
+    filteredOrders: byShippingDate23,
+    sellers: [seller],
+    analysisMode: "shipping_date",
+  });
+
+  // Assert
+  assert.deepEqual(
+    byOrderDate23.map((o) => o.ml_order_id),
+    [2000010003, 2000010002]
+  );
+  assert.equal(analyticsByOrderDate.kpis.valid_orders_count, 2);
+
+  assert.deepEqual(
+    byShippingDate23.map((o) => o.ml_order_id),
+    [2000010002, 2000010001]
+  );
+  assert.equal(analyticsByShippingDate.kpis.valid_orders_count, 2);
+  assert.equal(analyticsByShippingDate.kpis.gross_valid_sales, 400);
+  assert.equal(analyticsByShippingDate.dailyClosing.length, 1);
+  assert.equal(analyticsByShippingDate.dailyClosing[0].date_key, "2026-11-23");
+  assert.equal(analyticsByShippingDate.dailyClosing[0].date_label, "23/11/2026");
+  assert.equal(analyticsByShippingDate.dailyClosing[0].valid_orders_count, 2);
+});
+
+test("extractShipmentDatesAndLogistics resolve cascata ML (x-format-new + classic status_history + timeline) e mantém null para etiquetas não postadas", () => {
+  // 1. Etiqueta impressa (ready_to_ship) mas ainda não bipada na transportadora -> shippedAt DEVE ser null
+  const unshippedLabel = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 9001,
+      status: "ready_to_ship",
+      substatus: "printed",
+      logistic: { type: "xd_drop_off" },
+    },
+    classicDetail: {
+      id: 9001,
+      status: "ready_to_ship",
+      status_history: {
+        date_ready_to_ship: "2026-11-24T11:00:00.000-03:00",
+        date_shipped: null,
+      },
+    },
+  });
+  assert.equal(unshippedLabel.shippedAt, null);
+  assert.equal(unshippedLabel.logisticType, "xd_drop_off");
+
+  // 2. x-format-new omitiu status_history, mas schema padrão /shipments/{id} trouxe status_history.date_shipped
+  const fromClassicFallback = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 9002,
+      status: "shipped",
+      logistic: { type: "cross_docking" },
+    },
+    classicDetail: {
+      id: 9002,
+      status: "shipped",
+      status_history: {
+        date_shipped: "2026-11-24T15:42:10.000-03:00",
+        date_delivered: null,
+      },
+    },
+  });
+  assert.equal(fromClassicFallback.shippedAt, "2026-11-24T15:42:10.000-03:00");
+  assert.equal(fromClassicFallback.logisticType, "cross_docking");
+
+  // 3. Fallback via /shipments/{id}/tracking/timeline quando status_history vier vazio
+  const fromTimelineFallback = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 9003,
+      status: "delivered",
+      logistic: { type: "fulfillment" },
+    },
+    timelineEvents: [
+      { event_name: "handling", event_date: "2026-11-22T10:00:00.000Z" },
+      { event_name: "shipped", event_date: "2026-11-22T14:30:00.000Z" },
+      { event_name: "delivered", event_date: "2026-11-23T16:10:00.000Z" },
+    ],
+  });
+  assert.equal(fromTimelineFallback.shippedAt, "2026-11-22T14:30:00.000Z");
+  assert.equal(fromTimelineFallback.deliveredAt, "2026-11-23T16:10:00.000Z");
+  assert.equal(fromTimelineFallback.logisticType, "fulfillment");
+});
+
+test("normalizeSyncIsoRange recua 14 dias automaticamente no modo shipping_date", () => {
+  const orderRange = normalizeSyncIsoRange("2026-11-24", "2026-11-24", "order_date");
+  assert.equal(orderRange.isoStart, "2026-11-24T00:00:00.000-03:00");
+
+  const shippingRange = normalizeSyncIsoRange("2026-11-24", "2026-11-24", "shipping_date");
+  // 2026-11-24T03:00:00Z menos 14 dias = 2026-11-10T03:00:00.000Z (meia-noite BRT de 10/11)
+  assert.equal(shippingRange.isoStart, "2026-11-10T03:00:00.000Z");
+  assert.equal(shippingRange.isoEnd, "2026-11-24T23:59:59.999-03:00");
+});

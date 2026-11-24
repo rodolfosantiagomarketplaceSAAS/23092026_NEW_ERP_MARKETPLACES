@@ -19,7 +19,9 @@ import type {
   MlSaleOrderStatus,
   MlSalesSyncSummary,
   ProductCostTemplate,
+  SalesAnalysisMode,
 } from "@/types/ml-sales";
+import { isMissingColumnError } from "./tenant-scope";
 import {
   applyPackShippingProration,
   reconcileOrderFinancials,
@@ -29,13 +31,31 @@ import {
   type RawPaymentDetail,
 } from "./financial-reconciliation";
 
+import {
+  extractShipmentDatesAndLogistics,
+  isValidIsoTimestamp,
+  normalizeSyncIsoRange,
+  SHIPPING_LOOKBACK_DAYS,
+  type RawShipmentDetail,
+  type RawShipmentHistoryEntry,
+  type RawShipmentStatusHistory,
+  type RawShipmentTimelineEvent,
+} from "./shipment-extraction";
+
 export {
   applyPackShippingProration,
+  extractShipmentDatesAndLogistics,
+  normalizeSyncIsoRange,
   reconcileOrderFinancials,
+  SHIPPING_LOOKBACK_DAYS,
   type ExtractedOrderDraft,
   type RawChargeDetail,
   type RawFeeDetail,
   type RawPaymentDetail,
+  type RawShipmentDetail,
+  type RawShipmentHistoryEntry,
+  type RawShipmentStatusHistory,
+  type RawShipmentTimelineEvent,
 };
 
 const ML_API_BASE = "https://api.mercadolibre.com";
@@ -43,6 +63,7 @@ const MP_API_BASE = "https://api.mercadopago.com";
 const MAX_RETRIES = 4;
 const PAGE_LIMIT = 50;
 const CONCURRENCY = 5;
+const MAX_FOLLOWUP_LOCAL_ORDERS = 200;
 
 const ALLOWED_READONLY_HOSTS = new Set([
   "api.mercadolibre.com",
@@ -222,33 +243,6 @@ interface RawMlOrderDetail {
   };
 }
 
-export interface RawShipmentDetail {
-  id: number;
-  order_id?: number | null;
-  status?: string;
-  substatus?: string;
-  shipping_option?: {
-    list_cost?: number;
-    cost?: number;
-    estimated_handling_limit?: {
-      date?: string | null;
-    };
-  };
-  lead_time?: {
-    list_cost?: number;
-    cost?: number;
-    buffering?: {
-      date?: string | null;
-    };
-    estimated_schedule_limit?: {
-      date?: string | null;
-    };
-    estimated_handling_limit?: {
-      date?: string | null;
-    };
-  };
-}
-
 interface RawShipmentCosts {
   gross_amount?: number;
   receiver?: {
@@ -277,24 +271,16 @@ export interface CachedShipmentFinancials {
   detail: RawShipmentDetail | null;
   sellerCost: number;
   shipmentPayments?: Array<{ paymentId: string; amount: number }>;
-}
-
-function normalizeIsoRange(fromInput: string, toInput: string): { isoStart: string; isoEnd: string } {
-  const fromTrim = fromInput.trim();
-  const toTrim = toInput.trim();
-
-  const isoStart =
-    fromTrim.length === 10 ? `${fromTrim}T00:00:00.000-03:00` : new Date(fromTrim).toISOString();
-  const isoEnd =
-    toTrim.length === 10 ? `${toTrim}T23:59:59.999-03:00` : new Date(toTrim).toISOString();
-
-  return { isoStart, isoEnd };
+  shippedAt?: string | null;
+  deliveredAt?: string | null;
+  logisticType?: string | null;
 }
 
 function resolveOrderStatus(
   order: RawMlOrderDetail,
   payments: RawPaymentDetail[],
-  shipment: RawShipmentDetail | null
+  shipment: RawShipmentDetail | null,
+  shippedAt?: string | null
 ): { status: MlSaleOrderStatus; cancellationReason: string | null } {
   const hasRefundedPayment =
     payments.length > 0 &&
@@ -337,7 +323,7 @@ function resolveOrderStatus(
     return { status: "delivered", cancellationReason: null };
   }
 
-  if (shipment?.status === "shipped") {
+  if (shipment?.status === "shipped" || Boolean(shippedAt)) {
     return { status: "shipped", cancellationReason: null };
   }
 
@@ -404,6 +390,62 @@ async function fetchOrderIdsInPeriod(
   }
 
   return Array.from(uniqueIds);
+}
+
+/**
+ * Busca no Supabase local os pedidos desta conta ML que:
+ * 1) Ainda estão com `status = 'paid'` (aguardando envio — podem ter sido despachados hoje mesmo comprados há semanas);
+ * 2) Já estão `shipped` ou `delivered`, mas ainda estão com `shipped_at IS NULL` (backfill automático pós-migração).
+ */
+async function fetchFollowUpLocalOrderIds(params: {
+  scope: IntegrationScope;
+  sellerId: string;
+}): Promise<number[]> {
+  const { scope, sellerId } = params;
+  const admin = createSupabaseAdminClient();
+  const ids = new Set<number>();
+
+  const applyTenant = <T extends { eq: Function; is: Function }>(q: T): T =>
+    scope.organizationId
+      ? q.eq("organization_id", scope.organizationId)
+      : q.is("organization_id", null).eq("user_id", scope.userId);
+
+  // 1. Pedidos pagos aguardando envio
+  const paidRes = await applyTenant(
+    admin
+      .from("ml_sales_orders")
+      .select("ml_order_id")
+      .eq("ml_seller_id", sellerId)
+      .eq("status", "paid")
+      .order("order_date", { ascending: false })
+      .limit(MAX_FOLLOWUP_LOCAL_ORDERS)
+  );
+
+  for (const row of (paidRes.data ?? []) as Array<{ ml_order_id?: number }>) {
+    const n = Number(row.ml_order_id);
+    if (Number.isSafeInteger(n) && n > 0) ids.add(n);
+  }
+
+  // 2. Backfill automático de pedidos já enviados/entregues ainda sem shipped_at gravado
+  const backfillRes = await applyTenant(
+    admin
+      .from("ml_sales_orders")
+      .select("ml_order_id")
+      .eq("ml_seller_id", sellerId)
+      .in("status", ["shipped", "delivered"])
+      .is("shipped_at", null)
+      .order("order_date", { ascending: false })
+      .limit(MAX_FOLLOWUP_LOCAL_ORDERS)
+  );
+
+  if (!backfillRes.error) {
+    for (const row of (backfillRes.data ?? []) as Array<{ ml_order_id?: number }>) {
+      const n = Number(row.ml_order_id);
+      if (Number.isSafeInteger(n) && n > 0) ids.add(n);
+    }
+  }
+
+  return Array.from(ids);
 }
 
 /**
@@ -499,8 +541,24 @@ export async function fetchItemThumbnailsMap(
   return result;
 }
 
+function hasShipmentEnteredTransit(
+  shipment: RawShipmentDetail | null,
+  order: RawMlOrderDetail
+): boolean {
+  const st = (shipment?.status || "").toLowerCase();
+  if (st === "shipped" || st === "delivered" || st === "not_delivered") {
+    return true;
+  }
+  const sub = (shipment?.substatus || "").toLowerCase();
+  if (sub === "returned" || sub === "returning_to_sender" || sub === "in_hub") {
+    return true;
+  }
+  const tags = Array.isArray(order.tags) ? order.tags : [];
+  return tags.includes("delivered") || tags.includes("shipped");
+}
+
 /**
- * Sincroniza um único pedido completo (Order + Payments + Shipment + Coparticipação Frete + Billing Info) via GET.
+ * Sincroniza um único pedido completo (Order + Payments + Shipment + Timestamp Real de Envio + Coparticipação Frete + Billing Info) via GET.
  */
 export async function extractSingleOrder(
   orderId: number,
@@ -571,11 +629,14 @@ export async function extractSingleOrder(
       .map((ps) => String(ps.id))
   );
 
-  // Busca envio, custo real do vendedor e pagamentos separados de frete do comprador
+  // Busca envio, data real de postagem (status_history.date_shipped), custo do vendedor e pagamentos separados de frete
   const shipmentId = order.shipping?.id ?? null;
   let shipmentDetail: RawShipmentDetail | null = null;
   let shipmentSellerCost = 0;
   let shipmentPaymentsList: Array<{ paymentId: string; amount: number }> = [];
+  let shippedAt: string | null = null;
+  let deliveredAt: string | null = null;
+  let logisticType: string | null = null;
 
   if (shipmentId) {
     const cached = shipmentCache.get(shipmentId);
@@ -583,6 +644,9 @@ export async function extractSingleOrder(
       shipmentDetail = cached.detail;
       shipmentSellerCost = cached.sellerCost;
       shipmentPaymentsList = cached.shipmentPayments ?? [];
+      shippedAt = cached.shippedAt ?? null;
+      deliveredAt = cached.deliveredAt ?? null;
+      logisticType = cached.logisticType ?? null;
     } else {
       const [shipRes, costsRes] = await Promise.all([
         mlReadOnlyGet<RawShipmentDetail>(
@@ -600,6 +664,46 @@ export async function extractSingleOrder(
       ]);
 
       shipmentDetail = shipRes.data ?? null;
+
+      // Extração em cascata da data real de envio (`date_shipped`):
+      // O header `x-format-new: true` traz `lead_time` e `logistic`, porém frequentemente omite `status_history`.
+      // Quando o pacote já entrou em trânsito/entrega, consultamos o schema padrão `/shipments/{id}` (que contém `status_history.date_shipped`)
+      // e, apenas se ainda ausente, `/shipments/{id}/tracking/timeline`.
+      let classicShipmentDetail: RawShipmentDetail | null = null;
+      let timelineEvents: RawShipmentTimelineEvent[] | null = null;
+
+      const enteredTransit = hasShipmentEnteredTransit(shipmentDetail, order);
+      if (enteredTransit && !isValidIsoTimestamp(shipmentDetail?.status_history?.date_shipped)) {
+        const classicRes = await mlReadOnlyGet<RawShipmentDetail>(
+          `${ML_API_BASE}/shipments/${shipmentId}`,
+          account,
+          tokenRef
+        );
+        classicShipmentDetail = classicRes.data ?? null;
+
+        if (!isValidIsoTimestamp(classicShipmentDetail?.status_history?.date_shipped)) {
+          const timelineRes = await mlReadOnlyGet<{
+            timeline?: RawShipmentTimelineEvent[];
+          }>(
+            `${ML_API_BASE}/shipments/${shipmentId}/tracking/timeline`,
+            account,
+            tokenRef
+          );
+          if (timelineRes.ok && Array.isArray(timelineRes.data?.timeline)) {
+            timelineEvents = timelineRes.data.timeline;
+          }
+        }
+      }
+
+      const extractedLogistics = extractShipmentDatesAndLogistics({
+        modernDetail: shipmentDetail,
+        classicDetail: classicShipmentDetail,
+        timelineEvents,
+      });
+
+      shippedAt = extractedLogistics.shippedAt;
+      deliveredAt = extractedLogistics.deliveredAt;
+      logisticType = extractedLogistics.logisticType;
 
       if (costsRes.ok && costsRes.data) {
         const senders = Array.isArray(costsRes.data.senders)
@@ -653,6 +757,9 @@ export async function extractSingleOrder(
         detail: shipmentDetail,
         sellerCost: shipmentSellerCost,
         shipmentPayments: shipmentPaymentsList,
+        shippedAt,
+        deliveredAt,
+        logisticType,
       });
     }
   }
@@ -718,7 +825,8 @@ export async function extractSingleOrder(
   const { status, cancellationReason } = resolveOrderStatus(
     order,
     paymentDetails,
-    shipmentDetail
+    shipmentDetail,
+    shippedAt
   );
 
   const financials = reconcileOrderFinancials({
@@ -737,6 +845,9 @@ export async function extractSingleOrder(
     store_name: account.account_name || `ML ${account.seller_id}`,
     order_date: order.date_created || new Date().toISOString(),
     shipping_deadline: shippingDeadline,
+    shipped_at: shippedAt,
+    delivered_at: deliveredAt,
+    logistic_type: logisticType,
     status,
     cancellation_reason: cancellationReason,
     mlb_id: mlbId,
@@ -774,9 +885,10 @@ export async function syncMercadoLivreSales(params: {
   from: string;
   to: string;
   sellerAccountId?: string;
+  analysisMode?: SalesAnalysisMode;
 }): Promise<MlSalesSyncSummary> {
-  const { scope, from, to, sellerAccountId } = params;
-  const { isoStart, isoEnd } = normalizeIsoRange(from, to);
+  const { scope, from, to, sellerAccountId, analysisMode = "order_date" } = params;
+  const { isoStart, isoEnd } = normalizeSyncIsoRange(from, to, analysisMode);
 
   const allIntegrations = await getMarketplaceIntegrations(scope);
   const mlAccounts = allIntegrations.filter(
@@ -793,6 +905,7 @@ export async function syncMercadoLivreSales(params: {
       accountsSynced: 0,
       ordersFetched: 0,
       ordersUpserted: 0,
+      pendingOrdersChecked: 0,
       errors: [
         {
           account: "Mercado Livre",
@@ -820,6 +933,7 @@ export async function syncMercadoLivreSales(params: {
   let accountsSynced = 0;
   let ordersFetched = 0;
   let ordersUpserted = 0;
+  let pendingOrdersChecked = 0;
   const errors: Array<{ account: string; message: string }> = [];
 
   for (const account of mlAccounts) {
@@ -838,17 +952,23 @@ export async function syncMercadoLivreSales(params: {
       }
 
       const tokenRef = { current: initialToken };
-      const orderIds = await fetchOrderIdsInPeriod(account, tokenRef, isoStart, isoEnd);
-      ordersFetched += orderIds.length;
+      const [periodOrderIds, followUpLocalIds] = await Promise.all([
+        fetchOrderIdsInPeriod(account, tokenRef, isoStart, isoEnd),
+        fetchFollowUpLocalOrderIds({ scope, sellerId: account.seller_id }),
+      ]);
 
-      if (orderIds.length === 0) {
+      pendingOrdersChecked += followUpLocalIds.length;
+      const combinedOrderIds = Array.from(new Set([...periodOrderIds, ...followUpLocalIds]));
+      ordersFetched += combinedOrderIds.length;
+
+      if (combinedOrderIds.length === 0) {
         accountsSynced += 1;
         continue;
       }
 
       const shipmentCache = new Map<number, CachedShipmentFinancials>();
 
-      const extracted = await mapWithConcurrency(orderIds, CONCURRENCY, (orderId) =>
+      const extracted = await mapWithConcurrency(combinedOrderIds, CONCURRENCY, (orderId) =>
         extractSingleOrder(orderId, account, tokenRef, shipmentCache)
       );
 
@@ -868,26 +988,44 @@ export async function syncMercadoLivreSales(params: {
         }
       }
 
-      // Consulta pedidos já existentes no Supabase para preservar vendedor, conferência e custos manuais
-      const { data: existingRows, error: existingErr } = await admin
+      // Consulta pedidos já existentes no Supabase para preservar vendedor, conferência, custos manuais e shipped_at anterior
+      const draftOrderIds = drafts.map((d) => d.ml_order_id);
+      let existingRows: Array<Record<string, unknown>> | null = null;
+      let shippingColumnsAvailable = true;
+
+      const fullSelectRes = await admin
         .from("ml_sales_orders")
         .select(
-          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
         )
-        .in(
-          "ml_order_id",
-          drafts.map((d) => d.ml_order_id)
-        );
+        .in("ml_order_id", draftOrderIds);
 
-      if (existingErr) {
+      if (fullSelectRes.error && isMissingColumnError(fullSelectRes.error)) {
+        shippingColumnsAvailable = false;
+        const legacySelectRes = await admin
+          .from("ml_sales_orders")
+          .select(
+            "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+          )
+          .in("ml_order_id", draftOrderIds);
+
+        if (legacySelectRes.error) {
+          throw new Error(
+            `Erro ao consultar ml_sales_orders (${legacySelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
+          );
+        }
+        existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
+      } else if (fullSelectRes.error) {
         throw new Error(
-          `Erro ao consultar ml_sales_orders (${existingErr.message}). Verifique se a migration SQL foi executada no Supabase.`
+          `Erro ao consultar ml_sales_orders (${fullSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
         );
+      } else {
+        existingRows = (fullSelectRes.data ?? []) as Array<Record<string, unknown>>;
       }
 
       const existingMap = new Map<number, Record<string, unknown>>();
       for (const row of existingRows ?? []) {
-        existingMap.set(Number(row.ml_order_id), row as Record<string, unknown>);
+        existingMap.set(Number(row.ml_order_id), row);
       }
 
       const upsertPayloads = drafts.map((d) => {
@@ -939,7 +1077,7 @@ export async function syncMercadoLivreSales(params: {
           ? round2(Number(tpl.accessories_kit_cost) * d.quantity)
           : Number(existing?.cost_accessories_kit ?? 0);
 
-        return {
+        const basePayload: Record<string, unknown> = {
           organization_id: scope.organizationId,
           user_id: scope.userId,
           ml_order_id: d.ml_order_id,
@@ -984,6 +1122,17 @@ export async function syncMercadoLivreSales(params: {
           cost_printing: costPrinting,
           cost_accessories_kit: costAccessoriesKit,
         };
+
+        if (shippingColumnsAvailable) {
+          basePayload.shipped_at =
+            d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+          basePayload.delivered_at =
+            d.delivered_at ?? (existing?.delivered_at ? String(existing.delivered_at) : null);
+          basePayload.logistic_type =
+            d.logistic_type ?? (existing?.logistic_type ? String(existing.logistic_type) : null);
+        }
+
+        return basePayload;
       });
 
       // Upsert em lotes de 100 registros em ml_order_id
@@ -1011,6 +1160,7 @@ export async function syncMercadoLivreSales(params: {
     accountsSynced,
     ordersFetched,
     ordersUpserted,
+    pendingOrdersChecked,
     errors,
   };
 }

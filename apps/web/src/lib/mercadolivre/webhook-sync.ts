@@ -14,9 +14,11 @@ import {
   extractSingleOrder,
   fetchItemThumbnailsMap,
   mlReadOnlyGet,
+  type CachedShipmentFinancials,
   type ExtractedOrderDraft,
   type RawShipmentDetail,
 } from "@/lib/mercadolivre/sales-sync";
+import { isMissingColumnError } from "@/lib/mercadolivre/tenant-scope";
 import type { ProductCostTemplate } from "@/types/ml-sales";
 
 const ML_API_BASE = "https://api.mercadolibre.com";
@@ -211,6 +213,7 @@ async function upsertDraftsPreservingManualFields(params: {
 
   const admin = createSupabaseAdminClient();
   const distinctMlbs = Array.from(new Set(drafts.map((d) => d.mlb_id)));
+  const draftOrderIds = drafts.map((d) => d.ml_order_id);
 
   let templatesQuery = admin
     .from("product_cost_templates")
@@ -221,22 +224,36 @@ async function upsertDraftsPreservingManualFields(params: {
     ? templatesQuery.eq("organization_id", scope.organizationId)
     : templatesQuery.eq("user_id", scope.userId);
 
-  const [{ data: templateRows }, { data: existingRows, error: existingErr }] =
-    await Promise.all([
-      templatesQuery,
-      admin
-        .from("ml_sales_orders")
-        .select(
-          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
-        )
-        .in(
-          "ml_order_id",
-          drafts.map((d) => d.ml_order_id)
-        ),
-    ]);
+  const [{ data: templateRows }, fullSelectRes] = await Promise.all([
+    templatesQuery,
+    admin
+      .from("ml_sales_orders")
+      .select(
+        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
+      )
+      .in("ml_order_id", draftOrderIds),
+  ]);
 
-  if (existingErr) {
-    throw new Error(`Erro ao consultar ml_sales_orders: ${existingErr.message}`);
+  let existingRows: Array<Record<string, unknown>> = [];
+  let shippingColumnsAvailable = true;
+
+  if (fullSelectRes.error && isMissingColumnError(fullSelectRes.error)) {
+    shippingColumnsAvailable = false;
+    const legacySelectRes = await admin
+      .from("ml_sales_orders")
+      .select(
+        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+      )
+      .in("ml_order_id", draftOrderIds);
+
+    if (legacySelectRes.error) {
+      throw new Error(`Erro ao consultar ml_sales_orders: ${legacySelectRes.error.message}`);
+    }
+    existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
+  } else if (fullSelectRes.error) {
+    throw new Error(`Erro ao consultar ml_sales_orders: ${fullSelectRes.error.message}`);
+  } else {
+    existingRows = (fullSelectRes.data ?? []) as Array<Record<string, unknown>>;
   }
 
   const templatesByMlb = new Map<string, ProductCostTemplate>();
@@ -245,8 +262,8 @@ async function upsertDraftsPreservingManualFields(params: {
   }
 
   const existingMap = new Map<number, Record<string, unknown>>();
-  for (const row of existingRows ?? []) {
-    existingMap.set(Number(row.ml_order_id), row as Record<string, unknown>);
+  for (const row of existingRows) {
+    existingMap.set(Number(row.ml_order_id), row);
   }
 
   const upsertPayloads = drafts.map((d) => {
@@ -294,7 +311,7 @@ async function upsertDraftsPreservingManualFields(params: {
       ? round2(Number(tpl.accessories_kit_cost) * d.quantity)
       : Number(existing?.cost_accessories_kit ?? 0);
 
-    return {
+    const basePayload: Record<string, unknown> = {
       organization_id: scope.organizationId,
       user_id: scope.userId,
       ml_order_id: d.ml_order_id,
@@ -339,6 +356,17 @@ async function upsertDraftsPreservingManualFields(params: {
       cost_printing: costPrinting,
       cost_accessories_kit: costAccessoriesKit,
     };
+
+    if (shippingColumnsAvailable) {
+      basePayload.shipped_at =
+        d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+      basePayload.delivered_at =
+        d.delivered_at ?? (existing?.delivered_at ? String(existing.delivered_at) : null);
+      basePayload.logistic_type =
+        d.logistic_type ?? (existing?.logistic_type ? String(existing.logistic_type) : null);
+    }
+
+    return basePayload;
   });
 
   const { error: upsertErr } = await admin
@@ -377,10 +405,7 @@ export async function syncMercadoLivreSingleOrderBySeller(params: {
     };
   }
 
-  const shipmentCache = new Map<
-    number,
-    { detail: RawShipmentDetail | null; sellerCost: number }
-  >();
+  const shipmentCache = new Map<number, CachedShipmentFinancials>();
 
   const primaryDraft = await extractSingleOrder(
     params.orderId,
