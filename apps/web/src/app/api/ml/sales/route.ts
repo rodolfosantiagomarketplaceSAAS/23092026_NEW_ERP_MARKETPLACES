@@ -81,7 +81,7 @@ export async function GET(request: NextRequest) {
   const sellerFilter = searchParams.get("seller") || "all";
   const statusFilter = searchParams.get("status") || "all";
   const storeFilter = searchParams.get("store") || "all";
-  const searchQuery = (searchParams.get("q") || "").trim().toLowerCase();
+  const searchQuery = (searchParams.get("q") || "").trim().replace(/^#+/, "").toLowerCase();
 
   const now = new Date();
   const todayBr = new Intl.DateTimeFormat("en-CA", {
@@ -218,7 +218,7 @@ export async function GET(request: NextRequest) {
     if (statusFilter === "unverified" && Boolean(o.verified_at)) return false;
 
     if (searchQuery) {
-      const hay = `${o.ml_order_id} ${o.mlb_id} ${o.sku || ""} ${o.product_title} ${o.buyer_name} ${o.buyer_document || ""}`.toLowerCase();
+      const hay = `${o.ml_pack_id || ""} ${o.ml_order_id} ${o.mlb_id} ${o.sku || ""} ${o.product_title} ${o.buyer_name} ${o.buyer_document || ""}`.toLowerCase();
       if (!hay.includes(searchQuery)) return false;
     }
 

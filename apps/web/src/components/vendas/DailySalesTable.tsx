@@ -32,6 +32,7 @@ import {
   formatDeadlineBR,
   formatPct,
   formatShortDateBR,
+  getOfficialMlSaleCode,
 } from "./formatters";
 import { OrderCostsPopover } from "./OrderCostsPopover";
 
@@ -68,6 +69,16 @@ export function DailySalesTable({
     () => new Map(templates.map((t) => [t.mlb_id.toUpperCase(), t])),
     [templates]
   );
+
+  const packItemCounts = useMemo(() => {
+    const counts = new Map<number, number>();
+    for (const o of orders) {
+      if (o.ml_pack_id) {
+        counts.set(o.ml_pack_id, (counts.get(o.ml_pack_id) ?? 0) + 1);
+      }
+    }
+    return counts;
+  }, [orders]);
 
   const allVisibleSelected =
     orders.length > 0 && orders.every((o) => selectedIds.has(o.id));
@@ -281,7 +292,17 @@ export function DailySalesTable({
                       {formatDateTimeBR(order.order_date)}
                     </div>
                     <div className="text-[10px] font-mono text-slate-500">
-                      #{order.ml_order_id} · {order.store_name}
+                      <span
+                        className="font-semibold text-slate-700"
+                        title={
+                          order.ml_pack_id
+                            ? `Código Oficial da Venda no ML: #${order.ml_pack_id} · Subpedido API: #${order.ml_order_id}`
+                            : `Código Oficial da Venda no ML: #${order.ml_order_id}`
+                        }
+                      >
+                        #{getOfficialMlSaleCode(order)}
+                      </span>{" "}
+                      · {order.store_name}
                     </div>
                     <div className="mt-1">
                       {cancelled ? (
@@ -373,7 +394,7 @@ export function DailySalesTable({
                             {order.quantity}x
                           </span>
 
-                          {order.ml_pack_id && (
+                          {order.ml_pack_id && (packItemCounts.get(order.ml_pack_id) ?? 0) > 1 && (
                             <span
                               className="px-1.5 py-0.2 rounded-xs bg-sky-50 text-sky-700 border border-sky-200"
                               title={`Carrinho ML Pack #${order.ml_pack_id}`}

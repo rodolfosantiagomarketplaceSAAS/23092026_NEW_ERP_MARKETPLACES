@@ -1,6 +1,16 @@
 import type { DailyClosingRow, MlSaleOrder, Seller } from "@/types/ml-sales";
 import { getOrderOperationalCostsOnly } from "@/lib/mercadolivre/sales-analytics";
 
+/**
+ * Retorna o Código Oficial da Venda exibido no painel "Vendas" do Mercado Livre:
+ * prioriza `ml_pack_id` quando presente, com fallback para `ml_order_id`.
+ */
+export function getOfficialMlSaleCode(
+  order: Pick<MlSaleOrder, "ml_order_id" | "ml_pack_id">
+): string {
+  return String(order.ml_pack_id ?? order.ml_order_id);
+}
+
 const brlFormatter = new Intl.NumberFormat("pt-BR", {
   style: "currency",
   currency: "BRL",
@@ -189,7 +199,8 @@ export function exportDetailedOrdersToCsv(params: {
 
   const headers = [
     "Data Venda",
-    "Pedido ML",
+    "Codigo Venda ML",
+    "ID Subpedido API",
     "Loja",
     "Status",
     "Motivo Cancelamento",
@@ -219,6 +230,7 @@ export function exportDetailedOrdersToCsv(params: {
       : "Sem Vendedor";
     const cells: Array<string | number> = [
       formatDateTimeBR(o.order_date),
+      getOfficialMlSaleCode(o),
       String(o.ml_order_id),
       o.store_name,
       o.status,
@@ -254,4 +266,3 @@ export function exportDetailedOrdersToCsv(params: {
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
 }
-

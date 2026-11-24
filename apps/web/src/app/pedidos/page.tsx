@@ -19,6 +19,7 @@ import {
   computeDatePresetRange,
   formatBRL,
   formatDateTimeBR,
+  getOfficialMlSaleCode,
 } from "@/components/vendas/formatters";
 import {
   markSalesSyncedNow,
@@ -283,7 +284,15 @@ export default function PedidosPage() {
                       return (
                         <tr key={o.id} className="hover:bg-slate-50 transition-colors">
                           <td className="py-2.5 px-3 font-mono font-bold text-slate-800">
-                            #{o.ml_order_id}
+                            <span
+                              title={
+                                o.ml_pack_id
+                                  ? `Código Venda ML: #${o.ml_pack_id} · Subpedido API: #${o.ml_order_id}`
+                                  : `Código Venda ML: #${o.ml_order_id}`
+                              }
+                            >
+                              #{getOfficialMlSaleCode(o)}
+                            </span>
                           </td>
                           <td className="py-2.5 px-3 text-slate-700">
                             <div className="font-medium">{o.buyer_name}</div>

@@ -20,6 +20,23 @@ import type {
   MlSalesSyncSummary,
   ProductCostTemplate,
 } from "@/types/ml-sales";
+import {
+  applyPackShippingProration,
+  reconcileOrderFinancials,
+  type ExtractedOrderDraft,
+  type RawChargeDetail,
+  type RawFeeDetail,
+  type RawPaymentDetail,
+} from "./financial-reconciliation";
+
+export {
+  applyPackShippingProration,
+  reconcileOrderFinancials,
+  type ExtractedOrderDraft,
+  type RawChargeDetail,
+  type RawFeeDetail,
+  type RawPaymentDetail,
+};
 
 const ML_API_BASE = "https://api.mercadolibre.com";
 const MP_API_BASE = "https://api.mercadopago.com";
@@ -198,41 +215,9 @@ interface RawMlOrderDetail {
   };
 }
 
-interface RawFeeDetail {
-  type?: string;
-  amount?: number;
-  fee_payer?: string;
-}
-
-interface RawChargeDetail {
-  name?: string;
-  type?: string;
-  accounts?: { from?: string; to?: string };
-  amounts?: { original?: number; refunded?: number };
-}
-
-interface RawPaymentDetail {
-  id: number | string;
-  status?: string;
-  status_detail?: string;
-  transaction_amount?: number;
-  shipping_cost?: number;
-  coupon_amount?: number;
-  marketplace_fee?: number;
-  mercadopago_fee?: number;
-  net_received_amount?: number;
-  money_release_date?: string | null;
-  money_release_status?: string | null;
-  transaction_details?: {
-    net_received_amount?: number;
-    total_paid_amount?: number;
-  };
-  fee_details?: RawFeeDetail[];
-  charges_details?: RawChargeDetail[];
-}
-
-export interface RawShipmentDetail { order_id?: number | null;
+export interface RawShipmentDetail {
   id: number;
+  order_id?: number | null;
   status?: string;
   substatus?: string;
   shipping_option?: {
@@ -245,6 +230,12 @@ export interface RawShipmentDetail { order_id?: number | null;
   lead_time?: {
     list_cost?: number;
     cost?: number;
+    buffering?: {
+      date?: string | null;
+    };
+    estimated_schedule_limit?: {
+      date?: string | null;
+    };
     estimated_handling_limit?: {
       date?: string | null;
     };
@@ -253,42 +244,32 @@ export interface RawShipmentDetail { order_id?: number | null;
 
 interface RawShipmentCosts {
   gross_amount?: number;
+  receiver?: {
+    cost?: number;
+    cost_details?: Array<{
+      sender_id?: number | string;
+      amount?: number;
+    }>;
+  };
   senders?: Array<{
+    user_id?: number | string;
     cost?: number;
     save?: number;
     discounts?: Array<{ promoted_amount?: number; type?: string }>;
   }>;
 }
 
-export interface ExtractedOrderDraft {
-  ml_order_id: number;
-  ml_pack_id: number | null;
-  ml_shipment_id: number | null;
-  ml_seller_id: string;
-  store_name: string;
-  order_date: string;
-  shipping_deadline: string | null;
-  status: MlSaleOrderStatus;
-  cancellation_reason: string | null;
-  mlb_id: string;
-  sku: string | null;
-  product_title: string;
-  product_thumbnail: string | null;
-  permalink: string | null;
-  quantity: number;
-  buyer_name: string;
-  buyer_document: string | null;
-  is_business_buyer: boolean;
-  gross_sale_amount: number;
-  ml_commission_pct: number;
-  ml_commission_amount: number;
-  ml_shipping_cost: number;
-  ml_promo_rebate: number;
-  mp_net_released: number;
-  mp_release_date: string | null;
-  mp_release_status: string | null;
-  shipment_fallback_seller_cost: number;
-  has_consolidated_pack_payment: boolean;
+interface RawShipmentPaymentEntry {
+  payment_id?: number | string;
+  amount?: number;
+  user_id?: number | string;
+  status?: string;
+}
+
+export interface CachedShipmentFinancials {
+  detail: RawShipmentDetail | null;
+  sellerCost: number;
+  shipmentPayments?: Array<{ paymentId: string; amount: number }>;
 }
 
 function normalizeIsoRange(fromInput: string, toInput: string): { isoStart: string; isoEnd: string } {
@@ -320,7 +301,7 @@ function resolveOrderStatus(
   const tags = Array.isArray(order.tags) ? order.tags : [];
 
   if (order.status === "cancelled") {
-    if (isReturnedShipment || hasRefundedPayment && shipment?.status === "delivered") {
+    if (isReturnedShipment || (hasRefundedPayment && shipment?.status === "delivered")) {
       return {
         status: "returned",
         cancellationReason:
@@ -419,14 +400,14 @@ async function fetchOrderIdsInPeriod(
 }
 
 /**
- * Busca detalhes de pagamento (GET /collections/{id} com fallback para GET /v1/payments/{id}).
+ * Busca detalhes de pagamento (GET /v1/payments/{id} com fallback para GET /collections/{id}).
  */
 async function fetchPaymentDetail(
   paymentId: number | string,
   account: MarketplaceAccountInfo,
   tokenRef: { current: string }
 ): Promise<RawPaymentDetail | null> {
-  // 1. Tenta v1/payments para obter fee_details + charges_details granulares
+  // 1. Prioriza v1/payments para obter charges_details granulares (razão contábil oficial MP)
   const mpRes = await mlReadOnlyGet<RawPaymentDetail>(
     `${MP_API_BASE}/v1/payments/${encodeURIComponent(String(paymentId))}`,
     account,
@@ -512,254 +493,13 @@ export async function fetchItemThumbnailsMap(
 }
 
 /**
- * Extrai e concilia tarifas ML, frete vendedor, estorno/redução promocional e líquido Mercado Pago.
- */
-export function reconcileOrderFinancials(params: {
-  grossSaleAmount: number;
-  orderItemsSaleFeeTotal: number;
-  payments: RawPaymentDetail[];
-  shipmentSellerCost: number;
-}): {
-  mlCommissionPct: number;
-  mlCommissionAmount: number;
-  mlShippingCost: number;
-  mlPromoRebate: number;
-  mpNetReleased: number;
-  mpReleaseDate: string | null;
-  mpReleaseStatus: string | null;
-  hasConsolidatedPackPayment: boolean;
-} {
-  const { grossSaleAmount, orderItemsSaleFeeTotal, payments, shipmentSellerCost } = params;
-
-  const validPayments = payments.filter(
-    (p) =>
-      p.status === "approved" ||
-      p.status === "accredited" ||
-      p.status === "in_mediation" ||
-      p.status === "pending" ||
-      p.status === "in_process"
-  );
-  const activePayments = validPayments.length > 0 ? validPayments : payments;
-
-  let collectorCommissionFees = 0;
-  let collectorShippingFees = 0;
-  let explicitPromoRebate = 0;
-  let mpNetSum = 0;
-  let hasNetInfo = false;
-  let totalPaymentTransactionAmount = 0;
-  let mpReleaseDate: string | null = null;
-  let mpReleaseStatus: string | null = null;
-
-  for (const p of activePayments) {
-    totalPaymentTransactionAmount += Number(p.transaction_amount || 0);
-
-    const netVal =
-      p.transaction_details?.net_received_amount ??
-      (typeof p.net_received_amount === "number" ? p.net_received_amount : undefined);
-
-    if (typeof netVal === "number" && Number.isFinite(netVal)) {
-      mpNetSum += netVal;
-      hasNetInfo = true;
-    }
-
-    if (p.money_release_date && !mpReleaseDate) {
-      mpReleaseDate = p.money_release_date;
-    }
-    if (p.money_release_status && !mpReleaseStatus) {
-      mpReleaseStatus = p.money_release_status;
-    }
-
-    if (Array.isArray(p.fee_details) && p.fee_details.length > 0) {
-      for (const fee of p.fee_details) {
-        if (fee.fee_payer && fee.fee_payer !== "collector") continue;
-        const amount = Number(fee.amount || 0);
-        const type = (fee.type || "").toLowerCase();
-
-        if (amount < 0) {
-          explicitPromoRebate += Math.abs(amount);
-        } else if (type.includes("shipping") || type.includes("shp")) {
-          collectorShippingFees += amount;
-        } else if (type.includes("coupon") || type.includes("discount") || type.includes("rebate")) {
-          explicitPromoRebate += amount;
-        } else {
-          collectorCommissionFees += amount;
-        }
-      }
-    } else {
-      collectorCommissionFees +=
-        Number(p.marketplace_fee || 0) + Number(p.mercadopago_fee || 0);
-      collectorShippingFees += Number(p.shipping_cost || 0);
-    }
-
-    // Inspeciona charges_details para subsídios/bonificações explícitas de campanha ML
-    if (Array.isArray(p.charges_details)) {
-      for (const ch of p.charges_details) {
-        const toCollector = ch.accounts?.to === "collector";
-        const orig = Number(ch.amounts?.original || 0);
-        const chName = `${ch.name || ""} ${ch.type || ""}`.toLowerCase();
-        if (
-          toCollector &&
-          orig > 0 &&
-          (chName.includes("campaign") ||
-            chName.includes("rebate") ||
-            chName.includes("subsidy") ||
-            chName.includes("discount") ||
-            chName.includes("bonif"))
-        ) {
-          explicitPromoRebate = Math.max(explicitPromoRebate, orig);
-        }
-      }
-    }
-  }
-
-  // Detecta se o pagamento retornado cobriu um carrinho maior que apenas este pedido
-  const hasConsolidatedPackPayment =
-    grossSaleAmount > 0 && totalPaymentTransactionAmount > grossSaleAmount * 1.05;
-
-  const paymentRatio =
-    hasConsolidatedPackPayment && totalPaymentTransactionAmount > 0
-      ? grossSaleAmount / totalPaymentTransactionAmount
-      : 1;
-
-  const scaledCollectorCommission = round2(collectorCommissionFees * paymentRatio);
-  const scaledCollectorShipping = round2(collectorShippingFees * paymentRatio);
-  const scaledExplicitRebate = round2(explicitPromoRebate * paymentRatio);
-
-  // Tarifa cheia de comissão do ML: maior valor entre sale_fee do pedido e fee cobrada no pagamento
-  let mlCommissionAmount = round2(
-    Math.max(orderItemsSaleFeeTotal, scaledCollectorCommission)
-  );
-
-  // Custo de frete do vendedor: prioriza pagamento; se ausente e não for carrinho consolidado, usa custo do shipment
-  let mlShippingCost =
-    scaledCollectorShipping > 0
-      ? scaledCollectorShipping
-      : round2(shipmentSellerCost);
-
-  let mlPromoRebate = round2(scaledExplicitRebate);
-  let mpNetReleased = hasNetInfo
-    ? round2(mpNetSum * paymentRatio)
-    : round2(grossSaleAmount - mlCommissionAmount - mlShippingCost + mlPromoRebate);
-
-  // Conciliação exata: garante que (gross - commission - shipping + promo_rebate === mp_net_released)
-  if (hasNetInfo && mpNetReleased > 0) {
-    const baseWithoutRebate = round2(grossSaleAmount - mlCommissionAmount - mlShippingCost);
-    const diff = round2(mpNetReleased - baseWithoutRebate);
-
-    if (diff > 0) {
-      // O Mercado Pago liberou MAIS do que (Bruto - Tarifa Cheia - Frete) => Estorno / Redução Promocional ML!
-      mlPromoRebate = diff;
-    } else if (diff < 0) {
-      // Havia encargo adicional do ML/MP (ex: tarifa de parcelamento ou diferença de frete) não refletido no sale_fee
-      mlPromoRebate = 0;
-      const extraCharge = Math.abs(diff);
-      if (mlShippingCost === 0 && shipmentSellerCost > 0) {
-        const shipPart = round2(Math.min(extraCharge, shipmentSellerCost));
-        mlShippingCost = shipPart;
-        mlCommissionAmount = round2(mlCommissionAmount + (extraCharge - shipPart));
-      } else {
-        mlCommissionAmount = round2(mlCommissionAmount + extraCharge);
-      }
-    } else {
-      mlPromoRebate = 0;
-    }
-  }
-
-  // Determina status de liberação caso não informado explicitamente pela API
-  if (!mpReleaseStatus) {
-    if (mpReleaseDate) {
-      mpReleaseStatus = Date.parse(mpReleaseDate) <= Date.now() ? "released" : "pending";
-    } else {
-      mpReleaseStatus = hasNetInfo ? "pending" : "pending";
-    }
-  }
-
-  const mlCommissionPct =
-    grossSaleAmount > 0 ? round2((mlCommissionAmount / grossSaleAmount) * 100) : 0;
-
-  return {
-    mlCommissionPct,
-    mlCommissionAmount,
-    mlShippingCost,
-    mlPromoRebate,
-    mpNetReleased,
-    mpReleaseDate,
-    mpReleaseStatus,
-    hasConsolidatedPackPayment,
-  };
-}
-
-/**
- * Aplica Opção A (Socratic Gate): Rateio proporcional de frete em carrinhos (`ml_pack_id`)
- * quando 2+ pedidos compartilham o mesmo envio e o ML concentrou o frete em apenas um pedido.
- */
-export function applyPackShippingProration(drafts: ExtractedOrderDraft[]): void {
-  const byPack = new Map<number, ExtractedOrderDraft[]>();
-
-  for (const d of drafts) {
-    if (!d.ml_pack_id) continue;
-    if (d.status === "cancelled" || d.status === "returned") continue;
-    const list = byPack.get(d.ml_pack_id) ?? [];
-    list.push(d);
-    byPack.set(d.ml_pack_id, list);
-  }
-
-  for (const packOrders of Array.from(byPack.values())) {
-    if (packOrders.length <= 1) continue;
-
-    const totalPackGross = packOrders.reduce((acc, o) => acc + o.gross_sale_amount, 0);
-    if (totalPackGross <= 0) continue;
-
-    const ordersWithShipping = packOrders.filter((o) => o.ml_shipping_cost > 0);
-    const sumRecordedShipping = round2(
-      packOrders.reduce((acc, o) => acc + o.ml_shipping_cost, 0)
-    );
-    const maxShipmentFallback = round2(
-      Math.max(...packOrders.map((o) => o.shipment_fallback_seller_cost))
-    );
-
-    // Caso 1: Todos os pedidos receberam o custo cheio do mesmo shipment duplicado
-    const isDuplicatedShipmentCost =
-      maxShipmentFallback > 0 &&
-      ordersWithShipping.length === packOrders.length &&
-      Math.abs(sumRecordedShipping - maxShipmentFallback * packOrders.length) <= 0.05;
-
-    // Caso 2: Apenas 1 pedido do carrinho absorveu 100% do frete enquanto os demais ficaram com 0
-    const isConcentratedOnSingleOrder =
-      sumRecordedShipping > 0 && ordersWithShipping.length === 1;
-
-    if (!isDuplicatedShipmentCost && !isConcentratedOnSingleOrder) continue;
-
-    const packTotalShipping = isDuplicatedShipmentCost
-      ? maxShipmentFallback
-      : sumRecordedShipping;
-
-    let allocatedSoFar = 0;
-    packOrders.forEach((order, idx) => {
-      const oldShipping = order.ml_shipping_cost;
-      const newShipping =
-        idx === packOrders.length - 1
-          ? round2(packTotalShipping - allocatedSoFar)
-          : round2(packTotalShipping * (order.gross_sale_amount / totalPackGross));
-
-      allocatedSoFar = round2(allocatedSoFar + newShipping);
-      const shippingDelta = round2(newShipping - oldShipping);
-
-      order.ml_shipping_cost = newShipping;
-      // Ajusta mp_net_released proporcionalmente à redistribuição do frete entre os pedidos do pack
-      order.mp_net_released = round2(order.mp_net_released - shippingDelta);
-    });
-  }
-}
-
-/**
- * Sincroniza um único pedido completo (Order + Payments + Shipment + Billing Info) via GET.
+ * Sincroniza um único pedido completo (Order + Payments + Shipment + Coparticipação Frete + Billing Info) via GET.
  */
 export async function extractSingleOrder(
   orderId: number,
   account: MarketplaceAccountInfo,
   tokenRef: { current: string },
-  shipmentCache: Map<number, { detail: RawShipmentDetail | null; sellerCost: number }>
+  shipmentCache: Map<number, CachedShipmentFinancials>
 ): Promise<ExtractedOrderDraft | null> {
   const orderRes = await mlReadOnlyGet<RawMlOrderDetail>(
     `${ML_API_BASE}/orders/${orderId}`,
@@ -799,43 +539,90 @@ export async function extractSingleOrder(
     )
   );
 
-  // Busca pagamentos detalhados
+  // Busca pagamentos detalhados em paralelo
   const rawPaymentSummaries = Array.isArray(order.payments) ? order.payments : [];
-  const paymentDetails: RawPaymentDetail[] = [];
-  for (const ps of rawPaymentSummaries) {
-    if (ps?.id == null) continue;
-    const detail = await fetchPaymentDetail(ps.id, account, tokenRef);
-    if (detail) paymentDetails.push(detail);
-  }
+  const paymentPromises = rawPaymentSummaries
+    .filter((ps) => ps?.id != null)
+    .map((ps) => fetchPaymentDetail(ps.id, account, tokenRef));
+  const resolvedPayments = await Promise.all(paymentPromises);
+  const paymentDetails = resolvedPayments.filter(
+    (p): p is RawPaymentDetail => p !== null
+  );
 
-  // Busca envio e prazo "Enviar dia" (com cache para pedidos do mesmo carrinho)
+  const orderPaymentIdSet = new Set(
+    rawPaymentSummaries
+      .filter((ps) => ps?.id != null)
+      .map((ps) => String(ps.id))
+  );
+
+  // Busca envio, custo real do vendedor e pagamentos separados de frete do comprador
   const shipmentId = order.shipping?.id ?? null;
   let shipmentDetail: RawShipmentDetail | null = null;
   let shipmentSellerCost = 0;
+  let shipmentPaymentsList: Array<{ paymentId: string; amount: number }> = [];
 
   if (shipmentId) {
     const cached = shipmentCache.get(shipmentId);
     if (cached) {
       shipmentDetail = cached.detail;
       shipmentSellerCost = cached.sellerCost;
+      shipmentPaymentsList = cached.shipmentPayments ?? [];
     } else {
-      const shipRes = await mlReadOnlyGet<RawShipmentDetail>(
-        `${ML_API_BASE}/shipments/${shipmentId}`,
-        account,
-        tokenRef,
-        { "x-format-new": "true" }
-      );
+      const [shipRes, costsRes] = await Promise.all([
+        mlReadOnlyGet<RawShipmentDetail>(
+          `${ML_API_BASE}/shipments/${shipmentId}`,
+          account,
+          tokenRef,
+          { "x-format-new": "true" }
+        ),
+        mlReadOnlyGet<RawShipmentCosts>(
+          `${ML_API_BASE}/shipments/${shipmentId}/costs`,
+          account,
+          tokenRef,
+          { "x-format-new": "true" }
+        ),
+      ]);
+
       shipmentDetail = shipRes.data ?? null;
 
-      // Consulta complementar de custos do envio quando pago pelo vendedor
-      const costsRes = await mlReadOnlyGet<RawShipmentCosts>(
-        `${ML_API_BASE}/shipments/${shipmentId}/costs`,
-        account,
-        tokenRef,
-        { "x-format-new": "true" }
-      );
-      if (costsRes.ok && costsRes.data?.senders?.[0]) {
-        shipmentSellerCost = round2(Number(costsRes.data.senders[0].cost || 0));
+      if (costsRes.ok && costsRes.data) {
+        const senders = Array.isArray(costsRes.data.senders)
+          ? costsRes.data.senders
+          : [];
+        const matchedSender =
+          senders.find((s) => String(s?.user_id ?? "") === String(account.seller_id)) ??
+          senders[0];
+
+        if (matchedSender) {
+          shipmentSellerCost = round2(Number(matchedSender.cost || 0));
+        }
+
+        const receiverCost = round2(Number(costsRes.data.receiver?.cost || 0));
+        if (receiverCost > 0) {
+          const shipPayRes = await mlReadOnlyGet<RawShipmentPaymentEntry[]>(
+            `${ML_API_BASE}/shipments/${shipmentId}/payments`,
+            account,
+            tokenRef,
+            { "x-format-new": "true" }
+          );
+
+          if (shipPayRes.ok && Array.isArray(shipPayRes.data)) {
+            shipmentPaymentsList = shipPayRes.data
+              .filter(
+                (sp) =>
+                  sp?.payment_id != null &&
+                  (sp.status === "approved" ||
+                    sp.status === "accredited" ||
+                    sp.status === "pending" ||
+                    sp.status === "in_process") &&
+                  (!sp.user_id || String(sp.user_id) === String(account.seller_id))
+              )
+              .map((sp) => ({
+                paymentId: String(sp.payment_id),
+                amount: round2(Number(sp.amount || 0)),
+              }));
+          }
+        }
       } else {
         shipmentSellerCost = round2(
           Number(
@@ -849,13 +636,23 @@ export async function extractSingleOrder(
       shipmentCache.set(shipmentId, {
         detail: shipmentDetail,
         sellerCost: shipmentSellerCost,
+        shipmentPayments: shipmentPaymentsList,
       });
     }
   }
 
+  // Soma APENAS pagamentos de frete separados que NÃO sejam o próprio order.payments[0]
+  const shipmentBuyerCredit = round2(
+    shipmentPaymentsList
+      .filter((sp) => !orderPaymentIdSet.has(sp.paymentId))
+      .reduce((acc, sp) => acc + sp.amount, 0)
+  );
+
   const shippingDeadline =
     shipmentDetail?.shipping_option?.estimated_handling_limit?.date ||
     shipmentDetail?.lead_time?.estimated_handling_limit?.date ||
+    shipmentDetail?.lead_time?.buffering?.date ||
+    shipmentDetail?.lead_time?.estimated_schedule_limit?.date ||
     null;
 
   // Dados do comprador + CPF/CNPJ (Tag Negócio)
@@ -913,6 +710,7 @@ export async function extractSingleOrder(
     orderItemsSaleFeeTotal,
     payments: paymentDetails,
     shipmentSellerCost,
+    shipmentBuyerCreditToSeller: shipmentBuyerCredit,
   });
 
   return {
@@ -939,7 +737,8 @@ export async function extractSingleOrder(
     ml_commission_amount: financials.mlCommissionAmount,
     ml_shipping_cost: financials.mlShippingCost,
     ml_promo_rebate: financials.mlPromoRebate,
-    mp_net_released: status === "cancelled" || status === "returned" ? 0 : financials.mpNetReleased,
+    mp_net_released:
+      status === "cancelled" || status === "returned" ? 0 : financials.mpNetReleased,
     mp_release_date: financials.mpReleaseDate,
     mp_release_status:
       status === "cancelled" || status === "returned"
@@ -1031,10 +830,7 @@ export async function syncMercadoLivreSales(params: {
         continue;
       }
 
-      const shipmentCache = new Map<
-        number,
-        { detail: RawShipmentDetail | null; sellerCost: number }
-      >();
+      const shipmentCache = new Map<number, CachedShipmentFinancials>();
 
       const extracted = await mapWithConcurrency(orderIds, CONCURRENCY, (orderId) =>
         extractSingleOrder(orderId, account, tokenRef, shipmentCache)
