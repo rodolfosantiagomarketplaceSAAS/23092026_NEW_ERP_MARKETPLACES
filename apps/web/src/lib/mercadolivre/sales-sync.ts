@@ -56,7 +56,7 @@ function round2(value: number): number {
  * Guardrail central: executa EXCLUSIVAMENTE requisições HTTP GET contra a API do Mercado Livre / Mercado Pago,
  * com tratamento automático de Rate Limit (429), falhas transitórias (5xx) e renovação de access_token (401).
  */
-async function mlReadOnlyGet<T = unknown>(
+export async function mlReadOnlyGet<T = unknown>(
   url: string,
   account: MarketplaceAccountInfo,
   tokenRef: { current: string },
@@ -231,7 +231,7 @@ interface RawPaymentDetail {
   charges_details?: RawChargeDetail[];
 }
 
-interface RawShipmentDetail {
+export interface RawShipmentDetail { order_id?: number | null;
   id: number;
   status?: string;
   substatus?: string;
@@ -260,7 +260,7 @@ interface RawShipmentCosts {
   }>;
 }
 
-interface ExtractedOrderDraft {
+export interface ExtractedOrderDraft {
   ml_order_id: number;
   ml_pack_id: number | null;
   ml_shipment_id: number | null;
@@ -452,7 +452,7 @@ async function fetchPaymentDetail(
 /**
  * Busca miniaturas e permalinks em lote via GET /items?ids=... (máx 20 por chamada).
  */
-async function fetchItemThumbnailsMap(
+export async function fetchItemThumbnailsMap(
   mlbIds: string[],
   account: MarketplaceAccountInfo,
   tokenRef: { current: string }
@@ -755,7 +755,7 @@ export function applyPackShippingProration(drafts: ExtractedOrderDraft[]): void 
 /**
  * Sincroniza um único pedido completo (Order + Payments + Shipment + Billing Info) via GET.
  */
-async function extractSingleOrder(
+export async function extractSingleOrder(
   orderId: number,
   account: MarketplaceAccountInfo,
   tokenRef: { current: string },

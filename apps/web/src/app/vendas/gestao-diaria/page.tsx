@@ -9,6 +9,7 @@ import {
   Download,
   ListChecks,
   Loader2,
+  Radio,
   RefreshCw,
   Search,
   Settings2,
@@ -26,6 +27,10 @@ import { SalesKpiSection } from "@/components/vendas/SalesKpiSection";
 import { DailySalesTable } from "@/components/vendas/DailySalesTable";
 import { DailyClosingTable } from "@/components/vendas/DailyClosingTable";
 import { ManageSellersAndTemplatesDrawer } from "@/components/vendas/ManageSellersAndTemplatesDrawer";
+import {
+  markSalesSyncedNow,
+  useRealtimeSalesOrders,
+} from "@/hooks/useRealtimeSalesOrders";
 
 type DatePreset = "today" | "yesterday" | "last7" | "thisMonth" | "lastMonth" | "custom";
 type StatusFilter = "all" | "valid" | "cancelled" | "unverified";
@@ -92,40 +97,60 @@ export default function GestaoDiariaVendasPage() {
     return () => clearTimeout(timer);
   }, [searchInput]);
 
-  const loadDashboard = useCallback(async () => {
-    setLoading(true);
-    try {
-      const qs = new URLSearchParams({
-        from: fromDate,
-        to: toDate,
-        seller: sellerFilter,
-        status: statusFilter,
-        store: storeFilter,
-      });
-      if (debouncedQuery) qs.set("q", debouncedQuery);
+  const loadDashboard = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!options?.silent) setLoading(true);
+      try {
+        const qs = new URLSearchParams({
+          from: fromDate,
+          to: toDate,
+          seller: sellerFilter,
+          status: statusFilter,
+          store: storeFilter,
+        });
+        if (debouncedQuery) qs.set("q", debouncedQuery);
 
-      const res = await fetch(`/api/ml/sales?${qs.toString()}`, {
-        cache: "no-store",
-      });
-      const json = await res.json();
-      if (!res.ok || !json.success) {
-        throw new Error(json.error || "Falha ao carregar gestão diária de vendas.");
+        const res = await fetch(`/api/ml/sales?${qs.toString()}`, {
+          cache: "no-store",
+        });
+        const json = await res.json();
+        if (!res.ok || !json.success) {
+          throw new Error(json.error || "Falha ao carregar gestão diária de vendas.");
+        }
+        setData(json as MlSalesDashboardResponse);
+      } catch (err) {
+        if (!options?.silent) {
+          setFeedback({
+            type: "error",
+            message:
+              err instanceof Error ? err.message : "Erro ao carregar vendas do período.",
+          });
+        }
+      } finally {
+        if (!options?.silent) setLoading(false);
       }
-      setData(json as MlSalesDashboardResponse);
-    } catch (err) {
-      setFeedback({
-        type: "error",
-        message:
-          err instanceof Error ? err.message : "Erro ao carregar vendas do período.",
-      });
-    } finally {
-      setLoading(false);
-    }
-  }, [fromDate, toDate, sellerFilter, statusFilter, storeFilter, debouncedQuery]);
+    },
+    [fromDate, toDate, sellerFilter, statusFilter, storeFilter, debouncedQuery]
+  );
 
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
+
+  const hasOnlineMlAccount =
+    data.schemaReady && data.accounts.some((acc) => acc.status === "online");
+
+  const { realtimeConnected, autoSyncing, lastLiveUpdateAt } = useRealtimeSalesOrders({
+    onSalesChange: () => {
+      loadDashboard({ silent: true });
+    },
+    enableAutoSync: hasOnlineMlAccount,
+    onAutoSyncComplete: (upserted) => {
+      if (upserted > 0) {
+        loadDashboard({ silent: true });
+      }
+    },
+  });
 
   function handleSelectPreset(nextPreset: Exclude<DatePreset, "custom">) {
     const range = computeDatePresetRange(nextPreset);
@@ -153,6 +178,8 @@ export default function GestaoDiariaVendasPage() {
         );
       }
 
+      markSalesSyncedNow();
+
       const warnSuffix =
         Array.isArray(json.errors) && json.errors.length > 0
           ? ` (${json.errors.length} alerta: ${json.errors[0].message})`
@@ -163,7 +190,7 @@ export default function GestaoDiariaVendasPage() {
         message: `Sincronização Read-Only concluída: ${json.ordersUpserted} pedidos processados em ${json.accountsSynced} conta(s) ML${warnSuffix}.`,
       });
 
-      await loadDashboard();
+      await loadDashboard({ silent: true });
     } catch (err) {
       setFeedback({
         type: "error",
@@ -188,16 +215,43 @@ export default function GestaoDiariaVendasPage() {
           {/* Cabeçalho Principal + Botões de Ação */}
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h1 className="text-base font-black text-slate-900 tracking-tight">
                   Gestão de Vendas & Repasse por Vendedor
                 </h1>
                 <span className="px-2 py-0.5 rounded-xs bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-mono font-bold">
                   ML API READ-ONLY (GET)
                 </span>
+                <span
+                  title={
+                    realtimeConnected
+                      ? "Conectado ao Supabase Realtime: novas vendas via Webhook entram automaticamente sem recarregar a página."
+                      : "Aguardando canal Realtime..."
+                  }
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border text-[10px] font-bold ${
+                    realtimeConnected
+                      ? "bg-sky-50 border-sky-200 text-sky-800"
+                      : "bg-slate-100 border-slate-200 text-slate-600"
+                  }`}
+                >
+                  <Radio
+                    className={`w-3 h-3 ${
+                      realtimeConnected ? "text-emerald-600 animate-pulse" : "text-slate-400"
+                    }`}
+                  />
+                  <span>
+                    {autoSyncing
+                      ? "Auto-Sync Ativo..."
+                      : realtimeConnected
+                      ? lastLiveUpdateAt
+                        ? `Ao Vivo · ${lastLiveUpdateAt}`
+                        : "Ao Vivo (Webhook + Realtime)"
+                      : "Modo Local"}
+                  </span>
+                </span>
               </div>
               <p className="text-xs text-slate-500">
-                Conciliação diária de repasse limpo (pós-taxas ML, frete + estornos promocionais),
+                Conciliação automática em tempo real (pós-taxas ML, frete + estornos promocionais),
                 custos operacionais e fechamento por sócio/operador.
               </p>
             </div>
@@ -214,16 +268,16 @@ export default function GestaoDiariaVendasPage() {
 
               <button
                 type="button"
-                disabled={syncing}
+                disabled={syncing || autoSyncing}
                 onClick={handleSyncMercadoLivre}
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded bg-[#0F172A] hover:bg-slate-800 disabled:opacity-60 text-white text-xs font-bold transition-colors shadow-2xs"
               >
-                {syncing ? (
+                {syncing || autoSyncing ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-400" />
                 ) : (
                   <RefreshCw className="w-3.5 h-3.5 text-sky-400" />
                 )}
-                {syncing ? "Sincronizando ML..." : "Sincronizar Vendas ML"}
+                {syncing ? "Sincronizando Período..." : "Forçar Sincronização ML"}
               </button>
             </div>
           </div>
@@ -540,7 +594,7 @@ export default function GestaoDiariaVendasPage() {
               orders={data.orders}
               sellers={data.sellers}
               templates={data.templates}
-              onRefresh={loadDashboard}
+              onRefresh={() => loadDashboard({ silent: true })}
             />
           ) : (
             <DailyClosingTable
@@ -559,9 +613,8 @@ export default function GestaoDiariaVendasPage() {
         sellers={data.sellers}
         templates={data.templates}
         onClose={() => setDrawerOpen(false)}
-        onRefresh={loadDashboard}
+        onRefresh={() => loadDashboard({ silent: true })}
       />
     </>
   );
 }
-

@@ -56,6 +56,7 @@ export function ConfiguracoesDashboard() {
   // Estados de API & Extensão
   const [copiedUrl, setCopiedUrl] = useState(false);
   const [copiedToken, setCopiedToken] = useState(false);
+  const [copiedWebhook, setCopiedWebhook] = useState(false);
   const [showToken, setShowToken] = useState(false);
   const [erpUrl, setErpUrl] = useState(() => {
     if (typeof window !== "undefined" && window.location.origin) {
@@ -540,6 +541,43 @@ export function ConfiguracoesDashboard() {
                   </div>
                 </div>
               )}
+
+              {/* Webhook de Vendas em Tempo Real (100% Gratuito) */}
+              <div className="bg-emerald-50/60 border border-emerald-200 rounded-lg p-3 space-y-2 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-emerald-950 text-[11px] flex items-center gap-1.5">
+                    <Zap className="w-3.5 h-3.5 text-emerald-600" />
+                    Webhook de Vendas Automáticas (Tempo Real)
+                  </span>
+                  <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800">
+                    orders_v2 · shipments · items
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 leading-relaxed">
+                  Cole esta URL em <strong>Notificações Webhooks</strong> no DevCenter do Mercado Livre para as vendas e baixas de estoque caírem sozinhas no ERP:
+                </p>
+                <div className="flex items-center gap-1.5">
+                  <input
+                    type="text"
+                    readOnly
+                    aria-label="URL de Webhook do Mercado Livre"
+                    value={`${erpUrl.replace(/\/$/, "")}/api/webhooks/mercadolivre`}
+                    className="flex-1 bg-white border border-emerald-200 rounded px-2.5 py-1.5 text-[11px] font-mono text-slate-800 select-all focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText(`${erpUrl.replace(/\/$/, "")}/api/webhooks/mercadolivre`);
+                      setCopiedWebhook(true);
+                      setTimeout(() => setCopiedWebhook(false), 2000);
+                    }}
+                    className="px-2.5 py-1.5 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold flex items-center gap-1 shrink-0 transition"
+                  >
+                    {copiedWebhook ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedWebhook ? "Copiado!" : "Copiar"}</span>
+                  </button>
+                </div>
+              </div>
 
               {/* Conexão OAuth oficial (padrão Bling / Tiny) */}
               <div className="bg-slate-50 border border-slate-200/80 rounded-lg p-3.5 space-y-3 text-xs">
