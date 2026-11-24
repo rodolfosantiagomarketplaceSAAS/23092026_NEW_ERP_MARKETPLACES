@@ -1,6 +1,7 @@
 import React from "react";
+import Link from "next/link";
 import { Header } from "@/components/layout/Header";
-import { ShoppingCart, CheckCircle, Clock, Truck } from "lucide-react";
+import { ArrowRight, Wallet } from "lucide-react";
 
 export default function PedidosPage() {
   const orders = [
@@ -38,13 +39,21 @@ export default function PedidosPage() {
       <Header platformName="Gestão de Pedidos e Vendas" />
       <main className="p-4 flex-1">
         <div className="max-w-[1600px] mx-auto space-y-4">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h1 className="text-base font-bold text-slate-900 tracking-tight">Vendas & Pedidos dos Marketplaces</h1>
               <p className="text-xs text-slate-500">
                 Acompanhamento em tempo real dos pedidos sincronizados.
               </p>
             </div>
+            <Link
+              href="/vendas/gestao-diaria"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold transition-colors shadow-2xs"
+            >
+              <Wallet className="w-3.5 h-3.5" />
+              Abrir Gestão de Vendas & Repasse por Vendedor
+              <ArrowRight className="w-3.5 h-3.5" />
+            </Link>
           </div>
 
           <div className="bg-white border border-[#E2E8F0] rounded shadow-2xs overflow-hidden">

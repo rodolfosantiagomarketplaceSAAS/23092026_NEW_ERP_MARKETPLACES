@@ -20,6 +20,7 @@ import {
   ShieldCheck,
   UserCheck,
   Download,
+  Wallet,
 } from "lucide-react";
 import {
   getCurrentUserProfileAndOrg,
@@ -89,6 +90,12 @@ function SidebarContent() {
       href: "/inteligencia?tab=lojas",
       icon: Store,
       badge: "NOVO",
+    },
+    {
+      label: "Gestão de Vendas & Repasse",
+      href: "/vendas/gestao-diaria",
+      icon: Wallet,
+      badge: "ML",
     },
     {
       label: "Vendas & Pedidos",
@@ -186,6 +193,8 @@ function SidebarContent() {
               isActive = isLojas;
             } else if (item.href === "/inteligencia") {
               isActive = (pathname === "/inteligencia" || pathname === "/") && !isRadar && !isLojas;
+            } else if (item.href === "/vendas/gestao-diaria") {
+              isActive = Boolean(pathname?.startsWith("/vendas"));
             } else {
               isActive = pathname === item.href;
             }
