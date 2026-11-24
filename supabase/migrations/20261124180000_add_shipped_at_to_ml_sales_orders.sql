@@ -26,6 +26,9 @@ CREATE INDEX IF NOT EXISTS idx_ml_sales_orders_org_seller_shipped_at
     ON public.ml_sales_orders(organization_id, assigned_seller_id, shipped_at DESC)
     WHERE shipped_at IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_ml_sales_orders_org_logistic_type
+    ON public.ml_sales_orders(organization_id, logistic_type);
+
 -- Índice parcial para re-sincronização rápida de pedidos aguardando despacho ou backfill de shipped_at
 CREATE INDEX IF NOT EXISTS idx_ml_sales_orders_pending_shipment_sync
     ON public.ml_sales_orders(ml_seller_id, order_date DESC)
