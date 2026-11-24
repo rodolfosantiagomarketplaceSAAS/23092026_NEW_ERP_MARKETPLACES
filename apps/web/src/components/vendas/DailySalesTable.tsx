@@ -208,7 +208,7 @@ export function DailySalesTable({
   return (
     <div className="relative">
       <div className="bg-white border border-[#E2E8F0] rounded shadow-2xs overflow-x-auto">
-        <table className="w-full text-left border-collapse text-xs min-w-[1320px]">
+        <table className="w-full text-left border-collapse text-xs min-w-[1480px]">
           <thead>
             <tr className="bg-slate-900 text-slate-200 border-b border-slate-800 uppercase text-[10px] font-bold tracking-wider">
               <th className="py-2.5 px-2.5 w-9 text-center">
@@ -221,9 +221,9 @@ export function DailySalesTable({
                 />
               </th>
               <th className="py-2.5 px-2.5">Data / Enviar Dia</th>
-              <th className="py-2.5 px-2.5 min-w-[250px]">Produto</th>
+              <th className="py-2.5 px-2.5 min-w-[340px] max-w-[480px]">Produto / Variação</th>
               <th className="py-2.5 px-2.5 min-w-[185px]">Vendedor (Repasse)</th>
-              <th className="py-2.5 px-2.5">Comprador</th>
+              <th className="py-2.5 px-2.5 min-w-[170px] max-w-[240px]">Comprador</th>
               <th className="py-2.5 px-2.5 text-right">Venda Bruta</th>
               <th className="py-2.5 px-2.5 text-right">Taxas ML & Frete</th>
               <th className="py-2.5 px-2.5 text-right bg-emerald-950/70 text-emerald-200">
@@ -267,13 +267,12 @@ export function DailySalesTable({
               return (
                 <tr
                   key={order.id}
-                  className={`transition-colors ${
-                    cancelled
-                      ? "bg-rose-50/35 hover:bg-rose-50/60"
-                      : isSelected
+                  className={`transition-colors ${cancelled
+                    ? "bg-rose-50/35 hover:bg-rose-50/60"
+                    : isSelected
                       ? "bg-sky-50/60 hover:bg-sky-50"
                       : "hover:bg-slate-50/90"
-                  }`}
+                    }`}
                 >
                   {/* 1. Checkbox */}
                   <td className="py-2.5 px-2.5 text-center align-top pt-3.5">
@@ -322,13 +321,12 @@ export function DailySalesTable({
                         </span>
                       ) : (
                         <span
-                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs text-[10px] font-semibold border ${
-                            deadline.isOverdue
-                              ? "bg-rose-100 text-rose-800 border-rose-300"
-                              : deadline.isUrgent
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs text-[10px] font-semibold border ${deadline.isOverdue
+                            ? "bg-rose-100 text-rose-800 border-rose-300"
+                            : deadline.isUrgent
                               ? "bg-amber-100 text-amber-900 border-amber-300"
                               : "bg-slate-100 text-slate-700 border-slate-200"
-                          }`}
+                            }`}
                         >
                           <Clock className="w-2.5 h-2.5" />
                           {deadline.label}
@@ -338,24 +336,56 @@ export function DailySalesTable({
                   </td>
 
                   {/* 3. Produto */}
-                  <td className="py-2.5 px-2.5 align-top max-w-[290px]">
-                    <div className="flex items-start gap-2.5">
-                      <div className="w-10 h-10 rounded-xs border border-slate-200 bg-slate-50 shrink-0 overflow-hidden flex items-center justify-center">
-                        {order.product_thumbnail ? (
-                          <img
-                            src={order.product_thumbnail}
-                            alt={order.product_title}
-                            className="w-full h-full object-contain"
-                            loading="lazy"
-                          />
-                        ) : (
-                          <ImageOff className="w-4 h-4 text-slate-300" />
+                  <td className="py-2.5 px-2.5 align-top min-w-[340px] max-w-[480px]">
+                    <div className="flex items-start gap-3">
+                      {/* Imagem do Produto ampliada (64px) com prévia em zoom no hover */}
+                      <div className="group relative shrink-0">
+                        <div className="w-16 h-16 rounded border border-slate-200 bg-white p-1 overflow-hidden flex items-center justify-center shadow-2xs hover:border-sky-400 transition-colors">
+                          {order.product_thumbnail ? (
+                            order.permalink ? (
+                              <a
+                                href={order.permalink}
+                                target="_blank"
+                                rel="noreferrer"
+                                title="Clique para abrir anúncio oficial no ML"
+                                className="w-full h-full flex items-center justify-center"
+                              >
+                                <img
+                                  src={order.product_thumbnail}
+                                  alt={order.product_title}
+                                  className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-150"
+                                  loading="lazy"
+                                />
+                              </a>
+                            ) : (
+                              <img
+                                src={order.product_thumbnail}
+                                alt={order.product_title}
+                                className="w-full h-full object-contain"
+                                loading="lazy"
+                              />
+                            )
+                          ) : (
+                            <ImageOff className="w-6 h-6 text-slate-300" />
+                          )}
+                        </div>
+                        {order.product_thumbnail && (
+                          <div className="pointer-events-none absolute left-0 bottom-full mb-1.5 z-50 hidden group-hover:block drop-shadow-2xl">
+                            <div className="w-56 h-56 bg-white border border-slate-300 rounded-lg p-2 shadow-2xl flex items-center justify-center">
+                              <img
+                                src={order.product_thumbnail}
+                                alt={order.product_title}
+                                className="w-full h-full object-contain"
+                              />
+                            </div>
+                          </div>
                         )}
                       </div>
+
                       <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-start gap-1">
                           <span
-                            className="font-semibold text-slate-900 text-[11px] leading-snug line-clamp-2"
+                            className="font-semibold text-slate-900 text-xs leading-snug break-words"
                             title={order.product_title}
                           >
                             {order.product_title}
@@ -385,11 +415,10 @@ export function DailySalesTable({
                           )}
 
                           <span
-                            className={`px-1.5 py-0.2 rounded-xs font-bold ${
-                              order.quantity > 1
-                                ? "bg-amber-100 text-amber-900 border border-amber-300"
-                                : "bg-slate-100 text-slate-700"
-                            }`}
+                            className={`px-1.5 py-0.2 rounded-xs font-bold ${order.quantity > 1
+                              ? "bg-amber-100 text-amber-900 border border-amber-300"
+                              : "bg-slate-100 text-slate-700"
+                              }`}
                           >
                             {order.quantity}x
                           </span>
@@ -427,16 +456,15 @@ export function DailySalesTable({
                           style={
                             assignedSeller
                               ? {
-                                  borderColor: assignedSeller.color_hex,
-                                  backgroundColor: `${assignedSeller.color_hex}12`,
-                                }
+                                borderColor: assignedSeller.color_hex,
+                                backgroundColor: `${assignedSeller.color_hex}12`,
+                              }
                               : undefined
                           }
-                          className={`w-full text-[11px] font-bold rounded-xs border px-2 py-1 focus:outline-none cursor-pointer ${
-                            assignedSeller
-                              ? "text-slate-900"
-                              : "bg-amber-50/70 border-amber-300 text-amber-900"
-                          }`}
+                          className={`w-full text-[11px] font-bold rounded-xs border px-2 py-1 focus:outline-none cursor-pointer ${assignedSeller
+                            ? "text-slate-900"
+                            : "bg-amber-50/70 border-amber-300 text-amber-900"
+                            }`}
                         >
                           <option value="">— Sem Vendedor —</option>
                           {activeSellers.map((s) => (
@@ -480,9 +508,9 @@ export function DailySalesTable({
                   </td>
 
                   {/* 5. Comprador */}
-                  <td className="py-2.5 px-2.5 align-top max-w-[170px]">
+                  <td className="py-2.5 px-2.5 align-top min-w-[170px] max-w-[240px]">
                     <div
-                      className="text-[11px] font-medium text-slate-800 truncate"
+                      className="text-[11px] font-semibold text-slate-900 leading-snug break-words"
                       title={order.buyer_name}
                     >
                       {order.buyer_name}
@@ -506,9 +534,8 @@ export function DailySalesTable({
                   {/* 6. Venda Bruta */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap">
                     <div
-                      className={`font-bold text-[11px] ${
-                        cancelled ? "line-through text-slate-400" : "text-slate-900"
-                      }`}
+                      className={`font-bold text-[11px] ${cancelled ? "line-through text-slate-400" : "text-slate-900"
+                        }`}
                     >
                       {formatBRL(order.gross_sale_amount)}
                     </div>
@@ -604,25 +631,23 @@ export function DailySalesTable({
                   {/* 10. Lucro Limpo */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap">
                     <div
-                      className={`text-xs font-black ${
-                        cancelled
-                          ? "text-slate-400 line-through"
-                          : order.net_operational_profit >= 0
+                      className={`text-xs font-black ${cancelled
+                        ? "text-slate-400 line-through"
+                        : order.net_operational_profit >= 0
                           ? "text-slate-900"
                           : "text-rose-700"
-                      }`}
+                        }`}
                     >
                       {formatBRL(order.net_operational_profit)}
                     </div>
                     {!cancelled && (
                       <div
-                        className={`text-[10px] font-semibold ${
-                          marginPct >= 15
-                            ? "text-emerald-700"
-                            : marginPct >= 0
+                        className={`text-[10px] font-semibold ${marginPct >= 15
+                          ? "text-emerald-700"
+                          : marginPct >= 0
                             ? "text-amber-700"
                             : "text-rose-700"
-                        }`}
+                          }`}
                       >
                         {formatPct(marginPct)}
                       </div>
@@ -654,11 +679,10 @@ export function DailySalesTable({
                       )}
 
                       <label
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border text-[10px] font-semibold cursor-pointer select-none transition-colors ${
-                          order.verified_at
-                            ? "bg-sky-50 border-sky-300 text-sky-800"
-                            : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
-                        }`}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs border text-[10px] font-semibold cursor-pointer select-none transition-colors ${order.verified_at
+                          ? "bg-sky-50 border-sky-300 text-sky-800"
+                          : "bg-white border-slate-200 text-slate-500 hover:bg-slate-50"
+                          }`}
                       >
                         <input
                           type="checkbox"

@@ -294,8 +294,8 @@ export default function PedidosPage() {
                               #{getOfficialMlSaleCode(o)}
                             </span>
                           </td>
-                          <td className="py-2.5 px-3 text-slate-700">
-                            <div className="font-medium">{o.buyer_name}</div>
+                          <td className="py-2.5 px-3 text-slate-700 min-w-[170px] max-w-[220px]">
+                            <div className="font-semibold text-slate-900 break-words">{o.buyer_name}</div>
                             {o.is_business_buyer && (
                               <span className="inline-block mt-0.5 px-1.5 py-0.2 rounded-xs bg-slate-100 text-slate-700 text-[9px] font-bold">
                                 CNPJ
@@ -303,27 +303,45 @@ export default function PedidosPage() {
                             )}
                           </td>
                           <td className="py-2.5 px-3 text-slate-600">{o.store_name}</td>
-                          <td className="py-2.5 px-3 text-slate-800 max-w-md">
-                            <div className="flex items-center gap-1.5">
-                              <span className="font-semibold text-slate-900">
-                                {o.quantity}x
-                              </span>
-                              <span className="truncate">{o.product_title}</span>
-                              {o.permalink && (
-                                <a
-                                  href={o.permalink}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  aria-label={`Abrir anúncio ${o.mlb_id}`}
-                                  className="text-slate-400 hover:text-sky-600 shrink-0"
-                                >
-                                  <ExternalLink className="w-3 h-3" />
-                                </a>
+                          <td className="py-2.5 px-3 text-slate-800 min-w-[320px] max-w-md">
+                            <div className="flex items-start gap-2.5">
+                              {o.product_thumbnail && (
+                                <div className="group relative shrink-0">
+                                  <div className="w-12 h-12 rounded border border-slate-200 bg-white p-0.5 overflow-hidden flex items-center justify-center">
+                                    <img
+                                      src={o.product_thumbnail}
+                                      alt={o.product_title}
+                                      className="w-full h-full object-contain"
+                                      loading="lazy"
+                                    />
+                                  </div>
+                                </div>
                               )}
-                            </div>
-                            <div className="text-[10px] font-mono text-slate-500">
-                              {o.mlb_id}
-                              {o.sku ? ` · SKU: ${o.sku}` : ""}
+                              <div className="min-w-0 flex-1">
+                                <div className="flex items-start gap-1.5">
+                                  <span className="font-bold text-slate-900 shrink-0">
+                                    {o.quantity}x
+                                  </span>
+                                  <span className="font-semibold text-slate-900 text-xs leading-snug break-words">
+                                    {o.product_title}
+                                  </span>
+                                </div>
+                                <div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono text-slate-500">
+                                  <span>{o.mlb_id}</span>
+                                  {o.sku && <span> · SKU: {o.sku}</span>}
+                                  {o.permalink && (
+                                    <a
+                                      href={o.permalink}
+                                      target="_blank"
+                                      rel="noreferrer"
+                                      aria-label={`Abrir anúncio ${o.mlb_id}`}
+                                      className="text-slate-400 hover:text-sky-600 inline-flex items-center gap-0.5 ml-1"
+                                    >
+                                      <ExternalLink className="w-3 h-3" />
+                                    </a>
+                                  )}
+                                </div>
+                              </div>
                             </div>
                           </td>
                           <td className="py-2.5 px-3 text-right font-bold text-slate-900 font-mono">

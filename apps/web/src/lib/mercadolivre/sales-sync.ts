@@ -174,6 +174,13 @@ interface RawMlOrderItem {
     title?: string;
     seller_sku?: string | null;
     seller_custom_field?: string | null;
+    variation_id?: number | null;
+    variation_attributes?: Array<{
+      id?: string;
+      name?: string;
+      value_id?: string | null;
+      value_name?: string | null;
+    }>;
   };
   quantity?: number;
   unit_price?: number;
@@ -519,7 +526,16 @@ export async function extractSingleOrder(
     items.reduce((sum, oi) => sum + Number(oi.quantity || 1), 0)
   );
 
-  const baseTitle = firstItem?.title || `Pedido #${order.id}`;
+  let baseTitle = firstItem?.title || `Pedido #${order.id}`;
+  if (Array.isArray(firstItem?.variation_attributes) && firstItem.variation_attributes.length > 0) {
+    const missingVars = firstItem.variation_attributes
+      .filter((va) => va?.value_name && !baseTitle.toLowerCase().includes(va.value_name.toLowerCase()))
+      .map((va) => (va?.name ? `${va.name}: ${va.value_name}` : va?.value_name))
+      .filter(Boolean);
+    if (missingVars.length > 0) {
+      baseTitle = `${baseTitle} (${missingVars.join(" · ")})`;
+    }
+  }
   const productTitle =
     items.length > 1 ? `${baseTitle} (+${items.length - 1} item)` : baseTitle;
 
