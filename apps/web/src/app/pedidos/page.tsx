@@ -30,12 +30,20 @@ import {
   getOfficialMlSaleCode,
 } from "@/components/vendas/formatters";
 import { AnalysisModeToggle } from "@/components/vendas/AnalysisModeToggle";
+import { ProductThumbnailPreview } from "@/components/vendas/ProductThumbnailPreview";
 import {
   markSalesSyncedNow,
   useRealtimeSalesOrders,
 } from "@/hooks/useRealtimeSalesOrders";
 
-type RangeOption = "today" | "yesterday" | "last7" | "thisMonth";
+type RangeOption =
+  | "today"
+  | "yesterday"
+  | "last7"
+  | "thisMonth"
+  | "lastMonth"
+  | "thisYear"
+  | "all";
 
 const STATUS_BADGE: Record<
   MlSaleOrderStatus,
@@ -84,13 +92,17 @@ export default function PedidosPage() {
       try {
         const range = computeDatePresetRange(rangePreset);
         const qs = new URLSearchParams({
-          from: range.from,
-          to: range.to,
           seller: "all",
           status: "all",
           store: "all",
           analysisBy: analysisMode,
         });
+        if (range.isAll) {
+          qs.set("period", "all");
+        } else {
+          qs.set("from", range.from);
+          qs.set("to", range.to);
+        }
         if (search.trim()) qs.set("q", search.trim());
 
         const res = await fetch(`/api/ml/sales?${qs.toString()}`, {
@@ -141,7 +153,9 @@ export default function PedidosPage() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          ...range,
+          from: range.isAll ? undefined : range.from,
+          to: range.isAll ? undefined : range.to,
+          allSales: Boolean(range.isAll),
           analysisMode,
         }),
       });
@@ -254,6 +268,9 @@ export default function PedidosPage() {
                     { id: "yesterday", label: "Ontem" },
                     { id: "last7", label: "Últimos 7 dias" },
                     { id: "thisMonth", label: "Este Mês" },
+                    { id: "lastMonth", label: "Mês Passado" },
+                    { id: "thisYear", label: "Este Ano" },
+                    { id: "all", label: "Todas as Vendas" },
                   ] as const
                 ).map((opt) => (
                   <button
@@ -368,16 +385,12 @@ export default function PedidosPage() {
                           <td className="py-2.5 px-3 text-slate-800 min-w-[320px] max-w-md">
                             <div className="flex items-start gap-2.5">
                               {o.product_thumbnail && (
-                                <div className="group relative shrink-0">
-                                  <div className="w-12 h-12 rounded border border-slate-200 bg-white p-0.5 overflow-hidden flex items-center justify-center">
-                                    <img
-                                      src={o.product_thumbnail}
-                                      alt={o.product_title}
-                                      className="w-full h-full object-contain"
-                                      loading="lazy"
-                                    />
-                                  </div>
-                                </div>
+                                <ProductThumbnailPreview
+                                  thumbnailUrl={o.product_thumbnail}
+                                  title={o.product_title}
+                                  permalink={o.permalink}
+                                  sizeClassName="w-12 h-12"
+                                />
                               )}
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-start gap-1.5">

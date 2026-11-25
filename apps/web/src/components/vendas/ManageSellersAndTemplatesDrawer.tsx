@@ -5,24 +5,15 @@ import {
   Check,
   Loader2,
   PackageCheck,
+  PencilLine,
   Plus,
   Trash2,
   Users,
   X,
 } from "lucide-react";
 import type { ProductCostTemplate, Seller } from "@/types/ml-sales";
-import { formatBRL } from "./formatters";
-
-const SELLER_COLOR_SWATCHES = [
-  "#0284C7",
-  "#059669",
-  "#D97706",
-  "#DC2626",
-  "#0D9488",
-  "#EA580C",
-  "#65A30D",
-  "#334155",
-];
+import { formatBRL, SELLER_COLOR_SWATCHES } from "./formatters";
+import { SellerQuickColorPopover } from "./SellerQuickColorPopover";
 
 interface ManageSellersAndTemplatesDrawerProps {
   open: boolean;
@@ -45,8 +36,14 @@ export function ManageSellersAndTemplatesDrawer({
 
   // Form Novo Vendedor
   const [sellerName, setSellerName] = useState("");
-  const [sellerColor, setSellerColor] = useState(SELLER_COLOR_SWATCHES[0]);
+  const [sellerColor, setSellerColor] = useState<string>(SELLER_COLOR_SWATCHES[0]);
   const [sellerCommission, setSellerCommission] = useState("100");
+
+  // Edição de Vendedor Existente (Nome, Cor e Cota %)
+  const [editingSellerId, setEditingSellerId] = useState<string | null>(null);
+  const [editSellerName, setEditSellerName] = useState("");
+  const [editSellerColor, setEditSellerColor] = useState("#0284C7");
+  const [editSellerCommission, setEditSellerCommission] = useState("100");
 
   // Form Template MLB
   const [mlbId, setMlbId] = useState("");
@@ -69,13 +66,17 @@ export function ManageSellersAndTemplatesDrawer({
     setError(null);
 
     try {
+      const normalizedHex = sellerColor.trim().toUpperCase();
       const res = await fetch("/api/ml/sellers", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: sellerName.trim(),
-          color_hex: sellerColor,
-          commission_pct: Number.parseFloat(sellerCommission.replace(",", ".")) || 100,
+          color_hex: /^#[0-9A-F]{6}$/.test(normalizedHex)
+            ? normalizedHex
+            : SELLER_COLOR_SWATCHES[0],
+          commission_pct:
+            Number.parseFloat(sellerCommission.replace(",", ".")) || 100,
           active: true,
         }),
       });
@@ -87,7 +88,55 @@ export function ManageSellersAndTemplatesDrawer({
       setSellerCommission("100");
       onRefresh();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Falha ao cadastrar vendedor.");
+      setError(
+        err instanceof Error ? err.message : "Falha ao cadastrar vendedor."
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function startEditSeller(seller: Seller) {
+    setEditingSellerId(seller.id);
+    setEditSellerName(seller.name);
+    setEditSellerColor(seller.color_hex || SELLER_COLOR_SWATCHES[0]);
+    setEditSellerCommission(String(seller.commission_pct ?? 100));
+    setError(null);
+  }
+
+  async function handleSaveEditedSeller(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editingSellerId || !editSellerName.trim()) return;
+    const normalizedHex = editSellerColor.trim().toUpperCase();
+    if (!/^#[0-9A-F]{6}$/.test(normalizedHex)) {
+      setError("Cor inválida. Informe um código #RRGGBB (ex: #059669).");
+      return;
+    }
+
+    setBusy(true);
+    setError(null);
+    try {
+      const parsedPct = Number.parseFloat(editSellerCommission.replace(",", "."));
+      const res = await fetch("/api/ml/sellers", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: editingSellerId,
+          name: editSellerName.trim(),
+          color_hex: normalizedHex,
+          commission_pct: Number.isFinite(parsedPct) ? parsedPct : 100,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok || !json.success) {
+        throw new Error(json.error || "Erro ao atualizar vendedor.");
+      }
+      setEditingSellerId(null);
+      onRefresh();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Erro ao salvar alterações do vendedor."
+      );
     } finally {
       setBusy(false);
     }
@@ -124,6 +173,7 @@ export function ManageSellersAndTemplatesDrawer({
       });
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error);
+      if (editingSellerId === id) setEditingSellerId(null);
       onRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro ao remover vendedor.");
@@ -146,7 +196,8 @@ export function ManageSellersAndTemplatesDrawer({
           mlb_id: mlbId.trim().toUpperCase(),
           sku: sku.trim() || null,
           default_seller_id: defaultSellerId || null,
-          default_tax_pct: Number.parseFloat(defaultTaxPct.replace(",", ".")) || 0,
+          default_tax_pct:
+            Number.parseFloat(defaultTaxPct.replace(",", ".")) || 0,
           material_cost: Number.parseFloat(materialCost.replace(",", ".")) || 0,
           packaging_cost: Number.parseFloat(packagingCost.replace(",", ".")) || 0,
           logistics_cost: Number.parseFloat(logisticsCost.replace(",", ".")) || 0,
@@ -189,9 +240,12 @@ export function ManageSellersAndTemplatesDrawer({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`/api/ml/cost-templates?id=${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
+      const res = await fetch(
+        `/api/ml/cost-templates?id=${encodeURIComponent(id)}`,
+        {
+          method: "DELETE",
+        }
+      );
       const json = await res.json();
       if (!res.ok || !json.success) throw new Error(json.error);
       onRefresh();
@@ -220,7 +274,7 @@ export function ManageSellersAndTemplatesDrawer({
               Gerenciar Vendedores & Custos Padrão (MLB)
             </h2>
             <p className="text-[11px] text-slate-400">
-              Cadastre sócios/operadores e configure atribuição automática + custos por anúncio.
+              Cadastre sócios/operadores, personalize a cor de identificação e configure regras por MLB.
             </p>
           </div>
           <button
@@ -308,9 +362,11 @@ export function ManageSellersAndTemplatesDrawer({
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between pt-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-[11px] text-slate-600 font-medium mr-1">Cor Badge:</span>
+                <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-slate-600 font-medium mr-1">
+                      Cor:
+                    </span>
                     {SELLER_COLOR_SWATCHES.map((hex) => (
                       <button
                         key={hex}
@@ -318,13 +374,25 @@ export function ManageSellersAndTemplatesDrawer({
                         onClick={() => setSellerColor(hex)}
                         style={{ backgroundColor: hex }}
                         className={`w-5 h-5 rounded-xs border transition-transform ${
-                          sellerColor === hex
+                          sellerColor.toUpperCase() === hex.toUpperCase()
                             ? "ring-2 ring-offset-1 ring-slate-900 scale-110 border-white"
                             : "border-black/15 opacity-80 hover:opacity-100"
                         }`}
                         aria-label={`Selecionar cor ${hex}`}
                       />
                     ))}
+                    <input
+                      type="color"
+                      title="Escolher qualquer cor personalizada"
+                      aria-label="Cor personalizada do novo vendedor"
+                      value={
+                        /^#[0-9A-Fa-f]{6}$/.test(sellerColor)
+                          ? sellerColor
+                          : SELLER_COLOR_SWATCHES[0]
+                      }
+                      onChange={(e) => setSellerColor(e.target.value.toUpperCase())}
+                      className="w-6 h-5 p-0 border border-slate-300 rounded-xs cursor-pointer bg-white ml-1"
+                    />
                   </div>
 
                   <button
@@ -343,8 +411,13 @@ export function ManageSellersAndTemplatesDrawer({
               </form>
 
               <div className="space-y-2">
-                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                  Vendedores Cadastrados
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                    Vendedores Cadastrados
+                  </span>
+                  <span className="text-[10px] text-slate-400">
+                    Clique na cor ou em &ldquo;Editar&rdquo; para personalizar
+                  </span>
                 </div>
 
                 {sellers.length === 0 ? (
@@ -353,50 +426,172 @@ export function ManageSellersAndTemplatesDrawer({
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-200 border border-slate-200 rounded overflow-hidden">
-                    {sellers.map((s) => (
-                      <div
-                        key={s.id}
-                        className="flex items-center justify-between px-3.5 py-2.5 bg-white hover:bg-slate-50"
-                      >
-                        <div className="flex items-center gap-2.5">
-                          <span
-                            className="w-3 h-3 rounded-xs shrink-0"
-                            style={{ backgroundColor: s.color_hex }}
-                          />
-                          <div>
-                            <div className="font-bold text-slate-800 flex items-center gap-2">
-                              {s.name}
-                              {!s.active && (
-                                <span className="px-1.5 py-0.5 text-[9px] rounded bg-slate-200 text-slate-600 font-semibold">
-                                  Inativo
-                                </span>
-                              )}
+                    {sellers.map((s) => {
+                      const isEditing = editingSellerId === s.id;
+                      if (isEditing) {
+                        return (
+                          <form
+                            key={s.id}
+                            onSubmit={handleSaveEditedSeller}
+                            className="p-3.5 bg-sky-50/40 space-y-2.5"
+                          >
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                              <div className="sm:col-span-2">
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                                  Nome do Vendedor
+                                </label>
+                                <input
+                                  type="text"
+                                  required
+                                  value={editSellerName}
+                                  onChange={(e) => setEditSellerName(e.target.value)}
+                                  className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs focus:outline-none focus:border-sky-600"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[10px] font-bold text-slate-600 mb-0.5">
+                                  Cota Repasse (%)
+                                </label>
+                                <input
+                                  type="number"
+                                  step="0.01"
+                                  min="0"
+                                  max="100"
+                                  value={editSellerCommission}
+                                  onChange={(e) =>
+                                    setEditSellerCommission(e.target.value)
+                                  }
+                                  className="w-full px-2 py-1 bg-white border border-slate-300 rounded text-xs font-mono focus:outline-none focus:border-sky-600"
+                                />
+                              </div>
                             </div>
-                            <div className="text-[10px] text-slate-500 font-mono">
-                              Repasse configurado: {Number(s.commission_pct).toFixed(2)}% da base pós-ML
+
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-1.5">
+                                <span className="text-[10px] font-bold text-slate-600">
+                                  Cor:
+                                </span>
+                                {SELLER_COLOR_SWATCHES.map((hex) => (
+                                  <button
+                                    key={hex}
+                                    type="button"
+                                    onClick={() => setEditSellerColor(hex)}
+                                    style={{ backgroundColor: hex }}
+                                    className={`w-5 h-5 rounded-xs border transition-transform ${
+                                      editSellerColor.toUpperCase() ===
+                                      hex.toUpperCase()
+                                        ? "ring-2 ring-offset-1 ring-slate-900 scale-110 border-white"
+                                        : "border-black/15 opacity-80 hover:opacity-100"
+                                    }`}
+                                    aria-label={`Selecionar cor ${hex}`}
+                                  />
+                                ))}
+                                <input
+                                  type="color"
+                                  aria-label="Seletor visual de cor do vendedor"
+                                  value={
+                                    /^#[0-9A-Fa-f]{6}$/.test(editSellerColor)
+                                      ? editSellerColor
+                                      : "#0284C7"
+                                  }
+                                  onChange={(e) =>
+                                    setEditSellerColor(e.target.value.toUpperCase())
+                                  }
+                                  className="w-6 h-5 p-0 border border-slate-300 rounded-xs cursor-pointer bg-white"
+                                />
+                                <input
+                                  type="text"
+                                  maxLength={7}
+                                  value={editSellerColor}
+                                  onChange={(e) =>
+                                    setEditSellerColor(e.target.value.toUpperCase())
+                                  }
+                                  className="w-20 px-1.5 py-0.5 bg-white border border-slate-300 rounded-xs font-mono text-[11px]"
+                                />
+                              </div>
+
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingSellerId(null)}
+                                  className="px-2.5 py-1 rounded border border-slate-300 bg-white text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                                >
+                                  Cancelar
+                                </button>
+                                <button
+                                  type="submit"
+                                  disabled={busy}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-[11px] font-bold"
+                                >
+                                  {busy ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <Check className="w-3 h-3" />
+                                  )}
+                                  Salvar
+                                </button>
+                              </div>
+                            </div>
+                          </form>
+                        );
+                      }
+
+                      return (
+                        <div
+                          key={s.id}
+                          className="flex items-center justify-between px-3.5 py-2.5 bg-white hover:bg-slate-50"
+                        >
+                          <div className="flex items-center gap-2.5">
+                            <SellerQuickColorPopover
+                              seller={s}
+                              sizeClassName="w-4 h-4"
+                              onColorSaved={onRefresh}
+                            />
+                            <div>
+                              <div className="font-bold text-slate-800 flex items-center gap-2">
+                                {s.name}
+                                {!s.active && (
+                                  <span className="px-1.5 py-0.5 text-[9px] rounded bg-slate-200 text-slate-600 font-semibold">
+                                    Inativo
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                Repasse: {Number(s.commission_pct).toFixed(2)}% da base pós-ML · Cor{" "}
+                                {s.color_hex}
+                              </div>
                             </div>
                           </div>
-                        </div>
 
-                        <div className="flex items-center gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleToggleSellerActive(s)}
-                            className="px-2 py-1 rounded border border-slate-200 text-[11px] text-slate-600 hover:bg-slate-100"
-                          >
-                            {s.active ? "Desativar" : "Ativar"}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSeller(s.id)}
-                            className="p-1.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50"
-                            title="Excluir vendedor"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
+                          <div className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => startEditSeller(s)}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-200 text-[11px] font-semibold text-slate-700 hover:bg-slate-100"
+                              title="Editar nome, cor e cota deste vendedor"
+                            >
+                              <PencilLine className="w-3 h-3 text-sky-600" />
+                              Editar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleToggleSellerActive(s)}
+                              className="px-2 py-1 rounded border border-slate-200 text-[11px] text-slate-600 hover:bg-slate-100"
+                            >
+                              {s.active ? "Desativar" : "Ativar"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteSeller(s.id)}
+                              className="p-1.5 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                              title="Excluir vendedor"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -647,4 +842,3 @@ export function ManageSellersAndTemplatesDrawer({
     </div>
   );
 }
-

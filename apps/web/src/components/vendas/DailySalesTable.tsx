@@ -6,14 +6,16 @@ import {
   BookmarkCheck,
   BookmarkPlus,
   Building2,
+  CalendarPlus,
+  Check,
   CheckCircle2,
   Clock,
   ExternalLink,
-  ImageOff,
   Info,
   Loader2,
   Package,
   PencilLine,
+  RotateCcw,
   ShieldCheck,
   Truck,
   UserCheck,
@@ -39,8 +41,12 @@ import {
   formatPct,
   formatShortDateBR,
   getOfficialMlSaleCode,
+  getTodayBrazilISO,
+  toBrazilInputDate,
 } from "./formatters";
 import { OrderCostsPopover } from "./OrderCostsPopover";
+import { ProductThumbnailPreview } from "./ProductThumbnailPreview";
+import { SellerQuickColorPopover } from "./SellerQuickColorPopover";
 
 interface DailySalesTableProps {
   orders: MlSaleOrder[];
@@ -59,9 +65,18 @@ export function DailySalesTable({
 }: DailySalesTableProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [batchSellerId, setBatchSellerId] = useState<string>("");
+  const [batchShippedDate, setBatchShippedDate] = useState<string>(() =>
+    getTodayBrazilISO()
+  );
   const [busyRowId, setBusyRowId] = useState<string | null>(null);
   const [batchBusy, setBatchBusy] = useState<boolean>(false);
   const [editingCostsOrder, setEditingCostsOrder] = useState<MlSaleOrder | null>(null);
+
+  // Edição inline de Data de Envio por linha
+  const [editingShippedOrderId, setEditingShippedOrderId] = useState<string | null>(
+    null
+  );
+  const [draftShippedDate, setDraftShippedDate] = useState<string>("");
 
   const isShippingMode = analysisMode === "shipping_date";
 
@@ -108,6 +123,61 @@ export function DailySalesTable({
       else next.add(id);
       return next;
     });
+  }
+
+  function startEditingShippedDate(order: MlSaleOrder) {
+    const initial =
+      toBrazilInputDate(order.shipped_at) ||
+      toBrazilInputDate(order.order_date) ||
+      getTodayBrazilISO();
+    setDraftShippedDate(initial);
+    setEditingShippedOrderId(order.id);
+  }
+
+  async function handleSaveSingleShippedDate(
+    order: MlSaleOrder,
+    nextDateStr: string | null
+  ) {
+    setBusyRowId(order.id);
+    try {
+      const res = await fetch("/api/ml/sales/assign", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderIds: [order.id],
+          updateSellerAssignment: false,
+          updateShippedAt: true,
+          shippedAt: nextDateStr,
+        }),
+      });
+      if (res.ok) {
+        setEditingShippedOrderId(null);
+        onRefresh();
+      }
+    } finally {
+      setBusyRowId(null);
+    }
+  }
+
+  async function handleRevertSingleShippedDateToApi(order: MlSaleOrder) {
+    setBusyRowId(order.id);
+    try {
+      const res = await fetch("/api/ml/sales/assign", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderIds: [order.id],
+          updateSellerAssignment: false,
+          revertShippedAtToApi: true,
+        }),
+      });
+      if (res.ok) {
+        setEditingShippedOrderId(null);
+        onRefresh();
+      }
+    } finally {
+      setBusyRowId(null);
+    }
   }
 
   async function handleAssignSingle(
@@ -164,13 +234,59 @@ export function DailySalesTable({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           orderIds: Array.from(selectedIds),
-          assignedSellerId: batchSellerId === "__CLEAR__" ? null : batchSellerId || null,
+          assignedSellerId:
+            batchSellerId === "__CLEAR__" ? null : batchSellerId || null,
           updateSellerAssignment: true,
         }),
       });
       if (res.ok) {
         setSelectedIds(new Set());
         setBatchSellerId("");
+        onRefresh();
+      }
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  async function handleBatchSetShippedAt() {
+    if (selectedIds.size === 0 || !batchShippedDate) return;
+    setBatchBusy(true);
+    try {
+      const res = await fetch("/api/ml/sales/assign", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderIds: Array.from(selectedIds),
+          updateSellerAssignment: false,
+          updateShippedAt: true,
+          shippedAt: batchShippedDate,
+        }),
+      });
+      if (res.ok) {
+        setSelectedIds(new Set());
+        onRefresh();
+      }
+    } finally {
+      setBatchBusy(false);
+    }
+  }
+
+  async function handleBatchRevertShippedAt() {
+    if (selectedIds.size === 0) return;
+    setBatchBusy(true);
+    try {
+      const res = await fetch("/api/ml/sales/assign", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          orderIds: Array.from(selectedIds),
+          updateSellerAssignment: false,
+          revertShippedAtToApi: true,
+        }),
+      });
+      if (res.ok) {
+        setSelectedIds(new Set());
         onRefresh();
       }
     } finally {
@@ -210,16 +326,17 @@ export function DailySalesTable({
         )}
         <div className="text-sm font-bold text-slate-800">
           {isShippingMode
-            ? "Nenhum pedido enviado (bipado/coletado) encontrado neste período"
+            ? "Nenhum pedido enviado (bipado/coletado ou com data manual) encontrado neste período"
             : "Nenhuma venda encontrada para os filtros selecionados"}
         </div>
         <p className="text-xs text-slate-500 max-w-lg mx-auto">
           {isShippingMode ? (
             <>
-              No modo <strong>Por Dia do Envio</strong> aparecem exclusivamente as vendas já
-              despachadas na transportadora/agência dentro das datas filtradas. Clique em{" "}
-              <strong>&ldquo;Forçar Sincronização ML&rdquo;</strong> no topo para buscar envios
-              recentes (com lookback automático de 14 dias) ou ajuste o intervalo.
+              No modo <strong>Por Dia do Envio</strong> aparecem as vendas despachadas na
+              transportadora/agência ou com <strong>Data de Envio definida manualmente</strong>{" "}
+              dentro das datas filtradas. Clique em{" "}
+              <strong>&ldquo;Forçar Sincronização ML&rdquo;</strong> ou altere para{" "}
+              <strong>Por Data da Venda</strong> para atribuir uma data de envio em pedidos pagos.
             </>
           ) : (
             <>
@@ -236,7 +353,7 @@ export function DailySalesTable({
   return (
     <div className="relative">
       <div className="bg-white border border-[#E2E8F0] rounded shadow-2xs overflow-x-auto">
-        <table className="w-full text-left border-collapse text-xs min-w-[1480px]">
+        <table className="w-full text-left border-collapse text-xs min-w-[1500px]">
           <thead>
             <tr className="bg-slate-900 text-slate-200 border-b border-slate-800 uppercase text-[10px] font-bold tracking-wider">
               <th className="py-2.5 px-2.5 w-9 text-center">
@@ -248,11 +365,11 @@ export function DailySalesTable({
                   className="rounded border-slate-600 bg-slate-800 text-sky-500 cursor-pointer"
                 />
               </th>
-              <th className="py-2.5 px-2.5">
+              <th className="py-2.5 px-2.5 min-w-[205px]">
                 {isShippingMode ? "Enviado Dia / Data Venda" : "Data Venda / Envio"}
               </th>
               <th className="py-2.5 px-2.5 min-w-[340px] max-w-[480px]">Produto / Variação</th>
-              <th className="py-2.5 px-2.5 min-w-[185px]">Vendedor (Repasse)</th>
+              <th className="py-2.5 px-2.5 min-w-[190px]">Vendedor (Repasse)</th>
               <th className="py-2.5 px-2.5 min-w-[170px] max-w-[240px]">Comprador</th>
               <th className="py-2.5 px-2.5 text-right">Venda Bruta</th>
               <th className="py-2.5 px-2.5 text-right">Taxas ML & Frete</th>
@@ -289,8 +406,11 @@ export function DailySalesTable({
                   : 0;
               const mpReleased = isMpMoneyReleased(order);
               const isRowBusy = busyRowId === order.id;
+              const isEditingShipDate = editingShippedOrderId === order.id;
 
-              const sellerCotaPct = assignedSeller ? Number(assignedSeller.commission_pct ?? 100) : 100;
+              const sellerCotaPct = assignedSeller
+                ? Number(assignedSeller.commission_pct ?? 100)
+                : 100;
               const sellerEffectiveAmount = roundCurrency(
                 order.seller_transfer_profit * (sellerCotaPct / 100)
               );
@@ -317,16 +437,54 @@ export function DailySalesTable({
                     />
                   </td>
 
-                  {/* 2. Data Venda / Dia do Envio */}
+                  {/* 2. Data Venda / Dia do Envio (com Edição Manual Protegida) */}
                   <td className="py-2.5 px-2.5 align-top whitespace-nowrap">
                     {isShippingMode ? (
                       <>
-                        <div
-                          className="inline-flex items-center gap-1 font-mono font-black text-emerald-800 text-[11px]"
-                          title="Data e hora real em que o produto foi postado/coletado no Mercado Livre"
-                        >
-                          <Truck className="w-3 h-3 text-emerald-700 shrink-0" />
-                          <span>Env: {formatDateTimeBR(order.shipped_at)}</span>
+                        <div className="flex items-center gap-1">
+                          <div
+                            className="inline-flex items-center gap-1 font-mono font-black text-emerald-800 text-[11px]"
+                            title={
+                              order.shipped_at_manual
+                                ? "Data de envio definida manualmente pelo gestor (protegida contra sobrescrita da API)"
+                                : "Data e hora real em que o produto foi postado/coletado no Mercado Livre"
+                            }
+                          >
+                            <Truck className="w-3 h-3 text-emerald-700 shrink-0" />
+                            <span>
+                              Env:{" "}
+                              {order.shipped_at_manual
+                                ? formatShortDateBR(order.shipped_at)
+                                : formatDateTimeBR(order.shipped_at)}
+                            </span>
+                          </div>
+                          {order.shipped_at_manual && (
+                            <span className="px-1 py-0.2 rounded-xs bg-sky-100 text-sky-900 border border-sky-300 text-[9px] font-bold">
+                              Manual
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            disabled={isRowBusy}
+                            onClick={() => startEditingShippedDate(order)}
+                            className="p-0.5 rounded-xs text-slate-400 hover:text-sky-700 hover:bg-sky-50"
+                            title="Alterar data de envio desta venda"
+                            aria-label={`Alterar data de envio do pedido ${order.ml_order_id}`}
+                          >
+                            <PencilLine className="w-3 h-3" />
+                          </button>
+                          {order.shipped_at_manual && (
+                            <button
+                              type="button"
+                              disabled={isRowBusy}
+                              onClick={() => handleRevertSingleShippedDateToApi(order)}
+                              className="p-0.5 rounded-xs text-amber-700 hover:text-amber-950 hover:bg-amber-100"
+                              title="Reverter para a data automática oficial da API do Mercado Livre"
+                              aria-label="Reverter para data oficial do ML"
+                            >
+                              <RotateCcw className="w-3 h-3" />
+                            </button>
+                          )}
                         </div>
                         <div className="text-[10px] font-mono text-slate-500">
                           Venda: {formatDateTimeBR(order.order_date)}
@@ -337,15 +495,129 @@ export function DailySalesTable({
                         <div className="font-mono font-bold text-slate-900 text-[11px]">
                           {formatDateTimeBR(order.order_date)}
                         </div>
-                        {order.shipped_at && (
-                          <div
-                            className="text-[10px] font-mono font-semibold text-emerald-700"
-                            title="Data e hora real em que o produto foi postado/coletado"
-                          >
-                            Enviado: {formatDateTimeBR(order.shipped_at)}
+                        {order.shipped_at ? (
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <span
+                              className="text-[10px] font-mono font-semibold text-emerald-700"
+                              title={
+                                order.shipped_at_manual
+                                  ? "Data de envio definida manualmente pelo gestor (protegida contra sobrescrita)"
+                                  : "Data e hora real em que o produto foi postado/coletado"
+                              }
+                            >
+                              Enviado:{" "}
+                              {order.shipped_at_manual
+                                ? formatShortDateBR(order.shipped_at)
+                                : formatDateTimeBR(order.shipped_at)}
+                            </span>
+                            {order.shipped_at_manual && (
+                              <span className="px-1 py-0.2 rounded-xs bg-sky-100 text-sky-900 border border-sky-300 text-[9px] font-bold">
+                                Manual
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              disabled={isRowBusy}
+                              onClick={() => startEditingShippedDate(order)}
+                              className="p-0.5 rounded-xs text-slate-400 hover:text-sky-700 hover:bg-sky-50"
+                              title="Alterar data de envio desta venda"
+                              aria-label={`Alterar data de envio do pedido ${order.ml_order_id}`}
+                            >
+                              <PencilLine className="w-2.5 h-2.5" />
+                            </button>
+                            {order.shipped_at_manual && (
+                              <button
+                                type="button"
+                                disabled={isRowBusy}
+                                onClick={() => handleRevertSingleShippedDateToApi(order)}
+                                className="p-0.5 rounded-xs text-amber-700 hover:text-amber-950 hover:bg-amber-100"
+                                title="Reverter para a data oficial da API do Mercado Livre"
+                                aria-label="Reverter para data oficial do ML"
+                              >
+                                <RotateCcw className="w-2.5 h-2.5" />
+                              </button>
+                            )}
                           </div>
+                        ) : (
+                          !cancelled && (
+                            <button
+                              type="button"
+                              disabled={isRowBusy}
+                              onClick={() => startEditingShippedDate(order)}
+                              className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-semibold text-emerald-700 hover:text-emerald-900 hover:underline"
+                              title="Definir manualmente a data de envio para apurar métricas por dia de envio"
+                            >
+                              <CalendarPlus className="w-3 h-3" />
+                              Definir Data Envio
+                            </button>
+                          )
                         )}
                       </>
+                    )}
+
+                    {/* Editor Inline de Data de Envio */}
+                    {isEditingShipDate && (
+                      <div className="mt-1.5 p-1.5 rounded-xs bg-slate-900 text-white border border-slate-700 space-y-1.5 shadow-lg">
+                        <div className="text-[9px] font-bold uppercase tracking-wider text-emerald-300">
+                          Definir Data de Envio
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="date"
+                            aria-label="Data de envio manual"
+                            value={draftShippedDate}
+                            onChange={(e) => setDraftShippedDate(e.target.value)}
+                            className="px-1.5 py-0.5 bg-slate-800 border border-slate-600 rounded-xs text-[11px] font-mono text-white focus:outline-none focus:border-emerald-400"
+                          />
+                          <button
+                            type="button"
+                            disabled={isRowBusy || !draftShippedDate}
+                            onClick={() =>
+                              handleSaveSingleShippedDate(order, draftShippedDate)
+                            }
+                            className="p-1 rounded-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white"
+                            title="Salvar data de envio"
+                            aria-label="Salvar data de envio"
+                          >
+                            {isRowBusy ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Check className="w-3 h-3" />
+                            )}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingShippedOrderId(null)}
+                            className="p-1 rounded-xs bg-slate-800 hover:bg-slate-700 text-slate-300"
+                            title="Cancelar"
+                            aria-label="Cancelar edição de data"
+                          >
+                            <X className="w-3 h-3" />
+                          </button>
+                        </div>
+                        {order.shipped_at && (
+                          <div className="flex items-center justify-between gap-2 pt-0.5 border-t border-slate-800 text-[9px]">
+                            <button
+                              type="button"
+                              disabled={isRowBusy}
+                              onClick={() => handleSaveSingleShippedDate(order, null)}
+                              className="text-rose-300 hover:underline"
+                            >
+                              Limpar data
+                            </button>
+                            {order.shipped_at_manual && (
+                              <button
+                                type="button"
+                                disabled={isRowBusy}
+                                onClick={() => handleRevertSingleShippedDateToApi(order)}
+                                className="text-amber-300 hover:underline"
+                              >
+                                Restaurar API ML
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
                     )}
 
                     <div className="text-[10px] font-mono text-slate-500 mt-0.5">
@@ -373,10 +645,10 @@ export function DailySalesTable({
                           <CheckCircle2 className="w-2.5 h-2.5" />
                           Entregue
                         </span>
-                      ) : order.status === "shipped" ? (
+                      ) : order.status === "shipped" || Boolean(order.shipped_at) ? (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs text-[10px] font-semibold bg-sky-50 text-sky-700 border border-sky-200">
                           <Truck className="w-2.5 h-2.5" />
-                          Em Trânsito
+                          {order.status === "shipped" ? "Em Trânsito" : "Enviado (Manual)"}
                         </span>
                       ) : (
                         <span
@@ -401,52 +673,15 @@ export function DailySalesTable({
                     </div>
                   </td>
 
-                  {/* 3. Produto */}
+                  {/* 3. Produto (com Zoom via Portal fora da tabela — sem corte pelo cabeçalho) */}
                   <td className="py-2.5 px-2.5 align-top min-w-[340px] max-w-[480px]">
                     <div className="flex items-start gap-3">
-                      {/* Imagem do Produto ampliada (64px) com prévia em zoom no hover */}
-                      <div className="group relative shrink-0">
-                        <div className="w-16 h-16 rounded border border-slate-200 bg-white p-1 overflow-hidden flex items-center justify-center shadow-2xs hover:border-sky-400 transition-colors">
-                          {order.product_thumbnail ? (
-                            order.permalink ? (
-                              <a
-                                href={order.permalink}
-                                target="_blank"
-                                rel="noreferrer"
-                                title="Clique para abrir anúncio oficial no ML"
-                                className="w-full h-full flex items-center justify-center"
-                              >
-                                <img
-                                  src={order.product_thumbnail}
-                                  alt={order.product_title}
-                                  className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-150"
-                                  loading="lazy"
-                                />
-                              </a>
-                            ) : (
-                              <img
-                                src={order.product_thumbnail}
-                                alt={order.product_title}
-                                className="w-full h-full object-contain"
-                                loading="lazy"
-                              />
-                            )
-                          ) : (
-                            <ImageOff className="w-6 h-6 text-slate-300" />
-                          )}
-                        </div>
-                        {order.product_thumbnail && (
-                          <div className="pointer-events-none absolute left-0 bottom-full mb-1.5 z-50 hidden group-hover:block drop-shadow-2xl">
-                            <div className="w-56 h-56 bg-white border border-slate-300 rounded-lg p-2 shadow-2xl flex items-center justify-center">
-                              <img
-                                src={order.product_thumbnail}
-                                alt={order.product_title}
-                                className="w-full h-full object-contain"
-                              />
-                            </div>
-                          </div>
-                        )}
-                      </div>
+                      <ProductThumbnailPreview
+                        thumbnailUrl={order.product_thumbnail}
+                        title={order.product_title}
+                        permalink={order.permalink}
+                        sizeClassName="w-16 h-16"
+                      />
 
                       <div className="min-w-0 flex-1">
                         <div className="flex items-start gap-1">
@@ -503,28 +738,35 @@ export function DailySalesTable({
                     </div>
                   </td>
 
-                  {/* 4. Vendedor (Repasse) — 1 Clique Inline */}
+                  {/* 4. Vendedor (Repasse) — 1 Clique Inline + Alteração Rápida de Cor */}
                   <td className="py-2.5 px-2.5 align-top">
                     <div className="space-y-1">
-                      <div className="relative flex items-center">
-                        <span
-                          className="w-2.5 h-2.5 rounded-xs mr-1.5 shrink-0"
-                          style={{
-                            backgroundColor: assignedSeller ? assignedSeller.color_hex : "#CBD5E1",
-                          }}
-                        />
+                      <div className="relative flex items-center gap-1.5">
+                        {assignedSeller ? (
+                          <SellerQuickColorPopover
+                            seller={assignedSeller}
+                            sizeClassName="w-3 h-3"
+                            onColorSaved={onRefresh}
+                          />
+                        ) : (
+                          <span className="w-3 h-3 rounded-xs shrink-0 bg-slate-300" />
+                        )}
                         <select
                           aria-label={`Atribuir vendedor ao pedido ${order.ml_order_id}`}
                           disabled={isRowBusy}
                           value={order.assigned_seller_id || ""}
                           onChange={(e) =>
-                            handleAssignSingle(order, e.target.value ? e.target.value : null, false)
+                            handleAssignSingle(
+                              order,
+                              e.target.value ? e.target.value : null,
+                              false
+                            )
                           }
                           style={
                             assignedSeller
                               ? {
                                   borderColor: assignedSeller.color_hex,
-                                  backgroundColor: `${assignedSeller.color_hex}12`,
+                                  backgroundColor: `${assignedSeller.color_hex}14`,
                                 }
                               : undefined
                           }
@@ -610,7 +852,7 @@ export function DailySalesTable({
                     </div>
                   </td>
 
-                  {/* 7. Taxas ML & Frete (com Tooltip detalhado) */}
+                  {/* 7. Taxas ML & Frete */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap">
                     <div className="relative inline-block group">
                       <div className="inline-flex items-center gap-1 cursor-help text-rose-600 font-semibold text-[11px]">
@@ -624,7 +866,6 @@ export function DailySalesTable({
                         </div>
                       )}
 
-                      {/* Tooltip */}
                       <div className="invisible opacity-0 group-hover:visible group-hover:opacity-100 transition-opacity z-40 absolute right-0 top-full mt-1.5 w-60 p-2.5 rounded bg-slate-900 text-white text-[10px] shadow-xl pointer-events-none text-left space-y-1">
                         <div className="font-sans font-bold text-slate-300 border-b border-slate-700 pb-1 mb-1">
                           Composição Plataforma ML
@@ -651,7 +892,7 @@ export function DailySalesTable({
                     </div>
                   </td>
 
-                  {/* 8. Valor Repasse Vendedor (Coluna em Destaque) */}
+                  {/* 8. Valor Repasse Vendedor */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap bg-emerald-50/45">
                     {cancelled ? (
                       <div className="space-y-1">
@@ -679,7 +920,7 @@ export function DailySalesTable({
                     )}
                   </td>
 
-                  {/* 9. Custos & Imposto (Abre Popover) */}
+                  {/* 9. Custos & Imposto */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap">
                     <button
                       type="button"
@@ -774,64 +1015,101 @@ export function DailySalesTable({
         </table>
       </div>
 
-      {/* Barra Flutuante de Seleção em Massa (Batch Action) */}
+      {/* Barra Flutuante de Seleção em Massa (Vendedor + Data de Envio Manual + Conferência) */}
       {selectedIds.size > 0 && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 bg-[#0F172A] text-white border border-slate-700 rounded shadow-2xl px-4 py-3 flex flex-wrap items-center gap-3 text-xs">
-          <span className="font-bold text-sky-300 font-mono">
+        <div className="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 max-w-[96vw] bg-[#0F172A] text-white border border-slate-700 rounded-xs shadow-2xl px-4 py-3 flex flex-wrap items-center gap-3 text-xs">
+          <span className="font-bold text-sky-300 font-mono whitespace-nowrap">
             {selectedIds.size}{" "}
             {selectedIds.size === 1 ? "venda selecionada" : "vendas selecionadas"}
           </span>
 
-          <div className="h-4 w-px bg-slate-700" />
+          <div className="h-4 w-px bg-slate-700 hidden sm:block" />
 
-          <div className="flex items-center gap-2">
-            <span className="text-slate-300 text-[11px]">Atribuir para:</span>
+          {/* Atribuir Vendedor em Massa */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-slate-300 text-[11px]">Vendedor:</span>
             <select
               aria-label="Selecionar vendedor para atribuição em massa"
               value={batchSellerId}
               onChange={(e) => setBatchSellerId(e.target.value)}
-              className="bg-slate-800 border border-slate-600 text-white text-xs rounded px-2.5 py-1.5 focus:outline-none focus:border-sky-400"
+              className="bg-slate-800 border border-slate-600 text-white text-xs rounded-xs px-2 py-1.5 focus:outline-none focus:border-sky-400"
             >
-              <option value="">Selecionar Vendedor...</option>
+              <option value="">Escolher...</option>
               {activeSellers.map((s) => (
                 <option key={s.id} value={s.id}>
                   {s.name}
                 </option>
               ))}
-              <option value="__CLEAR__">— Remover Vendedor (Deixar Pendente) —</option>
+              <option value="__CLEAR__">— Remover Vendedor —</option>
             </select>
 
             <button
               type="button"
               disabled={!batchSellerId || batchBusy}
               onClick={handleBatchAssign}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold transition-colors"
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xs bg-sky-600 hover:bg-sky-500 disabled:opacity-50 text-white font-bold transition-colors"
             >
               {batchBusy ? (
                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
               ) : (
                 <UserCheck className="w-3.5 h-3.5" />
               )}
-              Aplicar Vendedor
+              Aplicar
             </button>
           </div>
 
-          <div className="h-4 w-px bg-slate-700" />
+          <div className="h-4 w-px bg-slate-700 hidden sm:block" />
+
+          {/* Definir Data de Envio Manual em Massa */}
+          <div className="flex items-center gap-1.5">
+            <span className="text-emerald-300 text-[11px] font-semibold">
+              Data Envio:
+            </span>
+            <input
+              type="date"
+              aria-label="Data de envio para aplicar em lote"
+              value={batchShippedDate}
+              onChange={(e) => setBatchShippedDate(e.target.value)}
+              className="bg-slate-800 border border-slate-600 text-white text-xs font-mono rounded-xs px-2 py-1 focus:outline-none focus:border-emerald-400"
+            />
+            <button
+              type="button"
+              disabled={!batchShippedDate || batchBusy}
+              onClick={handleBatchSetShippedAt}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xs bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold transition-colors"
+              title="Definir esta data de envio nas vendas selecionadas (protegida contra sobrescrita da API)"
+            >
+              <Truck className="w-3.5 h-3.5" />
+              Definir Envio
+            </button>
+            <button
+              type="button"
+              disabled={batchBusy}
+              onClick={handleBatchRevertShippedAt}
+              className="inline-flex items-center gap-1 px-2 py-1.5 rounded-xs bg-slate-800 hover:bg-slate-700 border border-slate-600 text-amber-300 font-semibold transition-colors"
+              title="Reverter vendas selecionadas para a data automática oficial da API do Mercado Livre"
+            >
+              <RotateCcw className="w-3 h-3" />
+              API ML
+            </button>
+          </div>
+
+          <div className="h-4 w-px bg-slate-700 hidden sm:block" />
 
           <button
             type="button"
             disabled={batchBusy}
             onClick={handleBatchVerify}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white font-bold transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xs bg-slate-800 hover:bg-slate-700 border border-slate-600 disabled:opacity-50 text-white font-bold transition-colors"
           >
-            <ShieldCheck className="w-3.5 h-3.5" />
-            Marcar como Verificado
+            <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+            Verificar
           </button>
 
           <button
             type="button"
             onClick={() => setSelectedIds(new Set())}
-            className="p-1.5 rounded hover:bg-slate-800 text-slate-400 hover:text-white"
+            className="p-1.5 rounded-xs hover:bg-slate-800 text-slate-400 hover:text-white"
             title="Limpar seleção"
           >
             <X className="w-4 h-4" />

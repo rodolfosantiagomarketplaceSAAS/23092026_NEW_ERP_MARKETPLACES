@@ -229,27 +229,42 @@ async function upsertDraftsPreservingManualFields(params: {
     admin
       .from("ml_sales_orders")
       .select(
-        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
+        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
       )
       .in("ml_order_id", draftOrderIds),
   ]);
 
   let existingRows: Array<Record<string, unknown>> = [];
   let shippingColumnsAvailable = true;
+  let manualShippingColumnsAvailable = true;
 
   if (fullSelectRes.error && isMissingColumnError(fullSelectRes.error)) {
-    shippingColumnsAvailable = false;
-    const legacySelectRes = await admin
+    manualShippingColumnsAvailable = false;
+    const midSelectRes = await admin
       .from("ml_sales_orders")
       .select(
-        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
       )
       .in("ml_order_id", draftOrderIds);
 
-    if (legacySelectRes.error) {
-      throw new Error(`Erro ao consultar ml_sales_orders: ${legacySelectRes.error.message}`);
+    if (midSelectRes.error && isMissingColumnError(midSelectRes.error)) {
+      shippingColumnsAvailable = false;
+      const legacySelectRes = await admin
+        .from("ml_sales_orders")
+        .select(
+          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+        )
+        .in("ml_order_id", draftOrderIds);
+
+      if (legacySelectRes.error) {
+        throw new Error(`Erro ao consultar ml_sales_orders: ${legacySelectRes.error.message}`);
+      }
+      existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
+    } else if (midSelectRes.error) {
+      throw new Error(`Erro ao consultar ml_sales_orders: ${midSelectRes.error.message}`);
+    } else {
+      existingRows = (midSelectRes.data ?? []) as Array<Record<string, unknown>>;
     }
-    existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
   } else if (fullSelectRes.error) {
     throw new Error(`Erro ao consultar ml_sales_orders: ${fullSelectRes.error.message}`);
   } else {
@@ -358,8 +373,23 @@ async function upsertDraftsPreservingManualFields(params: {
     };
 
     if (shippingColumnsAvailable) {
-      basePayload.shipped_at =
-        d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+      const isManualShipped =
+        manualShippingColumnsAvailable && Boolean(existing?.shipped_at_manual);
+      const apiResolvedShipped =
+        d.shipped_at ??
+        (existing?.api_shipped_at ? String(existing.api_shipped_at) : null);
+
+      basePayload.shipped_at = isManualShipped
+        ? existing?.shipped_at
+          ? String(existing.shipped_at)
+          : apiResolvedShipped
+        : d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+
+      if (manualShippingColumnsAvailable) {
+        basePayload.shipped_at_manual = isManualShipped;
+        basePayload.api_shipped_at = apiResolvedShipped;
+      }
+
       basePayload.delivered_at =
         d.delivered_at ?? (existing?.delivered_at ? String(existing.delivered_at) : null);
       basePayload.logistic_type =

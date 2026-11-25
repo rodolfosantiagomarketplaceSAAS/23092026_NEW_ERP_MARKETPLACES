@@ -5,6 +5,7 @@ import { getMarketplaceIntegrations } from "@/lib/services/marketplaceIntegratio
 import {
   computeSalesDashboardAnalytics,
   isCancelledOrReturned,
+  toBrazilDateKeyAndLabel,
 } from "@/lib/mercadolivre/sales-analytics";
 import {
   applyTenantFilter,
@@ -23,6 +24,9 @@ import type {
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
+const SUPABASE_PAGE_SIZE = 1000;
+const MAX_FETCH_ROWS = 20000;
+
 function normalizeOrderRow(row: Record<string, unknown>): MlSaleOrder {
   return {
     id: String(row.id),
@@ -36,6 +40,8 @@ function normalizeOrderRow(row: Record<string, unknown>): MlSaleOrder {
     order_date: String(row.order_date),
     shipping_deadline: row.shipping_deadline ? String(row.shipping_deadline) : null,
     shipped_at: row.shipped_at ? String(row.shipped_at) : null,
+    api_shipped_at: row.api_shipped_at ? String(row.api_shipped_at) : null,
+    shipped_at_manual: Boolean(row.shipped_at_manual),
     delivered_at: row.delivered_at ? String(row.delivered_at) : null,
     logistic_type: row.logistic_type ? String(row.logistic_type) : null,
     status: (row.status as MlSaleOrder["status"]) || "paid",
@@ -74,6 +80,60 @@ function normalizeOrderRow(row: Record<string, unknown>): MlSaleOrder {
   };
 }
 
+/**
+ * Pagina de 1.000 em 1.000 linhas no PostgREST para garantir que filtros por Mês, Ano
+ * e "Todas as Vendas" nunca sejam truncados pelo limite padrão do Supabase.
+ */
+async function fetchPaginatedOrders(params: {
+  admin: ReturnType<typeof createSupabaseAdminClient>;
+  ctx: NonNullable<Awaited<ReturnType<typeof getAuthContext>>>;
+  analysisMode: SalesAnalysisMode;
+  isAllPeriod: boolean;
+  isoStart: string;
+  isoEnd: string;
+}): Promise<{ data: Array<Record<string, unknown>> | null; error: { code?: string; message?: string } | null }> {
+  const { admin, ctx, analysisMode, isAllPeriod, isoStart, isoEnd } = params;
+  const rows: Array<Record<string, unknown>> = [];
+  let offset = 0;
+
+  while (rows.length < MAX_FETCH_ROWS) {
+    let baseQuery = admin.from("ml_sales_orders").select("*");
+
+    if (analysisMode === "shipping_date") {
+      baseQuery = baseQuery.not("shipped_at", "is", null);
+      if (!isAllPeriod) {
+        baseQuery = baseQuery.gte("shipped_at", isoStart).lte("shipped_at", isoEnd);
+      }
+      baseQuery = baseQuery.order("shipped_at", { ascending: false });
+    } else {
+      if (!isAllPeriod) {
+        baseQuery = baseQuery.gte("order_date", isoStart).lte("order_date", isoEnd);
+      }
+      baseQuery = baseQuery.order("order_date", { ascending: false });
+    }
+
+    const scopedQuery = applyTenantFilter(baseQuery, ctx).range(
+      offset,
+      offset + SUPABASE_PAGE_SIZE - 1
+    );
+
+    const { data, error } = await scopedQuery;
+    if (error) {
+      return { data: null, error };
+    }
+
+    const batch = (data ?? []) as Array<Record<string, unknown>>;
+    rows.push(...batch);
+
+    if (batch.length < SUPABASE_PAGE_SIZE) {
+      break;
+    }
+    offset += SUPABASE_PAGE_SIZE;
+  }
+
+  return { data: rows, error: null };
+}
+
 export async function GET(request: NextRequest) {
   const ctx = await getAuthContext();
   if (!ctx) {
@@ -84,6 +144,8 @@ export async function GET(request: NextRequest) {
   }
 
   const searchParams = request.nextUrl.searchParams;
+  const periodParam = searchParams.get("period");
+  const isAllPeriod = periodParam === "all" || searchParams.get("all") === "true";
   const fromParam = searchParams.get("from");
   const toParam = searchParams.get("to");
   const sellerFilter = searchParams.get("seller") || "all";
@@ -100,6 +162,7 @@ export async function GET(request: NextRequest) {
     month: "2-digit",
     day: "2-digit",
   }).format(now);
+  const currentYear = Number(todayBr.slice(0, 4));
 
   const fromDate = fromParam && fromParam.length >= 10 ? fromParam.slice(0, 10) : todayBr;
   const toDate = toParam && toParam.length >= 10 ? toParam.slice(0, 10) : todayBr;
@@ -123,28 +186,6 @@ export async function GET(request: NextRequest) {
       status: i.status,
     }));
 
-  const ordersQuery =
-    analysisMode === "shipping_date"
-      ? applyTenantFilter(
-          admin
-            .from("ml_sales_orders")
-            .select("*")
-            .not("shipped_at", "is", null)
-            .gte("shipped_at", isoStart)
-            .lte("shipped_at", isoEnd)
-            .order("shipped_at", { ascending: false }),
-          ctx
-        )
-      : applyTenantFilter(
-          admin
-            .from("ml_sales_orders")
-            .select("*")
-            .gte("order_date", isoStart)
-            .lte("order_date", isoEnd)
-            .order("order_date", { ascending: false }),
-          ctx
-        );
-
   const pendingShipmentCountQuery = applyTenantFilter(
     admin
       .from("ml_sales_orders")
@@ -162,22 +203,46 @@ export async function GET(request: NextRequest) {
     ctx
   );
 
-  const [ordersRes, sellersRes, templatesRes, pendingRes, backfillRes] = await Promise.all([
-    ordersQuery,
-    applyTenantFilter(
-      admin.from("sellers").select("*").order("name", { ascending: true }),
-      ctx
-    ),
-    applyTenantFilter(
-      admin
-        .from("product_cost_templates")
-        .select("*")
-        .order("updated_at", { ascending: false }),
-      ctx
-    ),
-    pendingShipmentCountQuery,
-    backfillCountQuery,
-  ]);
+  const manualSchemaProbeQuery = applyTenantFilter(
+    admin.from("ml_sales_orders").select("shipped_at_manual, api_shipped_at").limit(1),
+    ctx
+  );
+
+  const oldestOrderQuery = applyTenantFilter(
+    admin
+      .from("ml_sales_orders")
+      .select("order_date")
+      .order("order_date", { ascending: true })
+      .limit(1),
+    ctx
+  );
+
+  const [ordersRes, sellersRes, templatesRes, pendingRes, backfillRes, manualProbeRes, oldestRes] =
+    await Promise.all([
+      fetchPaginatedOrders({
+        admin,
+        ctx,
+        analysisMode,
+        isAllPeriod,
+        isoStart,
+        isoEnd,
+      }),
+      applyTenantFilter(
+        admin.from("sellers").select("*").order("name", { ascending: true }),
+        ctx
+      ),
+      applyTenantFilter(
+        admin
+          .from("product_cost_templates")
+          .select("*")
+          .order("updated_at", { ascending: false }),
+        ctx
+      ),
+      pendingShipmentCountQuery,
+      backfillCountQuery,
+      manualSchemaProbeQuery,
+      oldestOrderQuery,
+    ]);
 
   if (
     isMissingTableError(ordersRes.error) ||
@@ -193,7 +258,10 @@ export async function GET(request: NextRequest) {
       success: true,
       schemaReady: false,
       shippingDateSchemaReady: false,
+      manualShippingSchemaReady: false,
       analysisMode,
+      periodMode: isAllPeriod ? "all" : "range",
+      availableYears: [currentYear, currentYear - 1, currentYear - 2],
       pendingShipmentCount: 0,
       backfillMissingShippedAtCount: 0,
       orders: [],
@@ -211,6 +279,10 @@ export async function GET(request: NextRequest) {
   const shippingDateSchemaReady =
     !isMissingColumnError(ordersRes.error, "shipped_at") &&
     !isMissingColumnError(backfillRes.error, "shipped_at");
+
+  const manualShippingSchemaReady =
+    !isMissingColumnError(manualProbeRes.error, "shipped_at_manual") &&
+    !isMissingColumnError(manualProbeRes.error, "api_shipped_at");
 
   const sellers: Seller[] = ((sellersRes.data ?? []) as Array<Record<string, unknown>>).map(
     (s) => ({
@@ -248,7 +320,6 @@ export async function GET(request: NextRequest) {
   const pendingShipmentCount = pendingRes.count ?? 0;
   const backfillMissingShippedAtCount = shippingDateSchemaReady ? backfillRes.count ?? 0 : 0;
 
-  // Caso o usuário selecione "Dia do Envio" antes de executar a nova migration SQL 20261124180000
   if (ordersRes.error && isMissingColumnError(ordersRes.error, "shipped_at")) {
     const emptyAnalytics = computeSalesDashboardAnalytics({
       filteredOrders: [],
@@ -259,7 +330,10 @@ export async function GET(request: NextRequest) {
       success: true,
       schemaReady: true,
       shippingDateSchemaReady: false,
+      manualShippingSchemaReady: false,
       analysisMode,
+      periodMode: isAllPeriod ? "all" : "range",
+      availableYears: [currentYear, currentYear - 1, currentYear - 2],
       pendingShipmentCount,
       backfillMissingShippedAtCount: 0,
       orders: [],
@@ -276,7 +350,7 @@ export async function GET(request: NextRequest) {
 
   if (ordersRes.error) {
     return NextResponse.json(
-      { success: false, error: ordersRes.error.message },
+      { success: false, error: ordersRes.error.message || "Erro ao consultar vendas." },
       { status: 500 }
     );
   }
@@ -285,12 +359,23 @@ export async function GET(request: NextRequest) {
     normalizeOrderRow
   );
 
+  const yearsSet = new Set<number>([currentYear, currentYear - 1, currentYear - 2]);
+  const oldestRows = (oldestRes.data ?? []) as Array<{ order_date?: string }>;
+  if (oldestRows[0]?.order_date) {
+    const minYear = Number(toBrazilDateKeyAndLabel(String(oldestRows[0].order_date)).dateKey.slice(0, 4));
+    if (Number.isFinite(minYear) && minYear >= 2018 && minYear <= currentYear) {
+      for (let yr = currentYear; yr >= minYear; yr--) {
+        yearsSet.add(yr);
+      }
+    }
+  }
+  const availableYears = Array.from(yearsSet).sort((a, b) => b - a);
+
   const storeSet = new Set<string>(accounts.map((a) => a.account_name));
   for (const o of allPeriodOrders) {
     if (o.store_name) storeSet.add(o.store_name);
   }
 
-  // Aplica filtros de Loja, Status e Busca para calcular os contadores das pills de Vendedor
   const baseFilteredForPills = allPeriodOrders.filter((o) => {
     if (storeFilter !== "all" && o.store_name !== storeFilter) return false;
 
@@ -318,7 +403,6 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // Aplica o filtro final de Vendedor
   const filteredOrders = baseFilteredForPills.filter((o) => {
     if (sellerFilter === "all") return true;
     if (sellerFilter === "unassigned") return !o.assigned_seller_id;
@@ -339,7 +423,10 @@ export async function GET(request: NextRequest) {
     success: true,
     schemaReady: true,
     shippingDateSchemaReady,
+    manualShippingSchemaReady,
     analysisMode,
+    periodMode: isAllPeriod ? "all" : "range",
+    availableYears,
     pendingShipmentCount,
     backfillMissingShippedAtCount,
     orders: filteredOrders,

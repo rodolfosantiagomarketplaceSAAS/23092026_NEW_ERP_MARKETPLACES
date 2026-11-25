@@ -11,6 +11,8 @@ interface DailyClosingTableProps {
   from: string;
   to: string;
   analysisMode?: SalesAnalysisMode;
+  selectedDayKey?: string | null;
+  onSelectDay?: (dateKey: string) => void;
 }
 
 export function DailyClosingTable({
@@ -19,6 +21,8 @@ export function DailyClosingTable({
   from,
   to,
   analysisMode = "order_date",
+  selectedDayKey,
+  onSelectDay,
 }: DailyClosingTableProps) {
   const isShippingMode = analysisMode === "shipping_date";
 
@@ -156,8 +160,25 @@ export function DailyClosingTable({
             </thead>
 
             <tbody className="divide-y divide-slate-100 font-mono tabular-nums">
-              {rows.map((r) => (
-                <tr key={r.date_key} className="hover:bg-slate-50">
+              {rows.map((r) => {
+                const isDayHighlighted = selectedDayKey === r.date_key;
+                return (
+                <tr
+                  key={r.date_key}
+                  onClick={() => onSelectDay?.(r.date_key)}
+                  className={`transition-colors ${
+                    onSelectDay ? "cursor-pointer" : ""
+                  } ${
+                    isDayHighlighted
+                      ? "bg-emerald-50 ring-1 ring-inset ring-emerald-400"
+                      : "hover:bg-slate-50"
+                  }`}
+                  title={
+                    onSelectDay
+                      ? `Clique para destacar o resultado detalhado de ${r.date_label}`
+                      : undefined
+                  }
+                >
                   <td className="py-2.5 px-3 font-bold text-slate-900">{r.date_label}</td>
                   <td className="py-2.5 px-3 text-center font-bold text-slate-800">
                     {r.valid_orders_count}
@@ -206,7 +227,8 @@ export function DailyClosingTable({
                     {formatBRL(r.net_operational_profit_total)}
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
 
             <tfoot>

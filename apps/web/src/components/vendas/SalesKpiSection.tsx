@@ -18,6 +18,7 @@ import type {
   SellerTransferSummary,
 } from "@/types/ml-sales";
 import { formatBRL, formatPct } from "./formatters";
+import { SellerQuickColorPopover } from "./SellerQuickColorPopover";
 
 interface SalesKpiSectionProps {
   kpis: MlSalesSummaryKpis;
@@ -25,6 +26,7 @@ interface SalesKpiSectionProps {
   selectedSellerId: string;
   analysisMode?: SalesAnalysisMode;
   onSelectSeller: (sellerId: string) => void;
+  onRefresh?: () => void;
 }
 
 export function SalesKpiSection({
@@ -33,6 +35,7 @@ export function SalesKpiSection({
   selectedSellerId,
   analysisMode = "order_date",
   onSelectSeller,
+  onRefresh,
 }: SalesKpiSectionProps) {
   const isShippingMode = analysisMode === "shipping_date";
   const hasCotaAdjustment =
@@ -198,10 +201,22 @@ export function SalesKpiSection({
               >
                 <div className="flex items-center justify-between mb-1.5">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span
-                      className="w-2.5 h-2.5 rounded-xs shrink-0"
-                      style={{ backgroundColor: s.color_hex }}
-                    />
+                    {onRefresh ? (
+                      <SellerQuickColorPopover
+                        seller={{
+                          id: s.seller_id,
+                          name: s.name,
+                          color_hex: s.color_hex,
+                        }}
+                        sizeClassName="w-3 h-3"
+                        onColorSaved={onRefresh}
+                      />
+                    ) : (
+                      <span
+                        className="w-2.5 h-2.5 rounded-xs shrink-0"
+                        style={{ backgroundColor: s.color_hex }}
+                      />
+                    )}
                     <span className="text-xs font-bold text-slate-900 truncate">
                       {s.name}
                     </span>

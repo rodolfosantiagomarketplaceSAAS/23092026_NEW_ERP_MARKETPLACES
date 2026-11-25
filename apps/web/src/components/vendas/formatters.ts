@@ -3,8 +3,8 @@ import type {
   MlSaleOrder,
   SalesAnalysisMode,
   Seller,
-} from "@/types/ml-sales";
-import { getOrderOperationalCostsOnly } from "@/lib/mercadolivre/sales-analytics";
+} from "../../types/ml-sales";
+import { getOrderOperationalCostsOnly } from "../../lib/mercadolivre/sales-analytics";
 
 /**
  * Retorna o Código Oficial da Venda exibido no painel "Vendas" do Mercado Livre:
@@ -108,6 +108,53 @@ export function formatDeadlineBR(iso: string | null | undefined): {
   };
 }
 
+export const SELLER_COLOR_SWATCHES = [
+  "#0284C7", // Sky
+  "#059669", // Emerald
+  "#D97706", // Amber
+  "#DC2626", // Crimson
+  "#0D9488", // Teal
+  "#EA580C", // Signal Orange
+  "#65A30D", // Lime
+  "#0891B2", // Cyan
+  "#CA8A04", // Gold
+  "#334155", // Slate
+] as const;
+
+export const MONTH_NAMES_PT = [
+  "Janeiro",
+  "Fevereiro",
+  "Março",
+  "Abril",
+  "Maio",
+  "Junho",
+  "Julho",
+  "Agosto",
+  "Setembro",
+  "Outubro",
+  "Novembro",
+  "Dezembro",
+] as const;
+
+export function upgradeMlThumbnailUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  return url
+    .replace(/^http:\/\//i, "https://")
+    .replace(/-I\.(jpg|jpeg|webp|png)$/i, "-O.$1");
+}
+
+export function toBrazilInputDate(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Sao_Paulo",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+}
+
 export function getTodayBrazilISO(): string {
   return new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Sao_Paulo",
@@ -117,15 +164,27 @@ export function getTodayBrazilISO(): string {
   }).format(new Date());
 }
 
+export type QuickDatePreset =
+  | "today"
+  | "yesterday"
+  | "last7"
+  | "thisMonth"
+  | "lastMonth"
+  | "thisYear"
+  | "all";
+
 export function computeDatePresetRange(
-  preset: "today" | "yesterday" | "last7" | "thisMonth" | "lastMonth"
-): { from: string; to: string } {
+  preset: QuickDatePreset
+): { from: string; to: string; isAll?: boolean } {
   const todayStr = getTodayBrazilISO();
   const [y, m, d] = todayStr.split("-").map(Number);
   const base = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
 
   const toIso = (dt: Date) => dt.toISOString().slice(0, 10);
 
+  if (preset === "all") {
+    return { from: "", to: todayStr, isAll: true };
+  }
   if (preset === "today") {
     return { from: todayStr, to: todayStr };
   }
@@ -144,11 +203,35 @@ export function computeDatePresetRange(
     const first = new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
     return { from: toIso(first), to: todayStr };
   }
+  if (preset === "thisYear") {
+    return { from: `${y}-01-01`, to: todayStr };
+  }
 
   // lastMonth
   const firstLastMonth = new Date(Date.UTC(y, m - 2, 1, 12, 0, 0));
   const lastLastMonth = new Date(Date.UTC(y, m - 1, 0, 12, 0, 0));
   return { from: toIso(firstLastMonth), to: toIso(lastLastMonth) };
+}
+
+export function computeSpecificMonthRange(year: number, monthOneBased: number): {
+  from: string;
+  to: string;
+} {
+  const first = new Date(Date.UTC(year, monthOneBased - 1, 1, 12, 0, 0));
+  const last = new Date(Date.UTC(year, monthOneBased, 0, 12, 0, 0));
+  return {
+    from: first.toISOString().slice(0, 10),
+    to: last.toISOString().slice(0, 10),
+  };
+}
+
+export function computeSpecificYearRange(year: number): { from: string; to: string } {
+  const todayStr = getTodayBrazilISO();
+  const currentYear = Number(todayStr.slice(0, 4));
+  return {
+    from: `${year}-01-01`,
+    to: year === currentYear ? todayStr : `${year}-12-31`,
+  };
 }
 
 function escapeCsvCell(val: string | number): string {

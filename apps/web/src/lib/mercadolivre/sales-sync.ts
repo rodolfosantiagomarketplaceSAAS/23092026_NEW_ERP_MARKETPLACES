@@ -34,8 +34,10 @@ import {
 import {
   extractShipmentDatesAndLogistics,
   isValidIsoTimestamp,
+  normalizeManualShippedAtInput,
   normalizeSyncIsoRange,
   SHIPPING_LOOKBACK_DAYS,
+  splitIsoRangeIntoMonthlyWindows,
   type RawShipmentDetail,
   type RawShipmentHistoryEntry,
   type RawShipmentStatusHistory,
@@ -45,9 +47,11 @@ import {
 export {
   applyPackShippingProration,
   extractShipmentDatesAndLogistics,
+  normalizeManualShippedAtInput,
   normalizeSyncIsoRange,
   reconcileOrderFinancials,
   SHIPPING_LOOKBACK_DAYS,
+  splitIsoRangeIntoMonthlyWindows,
   type ExtractedOrderDraft,
   type RawChargeDetail,
   type RawFeeDetail,
@@ -347,46 +351,53 @@ function detectDocumentInfo(
 }
 
 /**
- * Busca todos os IDs de pedidos do período usando paginação segura em GET /orders/search.
+ * Busca todos os IDs de pedidos do período usando paginação segura em GET /orders/search,
+ * fatiando automaticamente intervalos longos (ex: Ano completo ou Todas as Vendas) em janelas mensais
+ * para máxima precisão e sem esbarrar no limite de offset profundo da API do Mercado Livre.
  */
 async function fetchOrderIdsInPeriod(
   account: MarketplaceAccountInfo,
   tokenRef: { current: string },
   isoStart: string,
   isoEnd: string,
-  maxOrders = 1500
+  maxOrders = 3000
 ): Promise<number[]> {
   const uniqueIds = new Set<number>();
-  let offset = 0;
+  const windows = splitIsoRangeIntoMonthlyWindows(isoStart, isoEnd);
 
-  while (uniqueIds.size < maxOrders) {
-    const searchUrl = new URL(`${ML_API_BASE}/orders/search`);
-    searchUrl.searchParams.set("seller", account.seller_id);
-    searchUrl.searchParams.set("order.date_created.from", isoStart);
-    searchUrl.searchParams.set("order.date_created.to", isoEnd);
-    searchUrl.searchParams.set("sort", "date_desc");
-    searchUrl.searchParams.set("limit", String(PAGE_LIMIT));
-    searchUrl.searchParams.set("offset", String(offset));
+  for (const win of windows) {
+    let offset = 0;
+    while (uniqueIds.size < maxOrders && offset < 9500) {
+      const searchUrl = new URL(`${ML_API_BASE}/orders/search`);
+      searchUrl.searchParams.set("seller", account.seller_id);
+      searchUrl.searchParams.set("order.date_created.from", win.isoStart);
+      searchUrl.searchParams.set("order.date_created.to", win.isoEnd);
+      searchUrl.searchParams.set("sort", "date_desc");
+      searchUrl.searchParams.set("limit", String(PAGE_LIMIT));
+      searchUrl.searchParams.set("offset", String(offset));
 
-    const res = await mlReadOnlyGet<{
-      results?: RawMlOrderSummary[];
-      paging?: { total?: number; limit?: number; offset?: number };
-    }>(searchUrl.toString(), account, tokenRef);
+      const res = await mlReadOnlyGet<{
+        results?: RawMlOrderSummary[];
+        paging?: { total?: number; limit?: number; offset?: number };
+      }>(searchUrl.toString(), account, tokenRef);
 
-    if (!res.ok || !res.data) break;
+      if (!res.ok || !res.data) break;
 
-    const results = Array.isArray(res.data.results) ? res.data.results : [];
-    if (results.length === 0) break;
+      const results = Array.isArray(res.data.results) ? res.data.results : [];
+      if (results.length === 0) break;
 
-    for (const item of results) {
-      if (item && typeof item.id === "number") {
-        uniqueIds.add(item.id);
+      for (const item of results) {
+        if (item && typeof item.id === "number") {
+          uniqueIds.add(item.id);
+        }
       }
+
+      const total = res.data.paging?.total ?? results.length;
+      offset += PAGE_LIMIT;
+      if (offset >= total || results.length < PAGE_LIMIT) break;
     }
 
-    const total = res.data.paging?.total ?? results.length;
-    offset += PAGE_LIMIT;
-    if (offset >= total || results.length < PAGE_LIMIT) break;
+    if (uniqueIds.size >= maxOrders) break;
   }
 
   return Array.from(uniqueIds);
@@ -509,7 +520,7 @@ export async function fetchItemThumbnailsMap(
   const missingIds = mlbIds.filter((id) => !result.has(id));
   for (let i = 0; i < missingIds.length; i += 20) {
     const batch = missingIds.slice(i, i + 20);
-    const url = `${ML_API_BASE}/items?ids=${batch.join(",")}&attributes=id,thumbnail,secure_thumbnail,permalink`;
+    const url = `${ML_API_BASE}/items?ids=${batch.join(",")}&attributes=id,thumbnail,secure_thumbnail,pictures,permalink`;
     const res = await mlReadOnlyGet<
       Array<{
         code?: number;
@@ -517,6 +528,7 @@ export async function fetchItemThumbnailsMap(
           id?: string;
           thumbnail?: string;
           secure_thumbnail?: string;
+          pictures?: Array<{ secure_url?: string; url?: string }>;
           permalink?: string;
         };
       }>
@@ -525,10 +537,11 @@ export async function fetchItemThumbnailsMap(
     if (res.ok && Array.isArray(res.data)) {
       for (const entry of res.data) {
         if (entry?.code === 200 && entry.body?.id) {
-          const thumb = (entry.body.secure_thumbnail || entry.body.thumbnail || "").replace(
-            /^http:\/\//i,
-            "https://"
-          );
+          const firstPic = entry.body.pictures?.[0]?.secure_url || entry.body.pictures?.[0]?.url;
+          const rawThumb = firstPic || entry.body.secure_thumbnail || entry.body.thumbnail || "";
+          const thumb = rawThumb
+            .replace(/^http:\/\//i, "https://")
+            .replace(/-I\.(jpg|jpeg|webp|png)$/i, "-O.$1");
           result.set(entry.body.id.toUpperCase(), {
             thumbnail: thumb || null,
             permalink: entry.body.permalink || null,
@@ -670,6 +683,7 @@ export async function extractSingleOrder(
       // Quando o pacote já entrou em trânsito/entrega, consultamos o schema padrão `/shipments/{id}` (que contém `status_history.date_shipped`)
       // e, apenas se ainda ausente, `/shipments/{id}/tracking/timeline`.
       let classicShipmentDetail: RawShipmentDetail | null = null;
+      let historyEntries: RawShipmentHistoryEntry[] | null = null;
       let timelineEvents: RawShipmentTimelineEvent[] | null = null;
 
       const enteredTransit = hasShipmentEnteredTransit(shipmentDetail, order);
@@ -682,15 +696,33 @@ export async function extractSingleOrder(
         classicShipmentDetail = classicRes.data ?? null;
 
         if (!isValidIsoTimestamp(classicShipmentDetail?.status_history?.date_shipped)) {
-          const timelineRes = await mlReadOnlyGet<{
-            timeline?: RawShipmentTimelineEvent[];
-          }>(
-            `${ML_API_BASE}/shipments/${shipmentId}/tracking/timeline`,
+          const historyRes = await mlReadOnlyGet<RawShipmentHistoryEntry[]>(
+            `${ML_API_BASE}/shipments/${shipmentId}/history`,
             account,
             tokenRef
           );
-          if (timelineRes.ok && Array.isArray(timelineRes.data?.timeline)) {
-            timelineEvents = timelineRes.data.timeline;
+          if (historyRes.ok && Array.isArray(historyRes.data)) {
+            historyEntries = historyRes.data;
+          }
+
+          const hasHistoryShipped = Array.isArray(historyEntries)
+            ? historyEntries.some((h) => {
+                const st = (h?.status || "").toLowerCase();
+                return (st === "shipped" || st === "in_transit") && isValidIsoTimestamp(h.date || h.date_created);
+              })
+            : false;
+
+          if (!hasHistoryShipped) {
+            const timelineRes = await mlReadOnlyGet<{
+              timeline?: RawShipmentTimelineEvent[];
+            }>(
+              `${ML_API_BASE}/shipments/${shipmentId}/tracking/timeline`,
+              account,
+              tokenRef
+            );
+            if (timelineRes.ok && Array.isArray(timelineRes.data?.timeline)) {
+              timelineEvents = timelineRes.data.timeline;
+            }
           }
         }
       }
@@ -698,6 +730,7 @@ export async function extractSingleOrder(
       const extractedLogistics = extractShipmentDatesAndLogistics({
         modernDetail: shipmentDetail,
         classicDetail: classicShipmentDetail,
+        historyEntries,
         timelineEvents,
       });
 
@@ -988,33 +1021,50 @@ export async function syncMercadoLivreSales(params: {
         }
       }
 
-      // Consulta pedidos já existentes no Supabase para preservar vendedor, conferência, custos manuais e shipped_at anterior
+      // Consulta pedidos já existentes no Supabase para preservar vendedor, conferência, custos manuais e shipped_at manual
       const draftOrderIds = drafts.map((d) => d.ml_order_id);
       let existingRows: Array<Record<string, unknown>> | null = null;
       let shippingColumnsAvailable = true;
+      let manualShippingColumnsAvailable = true;
 
       const fullSelectRes = await admin
         .from("ml_sales_orders")
         .select(
-          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
+          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
         )
         .in("ml_order_id", draftOrderIds);
 
       if (fullSelectRes.error && isMissingColumnError(fullSelectRes.error)) {
-        shippingColumnsAvailable = false;
-        const legacySelectRes = await admin
+        manualShippingColumnsAvailable = false;
+        const midSelectRes = await admin
           .from("ml_sales_orders")
           .select(
-            "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+            "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
           )
           .in("ml_order_id", draftOrderIds);
 
-        if (legacySelectRes.error) {
+        if (midSelectRes.error && isMissingColumnError(midSelectRes.error)) {
+          shippingColumnsAvailable = false;
+          const legacySelectRes = await admin
+            .from("ml_sales_orders")
+            .select(
+              "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+            )
+            .in("ml_order_id", draftOrderIds);
+
+          if (legacySelectRes.error) {
+            throw new Error(
+              `Erro ao consultar ml_sales_orders (${legacySelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
+            );
+          }
+          existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
+        } else if (midSelectRes.error) {
           throw new Error(
-            `Erro ao consultar ml_sales_orders (${legacySelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
+            `Erro ao consultar ml_sales_orders (${midSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
           );
+        } else {
+          existingRows = (midSelectRes.data ?? []) as Array<Record<string, unknown>>;
         }
-        existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
       } else if (fullSelectRes.error) {
         throw new Error(
           `Erro ao consultar ml_sales_orders (${fullSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
@@ -1124,8 +1174,23 @@ export async function syncMercadoLivreSales(params: {
         };
 
         if (shippingColumnsAvailable) {
-          basePayload.shipped_at =
-            d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+          const isManualShipped =
+            manualShippingColumnsAvailable && Boolean(existing?.shipped_at_manual);
+          const apiResolvedShipped =
+            d.shipped_at ??
+            (existing?.api_shipped_at ? String(existing.api_shipped_at) : null);
+
+          basePayload.shipped_at = isManualShipped
+            ? existing?.shipped_at
+              ? String(existing.shipped_at)
+              : apiResolvedShipped
+            : d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+
+          if (manualShippingColumnsAvailable) {
+            basePayload.shipped_at_manual = isManualShipped;
+            basePayload.api_shipped_at = apiResolvedShipped;
+          }
+
           basePayload.delivered_at =
             d.delivered_at ?? (existing?.delivered_at ? String(existing.delivered_at) : null);
           basePayload.logistic_type =

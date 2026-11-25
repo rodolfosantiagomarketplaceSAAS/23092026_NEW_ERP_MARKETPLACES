@@ -1,11 +1,24 @@
 import { z } from "zod";
 
-export const syncSalesRequestSchema = z.object({
-  from: z.string().min(10, "Data inicial inválida"),
-  to: z.string().min(10, "Data final inválida"),
-  sellerAccountId: z.string().optional(),
-  analysisMode: z.enum(["order_date", "shipping_date"]).optional().default("order_date"),
-});
+export const syncSalesRequestSchema = z
+  .object({
+    from: z.string().optional(),
+    to: z.string().optional(),
+    allSales: z.boolean().optional().default(false),
+    sellerAccountId: z.string().optional(),
+    analysisMode: z.enum(["order_date", "shipping_date"]).optional().default("order_date"),
+  })
+  .refine(
+    (data) =>
+      data.allSales === true ||
+      (typeof data.from === "string" &&
+        data.from.length >= 10 &&
+        typeof data.to === "string" &&
+        data.to.length >= 10),
+    {
+      message: "Informe um intervalo de datas válido ou ative Todas as Vendas.",
+    }
+  );
 
 export const createSellerSchema = z.object({
   name: z.string().trim().min(1, "Informe o nome do vendedor/sócio").max(100),
@@ -44,6 +57,9 @@ export const batchAssignOrdersSchema = z.object({
   updateSellerAssignment: z.boolean().default(false),
   markVerified: z.boolean().optional(),
   saveDefaultForMlb: z.string().trim().optional(),
+  updateShippedAt: z.boolean().optional().default(false),
+  shippedAt: z.string().trim().nullable().optional(),
+  revertShippedAtToApi: z.boolean().optional().default(false),
 });
 
 export const updateOrderCostsSchema = z.object({

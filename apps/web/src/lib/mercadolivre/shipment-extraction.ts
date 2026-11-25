@@ -219,3 +219,62 @@ export function normalizeSyncIsoRange(
 
   return { isoStart, isoEnd };
 }
+
+/**
+ * Normaliza uma data manual informada pelo gestor ("YYYY-MM-DD", "YYYY-MM-DDTHH:mm" ou ISO completo)
+ * para ISO-8601 estrito no fuso de Brasília (-03:00), evitando deslocamento de dia na virada UTC.
+ */
+export function normalizeManualShippedAtInput(rawInput?: string | null): string | null {
+  if (!rawInput) return null;
+  const trimmed = rawInput.trim();
+  if (!trimmed) return null;
+
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    return new Date(`${trimmed}T12:00:00.000-03:00`).toISOString();
+  }
+
+  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(trimmed)) {
+    return new Date(`${trimmed}:00.000-03:00`).toISOString();
+  }
+
+  const parsed = Date.parse(trimmed);
+  if (Number.isNaN(parsed)) return null;
+  return new Date(parsed).toISOString();
+}
+
+/**
+ * Divide intervalos longos (ex: filtro por Ano completo ou "Todas as Vendas") em janelas de até 31 dias
+ * ordenadas da mais recente para a mais antiga, respeitando boas práticas da API `/orders/search` do ML
+ * (evita degradação e limites de paginação profunda de offset > 10.000).
+ */
+export function splitIsoRangeIntoMonthlyWindows(
+  isoStart: string,
+  isoEnd: string,
+  maxWindows = 13
+): Array<{ isoStart: string; isoEnd: string }> {
+  const startMs = Date.parse(isoStart);
+  const endMs = Date.parse(isoEnd);
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || startMs > endMs) {
+    return [{ isoStart, isoEnd }];
+  }
+
+  const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
+  if (endMs - startMs <= THIRTY_ONE_DAYS_MS) {
+    return [{ isoStart, isoEnd }];
+  }
+
+  const windows: Array<{ isoStart: string; isoEnd: string }> = [];
+  let cursorEnd = endMs;
+
+  while (cursorEnd >= startMs && windows.length < maxWindows) {
+    const windowStart = Math.max(startMs, cursorEnd - THIRTY_ONE_DAYS_MS + 1);
+    windows.push({
+      isoStart: new Date(windowStart).toISOString(),
+      isoEnd: new Date(cursorEnd).toISOString(),
+    });
+    if (windowStart <= startMs) break;
+    cursorEnd = windowStart - 1;
+  }
+
+  return windows;
+}

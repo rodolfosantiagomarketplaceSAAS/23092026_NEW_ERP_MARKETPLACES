@@ -6,8 +6,17 @@ import {
 } from "../sales-analytics";
 import {
   extractShipmentDatesAndLogistics,
+  normalizeManualShippedAtInput,
   normalizeSyncIsoRange,
+  splitIsoRangeIntoMonthlyWindows,
 } from "../shipment-extraction";
+import {
+  computeDatePresetRange,
+  computeSpecificMonthRange,
+  computeSpecificYearRange,
+  toBrazilInputDate,
+  upgradeMlThumbnailUrl,
+} from "../../../components/vendas/formatters";
 import type { MlSaleOrder, Seller } from "../../../types/ml-sales";
 
 function makeSeller(overrides: Partial<Seller>): Seller {
@@ -311,4 +320,91 @@ test("normalizeSyncIsoRange recua 14 dias automaticamente no modo shipping_date"
   // 2026-11-24T03:00:00Z menos 14 dias = 2026-11-10T03:00:00.000Z (meia-noite BRT de 10/11)
   assert.equal(shippingRange.isoStart, "2026-11-10T03:00:00.000Z");
   assert.equal(shippingRange.isoEnd, "2026-11-24T23:59:59.999-03:00");
+});
+
+test("splitIsoRangeIntoMonthlyWindows fatia ano completo em janelas mensais ordenadas da mais recente para a mais antiga", () => {
+  const windows = splitIsoRangeIntoMonthlyWindows(
+    "2026-01-01T00:00:00.000-03:00",
+    "2026-11-25T23:59:59.999-03:00"
+  );
+
+  assert.ok(windows.length >= 10 && windows.length <= 13);
+  // Primeira janela termina exatamente no fim solicitado
+  assert.equal(
+    Date.parse(windows[0].isoEnd),
+    Date.parse("2026-11-25T23:59:59.999-03:00")
+  );
+  // Última janela alcança o início do ano solicitado
+  assert.equal(
+    Date.parse(windows[windows.length - 1].isoStart),
+    Date.parse("2026-01-01T00:00:00.000-03:00")
+  );
+});
+
+test("normalizeManualShippedAtInput fixa meio-dia de Brasília (-03:00) para evitar deslocamento de dia na apuração por data de envio", () => {
+  const iso = normalizeManualShippedAtInput("2026-11-25");
+  assert.equal(iso, "2026-11-25T15:00:00.000Z");
+  assert.equal(toBrazilInputDate(iso), "2026-11-25");
+  assert.equal(normalizeManualShippedAtInput(""), null);
+  assert.equal(normalizeManualShippedAtInput("invalido"), null);
+});
+
+test("data de envio definida manualmente entra na métrica e informa valor obtido exato no dia específico de envio", () => {
+  const seller = makeSeller({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Rodolfo",
+    commission_pct: 100,
+  });
+
+  const manualShippedOrder = makeOrder({
+    id: "cccccccc-cccc-4ccc-8ccc-ccccccccccc1",
+    ml_order_id: 2000099901,
+    status: "paid",
+    order_date: "2026-11-20T14:00:00.000Z",
+    shipped_at: normalizeManualShippedAtInput("2026-11-25"),
+    shipped_at_manual: true,
+    gross_sale_amount: 350,
+    ml_commission_amount: 49,
+    ml_shipping_cost: 21,
+    ml_promo_rebate: 10,
+    assigned_seller_id: seller.id,
+  });
+
+  const filtered = filterOrdersByAnalysisMode({
+    orders: [manualShippedOrder],
+    fromDate: "2026-11-25",
+    toDate: "2026-11-25",
+    analysisMode: "shipping_date",
+  });
+
+  const analytics = computeSalesDashboardAnalytics({
+    filteredOrders: filtered,
+    sellers: [seller],
+    analysisMode: "shipping_date",
+  });
+
+  assert.equal(filtered.length, 1);
+  assert.equal(analytics.dailyClosing.length, 1);
+  assert.equal(analytics.dailyClosing[0].date_key, "2026-11-25");
+  assert.equal(analytics.dailyClosing[0].gross_sale_total, 350);
+  // 350 - 49 - 21 + 10 = 290 obtidos pós-ML naquela data específica de envio
+  assert.equal(analytics.dailyClosing[0].base_transfer_total, 290);
+  assert.equal(analytics.dailyClosing[0].effective_transfer_total, 290);
+});
+
+test("filtros pré-definidos por Mês, Ano e Todas as Vendas e upgrade de miniatura HD funcionam corretamente", () => {
+  const allRange = computeDatePresetRange("all");
+  assert.equal(allRange.isAll, true);
+  assert.equal(allRange.from, "");
+
+  const febRange = computeSpecificMonthRange(2026, 2);
+  assert.deepEqual(febRange, { from: "2026-02-01", to: "2026-02-28" });
+
+  const pastYearRange = computeSpecificYearRange(2025);
+  assert.deepEqual(pastYearRange, { from: "2025-01-01", to: "2025-12-31" });
+
+  assert.equal(
+    upgradeMlThumbnailUrl("http://http2.mlstatic.com/D_12345-MLB999_102026-I.jpg"),
+    "https://http2.mlstatic.com/D_12345-MLB999_102026-O.jpg"
+  );
 });

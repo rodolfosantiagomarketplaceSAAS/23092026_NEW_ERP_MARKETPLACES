@@ -34,10 +34,27 @@ export async function POST(request: NextRequest) {
   }
 
   try {
+    const todayBr = new Intl.DateTimeFormat("en-CA", {
+      timeZone: "America/Sao_Paulo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).format(new Date());
+
+    let effectiveFrom = parsed.data.from || todayBr;
+    let effectiveTo = parsed.data.to || todayBr;
+
+    if (parsed.data.allSales) {
+      const [y, m, d] = todayBr.split("-").map(Number);
+      const oneYearAgo = new Date(Date.UTC(y - 1, m - 1, d, 12, 0, 0));
+      effectiveFrom = oneYearAgo.toISOString().slice(0, 10);
+      effectiveTo = todayBr;
+    }
+
     const result = await syncMercadoLivreSales({
       scope: { userId: ctx.userId, organizationId: ctx.organizationId },
-      from: parsed.data.from,
-      to: parsed.data.to,
+      from: effectiveFrom,
+      to: effectiveTo,
       sellerAccountId: parsed.data.sellerAccountId,
       analysisMode: parsed.data.analysisMode,
     });

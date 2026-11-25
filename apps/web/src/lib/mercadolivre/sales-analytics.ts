@@ -276,6 +276,8 @@ export function computeSalesDashboardAnalytics(params: {
         cancelled_orders_count: 0,
         gross_sale_total: 0,
         net_ml_fees_and_shipping: 0,
+        base_transfer_total: 0,
+        effective_transfer_total: 0,
         seller_transfers: {},
         unassigned_transfer_total: 0,
         operational_costs_and_tax_total: 0,
@@ -301,6 +303,7 @@ export function computeSalesDashboardAnalytics(params: {
 
     row.gross_sale_total = roundCurrency(row.gross_sale_total + gross);
     row.net_ml_fees_and_shipping = roundCurrency(row.net_ml_fees_and_shipping + netMlFee);
+    row.base_transfer_total = roundCurrency((row.base_transfer_total ?? 0) + baseTransfer);
     row.operational_costs_and_tax_total = roundCurrency(
       row.operational_costs_and_tax_total + opAndTax
     );
@@ -312,10 +315,16 @@ export function computeSalesDashboardAnalytics(params: {
       const seller = sellerMap.get(order.assigned_seller_id);
       const pct = seller ? Number(seller.commission_pct ?? 100) : 100;
       const effectiveTransfer = roundCurrency(baseTransfer * (pct / 100));
+      row.effective_transfer_total = roundCurrency(
+        (row.effective_transfer_total ?? 0) + effectiveTransfer
+      );
       row.seller_transfers[order.assigned_seller_id] = roundCurrency(
         (row.seller_transfers[order.assigned_seller_id] ?? 0) + effectiveTransfer
       );
     } else {
+      row.effective_transfer_total = roundCurrency(
+        (row.effective_transfer_total ?? 0) + baseTransfer
+      );
       row.unassigned_transfer_total = roundCurrency(
         row.unassigned_transfer_total + baseTransfer
       );

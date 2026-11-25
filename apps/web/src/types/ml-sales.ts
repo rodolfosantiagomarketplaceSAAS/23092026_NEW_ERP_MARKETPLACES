@@ -48,6 +48,8 @@ export interface MlSaleOrder {
   order_date: string;
   shipping_deadline: string | null;
   shipped_at: string | null;
+  api_shipped_at?: string | null;
+  shipped_at_manual?: boolean;
   delivered_at?: string | null;
   logistic_type?: string | null;
   status: MlSaleOrderStatus;
@@ -130,6 +132,8 @@ export interface DailyClosingRow {
   cancelled_orders_count: number;
   gross_sale_total: number;
   net_ml_fees_and_shipping: number;
+  base_transfer_total?: number;
+  effective_transfer_total?: number;
   seller_transfers: Record<string, number>; // seller_id -> effective transfer R$
   unassigned_transfer_total: number;
   operational_costs_and_tax_total: number;
@@ -147,7 +151,10 @@ export interface MlSalesDashboardResponse {
   success: boolean;
   schemaReady: boolean;
   shippingDateSchemaReady?: boolean;
+  manualShippingSchemaReady?: boolean;
   analysisMode?: SalesAnalysisMode;
+  periodMode?: "range" | "all";
+  availableYears?: number[];
   pendingShipmentCount?: number;
   backfillMissingShippedAtCount?: number;
   orders: MlSaleOrder[];
