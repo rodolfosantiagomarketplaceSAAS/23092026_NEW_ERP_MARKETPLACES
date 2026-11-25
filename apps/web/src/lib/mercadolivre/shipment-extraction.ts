@@ -13,6 +13,12 @@ export interface RawShipmentStatusHistory {
   date_cancelled?: string | null;
 }
 
+export interface RawShipmentSubstatusHistoryEntry {
+  status?: string | null;
+  substatus?: string | null;
+  date?: string | null;
+}
+
 export interface RawShipmentDetail {
   id: number;
   order_id?: number | null;
@@ -26,6 +32,7 @@ export interface RawShipmentDetail {
     mode?: string | null;
   } | null;
   status_history?: RawShipmentStatusHistory | null;
+  substatus_history?: RawShipmentSubstatusHistoryEntry[] | null;
   shipping_option?: {
     list_cost?: number;
     cost?: number;
@@ -59,6 +66,32 @@ export interface RawShipmentHistoryEntry {
   substatus?: string | null;
   date?: string | null;
   date_created?: string | null;
+}
+
+/**
+ * Substatus do Mercado Envios que comprovam a postagem/coleta física do pacote pelo vendedor.
+ * Na modalidade Agência ML (`xd_drop_off`) e Coleta (`cross_docking`), o shipment permanece em
+ * `status: "ready_to_ship"` com `substatus: "dropped_off"` / `"picked_up"` / `"in_hub"` até o ML
+ * expedir do centro de distribuição (quando só então preenche `status_history.date_shipped`, 1–3 dias depois).
+ */
+export const DISPATCHED_SHIPMENT_SUBSTATUSES: ReadonlySet<string> = new Set([
+  "dropped_off",
+  "picked_up",
+  "in_hub",
+  "in_packing_list",
+  "out_for_delivery",
+  "at_customs",
+  "soon_deliver",
+  "waiting_for_withdrawal",
+  "arrived_at_agency",
+  "in_warehouse",
+  "returned",
+  "returning_to_sender",
+]);
+
+export function isDispatchedShipmentSubstatus(substatus?: string | null): boolean {
+  if (!substatus || typeof substatus !== "string") return false;
+  return DISPATCHED_SHIPMENT_SUBSTATUSES.has(substatus.trim().toLowerCase());
 }
 
 export function isValidIsoTimestamp(val?: string | null): val is string {
@@ -107,6 +140,27 @@ export function extractShipmentDatesAndLogistics(params: {
     modernDetail?.status_history?.date_shipped ||
     classicDetail?.status_history?.date_shipped ||
     null;
+
+  const substatusHistoryEntries: RawShipmentSubstatusHistoryEntry[] = [
+    ...(Array.isArray(modernDetail?.substatus_history) ? modernDetail.substatus_history : []),
+    ...(Array.isArray(classicDetail?.substatus_history) ? classicDetail.substatus_history : []),
+  ];
+
+  const substatusShipped =
+    substatusHistoryEntries.length > 0
+      ? pickEarliestIso(
+          substatusHistoryEntries
+            .filter((entry) => {
+              const st = (entry?.status || "").toLowerCase();
+              return (
+                isDispatchedShipmentSubstatus(entry?.substatus) ||
+                st === "shipped" ||
+                st === "in_transit"
+              );
+            })
+            .map((entry) => entry.date)
+        )
+      : null;
 
   const directDelivered =
     modernDetail?.status_history?.date_delivered ||
@@ -161,9 +215,11 @@ export function extractShipmentDatesAndLogistics(params: {
     ? directDelivered
     : historyDelivered || timelineDelivered || null;
 
-  let shippedAt = isValidIsoTimestamp(directShipped)
-    ? directShipped
-    : historyShipped || timelineShipped || null;
+  let shippedAt =
+    pickEarliestIso([substatusShipped, directShipped]) ||
+    historyShipped ||
+    timelineShipped ||
+    null;
 
   // Fallback exclusivo para envios comprovadamente já entregues (ex: Flex/ME1 direto para delivered sem checkpoint intermediário)
   const effectiveStatus = (modernDetail?.status || classicDetail?.status || "").toLowerCase();

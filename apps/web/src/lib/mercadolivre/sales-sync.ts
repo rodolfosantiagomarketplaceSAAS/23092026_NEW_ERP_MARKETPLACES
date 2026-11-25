@@ -33,6 +33,7 @@ import {
 
 import {
   extractShipmentDatesAndLogistics,
+  isDispatchedShipmentSubstatus,
   isValidIsoTimestamp,
   normalizeManualShippedAtInput,
   normalizeSyncIsoRange,
@@ -562,8 +563,7 @@ function hasShipmentEnteredTransit(
   if (st === "shipped" || st === "delivered" || st === "not_delivered") {
     return true;
   }
-  const sub = (shipment?.substatus || "").toLowerCase();
-  if (sub === "returned" || sub === "returning_to_sender" || sub === "in_hub") {
+  if (isDispatchedShipmentSubstatus(shipment?.substatus)) {
     return true;
   }
   const tags = Array.isArray(order.tags) ? order.tags : [];
@@ -678,16 +678,16 @@ export async function extractSingleOrder(
 
       shipmentDetail = shipRes.data ?? null;
 
-      // Extração em cascata da data real de envio (`date_shipped`):
-      // O header `x-format-new: true` traz `lead_time` e `logistic`, porém frequentemente omite `status_history`.
-      // Quando o pacote já entrou em trânsito/entrega, consultamos o schema padrão `/shipments/{id}` (que contém `status_history.date_shipped`)
-      // e, apenas se ainda ausente, `/shipments/{id}/tracking/timeline`.
+      // Extração em cascata da data real de envio (`dropped_off`/`picked_up` em `substatus_history` + `status_history.date_shipped`):
+      // O header `x-format-new: true` omite `substatus_history` e `status_history`.
+      // Quando o pacote já foi postado/coletado ou entrou em trânsito/entrega, consultamos o schema padrão `/shipments/{id}`
+      // (que contém `substatus_history` com o timestamp exato da postagem na Agência ML / Coleta) e só acionamos fallbacks se ainda ausente.
       let classicShipmentDetail: RawShipmentDetail | null = null;
       let historyEntries: RawShipmentHistoryEntry[] | null = null;
       let timelineEvents: RawShipmentTimelineEvent[] | null = null;
 
       const enteredTransit = hasShipmentEnteredTransit(shipmentDetail, order);
-      if (enteredTransit && !isValidIsoTimestamp(shipmentDetail?.status_history?.date_shipped)) {
+      if (enteredTransit && !Array.isArray(shipmentDetail?.substatus_history)) {
         const classicRes = await mlReadOnlyGet<RawShipmentDetail>(
           `${ML_API_BASE}/shipments/${shipmentId}`,
           account,
@@ -695,7 +695,12 @@ export async function extractSingleOrder(
         );
         classicShipmentDetail = classicRes.data ?? null;
 
-        if (!isValidIsoTimestamp(classicShipmentDetail?.status_history?.date_shipped)) {
+        const preliminary = extractShipmentDatesAndLogistics({
+          modernDetail: shipmentDetail,
+          classicDetail: classicShipmentDetail,
+        });
+
+        if (!isValidIsoTimestamp(preliminary.shippedAt)) {
           const historyRes = await mlReadOnlyGet<RawShipmentHistoryEntry[]>(
             `${ML_API_BASE}/shipments/${shipmentId}/history`,
             account,

@@ -310,6 +310,89 @@ test("extractShipmentDatesAndLogistics resolve cascata ML (x-format-new + classi
   assert.equal(fromTimelineFallback.shippedAt, "2026-11-22T14:30:00.000Z");
   assert.equal(fromTimelineFallback.deliveredAt, "2026-11-23T16:10:00.000Z");
   assert.equal(fromTimelineFallback.logisticType, "fulfillment");
+
+  // 4. Agência ML (xd_drop_off): postado em 23/11 (`dropped_off`), mas ML só mudou status para `shipped` em 25/11 05:18
+  // DEVE priorizar a data real de postagem na agência (23/11), não a saída do hub (25/11)
+  const agencyDropOffBeforeHubShipped = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 48576732601,
+      status: "shipped",
+      logistic: { type: "xd_drop_off" },
+    },
+    classicDetail: {
+      id: 48576732601,
+      status: "shipped",
+      logistic_type: "xd_drop_off",
+      status_history: {
+        date_ready_to_ship: "2026-11-22T19:35:20.000-04:00",
+        date_shipped: "2026-11-25T04:18:56.781-04:00",
+      },
+      substatus_history: [
+        { status: "pending", substatus: "shipment_paid", date: "2026-11-19T13:15:46.805-04:00" },
+        { status: "ready_to_ship", substatus: "ready_to_print", date: "2026-11-22T20:17:04.516-04:00" },
+        { status: "ready_to_ship", substatus: "dropped_off", date: "2026-11-23T08:19:17.315-04:00" },
+        { status: "ready_to_ship", substatus: "picked_up", date: "2026-11-23T13:10:25.000-04:00" },
+        { status: "ready_to_ship", substatus: "in_hub", date: "2026-11-23T14:44:21.095-04:00" },
+        { status: "ready_to_ship", substatus: "in_packing_list", date: "2026-11-24T10:11:51.000-04:00" },
+      ],
+    },
+  });
+  assert.equal(agencyDropOffBeforeHubShipped.shippedAt, "2026-11-23T08:19:17.315-04:00");
+  assert.equal(toBrazilInputDate(agencyDropOffBeforeHubShipped.shippedAt), "2026-11-23");
+
+  // 5. Agência ML já bipada (`ready_to_ship` / `picked_up`) com `status_history.date_shipped = null`
+  // DEVE retornar o timestamp exato do `dropped_off` imediatamente
+  const agencyDroppedOffStillReadyToShip = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 48626288130,
+      status: "ready_to_ship",
+      substatus: "picked_up",
+      logistic: { type: "xd_drop_off" },
+    },
+    classicDetail: {
+      id: 48626288130,
+      status: "ready_to_ship",
+      substatus: "picked_up",
+      status_history: {
+        date_ready_to_ship: "2026-11-25T07:13:15.000-04:00",
+        date_shipped: null,
+      },
+      substatus_history: [
+        { status: "ready_to_ship", substatus: "invoice_pending", date: "2026-11-25T07:13:15.000-04:00" },
+        { status: "ready_to_ship", substatus: "ready_to_print", date: "2026-11-25T07:26:29.155-04:00" },
+        { status: "ready_to_ship", substatus: "dropped_off", date: "2026-11-25T12:33:16.180-04:00" },
+        { status: "ready_to_ship", substatus: "picked_up", date: "2026-11-25T14:12:08.000-04:00" },
+      ],
+    },
+  });
+  assert.equal(agencyDroppedOffStillReadyToShip.shippedAt, "2026-11-25T12:33:16.180-04:00");
+  assert.equal(toBrazilInputDate(agencyDroppedOffStillReadyToShip.shippedAt), "2026-11-25");
+
+  // 6. Apenas etiqueta pronta/impressa em substatus_history (ainda não entregue na agência) -> DEVE continuar null
+  const onlyPrintedInSubstatusHistory = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 48999999999,
+      status: "ready_to_ship",
+      substatus: "printed",
+      logistic: { type: "xd_drop_off" },
+    },
+    classicDetail: {
+      id: 48999999999,
+      status: "ready_to_ship",
+      substatus: "printed",
+      status_history: {
+        date_ready_to_ship: "2026-11-25T07:13:15.000-04:00",
+        date_shipped: null,
+      },
+      substatus_history: [
+        { status: "ready_to_ship", substatus: "invoice_pending", date: "2026-11-25T07:13:15.000-04:00" },
+        { status: "ready_to_ship", substatus: "waiting_for_carrier_authorization", date: "2026-11-25T07:26:28.156-04:00" },
+        { status: "ready_to_ship", substatus: "ready_to_print", date: "2026-11-25T07:26:29.155-04:00" },
+        { status: "ready_to_ship", substatus: "printed", date: "2026-11-25T08:00:00.000-04:00" },
+      ],
+    },
+  });
+  assert.equal(onlyPrintedInSubstatusHistory.shippedAt, null);
 });
 
 test("normalizeSyncIsoRange recua 14 dias automaticamente no modo shipping_date", () => {
