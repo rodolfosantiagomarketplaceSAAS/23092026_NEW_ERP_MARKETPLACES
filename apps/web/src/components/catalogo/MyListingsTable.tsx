@@ -36,7 +36,9 @@ import {
 export type { MyListingItem };
 
 interface ListingsTableProps {
-  items: MyListingItem[];
+  families?: GroupedFamilyProduct[];
+  totalSaleOptions?: number;
+  items?: MyListingItem[];
 }
 
 type SortField =
@@ -93,19 +95,38 @@ function QualityGauge({
   objectivesCount,
   isParent = false,
 }: {
-  score: number;
+  score: number | null;
   objectivesCount: number;
   isParent?: boolean;
 }) {
   if (isParent) {
     return (
       <div className="flex flex-col items-center justify-center">
-        <div className="w-5 h-5 rounded-full bg-amber-500 text-white flex items-center justify-center font-black text-[11px] shadow-2xs">
-          !
+        <div
+          className={`w-5 h-5 rounded-full text-white flex items-center justify-center font-black text-[11px] shadow-2xs ${
+            objectivesCount > 0 ? "bg-amber-500" : "bg-[#00A650]"
+          }`}
+        >
+          {objectivesCount > 0 ? "!" : "✓"}
         </div>
-        <span className="text-[11px] font-semibold text-sky-600 hover:underline mt-1 cursor-pointer">
-          {objectivesCount} {objectivesCount === 1 ? "objetivo" : "objetivos"}
+        <span className="text-[11px] font-semibold text-sky-600 mt-1">
+          {objectivesCount > 0
+            ? `${objectivesCount} ${objectivesCount === 1 ? "objetivo" : "objetivos"}`
+            : "Sem pendências"}
         </span>
+      </div>
+    );
+  }
+
+  if (score === null || !Number.isFinite(score)) {
+    return (
+      <div className="flex flex-col items-center justify-center">
+        <span className="text-xs font-semibold text-slate-400">—</span>
+        {objectivesCount > 0 && (
+          <span className="text-[10.5px] font-semibold text-sky-600 leading-tight mt-0.5">
+            {objectivesCount} {objectivesCount === 1 ? "objetivo" : "objetivos"}
+          </span>
+        )}
       </div>
     );
   }
@@ -149,8 +170,10 @@ function QualityGauge({
           {score}
         </span>
       </div>
-      <span className="text-[10.5px] font-semibold text-sky-600 hover:underline leading-tight">
-        {objectivesCount} {objectivesCount === 1 ? "objetivo" : "objetivos"}
+      <span className="text-[10.5px] font-semibold text-sky-600 leading-tight">
+        {objectivesCount > 0
+          ? `${objectivesCount} ${objectivesCount === 1 ? "objetivo" : "objetivos"}`
+          : "Qualidade OK"}
       </span>
     </div>
   );
@@ -234,7 +257,11 @@ function MlStatusSwitch({ active }: { active: boolean }) {
   );
 }
 
-export function MyListingsTable({ items }: ListingsTableProps) {
+export function MyListingsTable({
+  families,
+  totalSaleOptions,
+  items = [],
+}: ListingsTableProps) {
   // Estados de busca e filtros
   const [searchTerm, setSearchTerm] = useState("");
   const [priceFilter, setPriceFilter] = useState("all");
@@ -250,10 +277,19 @@ export function MyListingsTable({ items }: ListingsTableProps) {
   const [sortField, setSortField] = useState<SortField | null>(null);
   const [sortDirection, setSortDirection] = useState<SortDirection>("desc");
 
-  // Constrói a hierarquia de 3 níveis: Família -> Variações (Sub-anúncios) -> Opções Clássico e Premium
+  // Usa hierarquia normalizada diretamente do servidor quando disponível
   const familyGroups = useMemo(() => {
+    if (Array.isArray(families)) return families;
     return buildMercadoLivreHierarchy(items);
-  }, [items]);
+  }, [families, items]);
+
+  const resolvedTotalOptions = useMemo(() => {
+    if (typeof totalSaleOptions === "number") return totalSaleOptions;
+    return familyGroups.reduce(
+      (acc, f) => acc + f.variations.reduce((vAcc, v) => vAcc + v.sellingOptions.length, 0),
+      0
+    );
+  }, [familyGroups, totalSaleOptions]);
 
   // Controle de famílias expandidas (por padrão todas abertas como nas imagens do ML)
   const [expandedFamilies, setExpandedFamilies] = useState<Record<string, boolean>>({});
@@ -439,8 +475,8 @@ export function MyListingsTable({ items }: ListingsTableProps) {
             valB = b.conversionRate;
             break;
           case "quality":
-            valA = a.avgQualityScore;
-            valB = b.avgQualityScore;
+            valA = a.avgQualityScore ?? -1;
+            valB = b.avgQualityScore ?? -1;
             break;
           case "stock":
             valA = a.totalStock;
@@ -486,7 +522,7 @@ export function MyListingsTable({ items }: ListingsTableProps) {
     );
   };
 
-  if (!items || items.length === 0) {
+  if (familyGroups.length === 0) {
     return (
       <div className="py-12 text-center text-slate-400 text-xs">
         Nenhum anúncio cadastrado no sistema ainda. Clique em &quot;Sincronizar Anúncios do ML&quot; acima.
@@ -586,7 +622,7 @@ export function MyListingsTable({ items }: ListingsTableProps) {
           </span>
           <span>•</span>
           <span>
-            <strong>{items.length}</strong> opções de venda (Clássico / Premium)
+            <strong>{resolvedTotalOptions}</strong> opções de venda (Clássico / Premium)
           </span>
         </div>
         <div className="text-[11px] text-slate-500 flex items-center gap-3">
@@ -1187,6 +1223,10 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                                     text={mlbObj.cleanDigits}
                                                     label={`#${mlbObj.cleanDigits}`}
                                                   />
+                                                  <span className="font-sans text-[9.5px] font-semibold px-1 py-0 rounded bg-slate-100 text-slate-600">
+                                                    {mlbObj.channelLabel}
+                                                    {mlbObj.isCatalog ? " • Cat." : ""}
+                                                  </span>
                                                 </div>
                                               ))}
                                             </div>
@@ -1261,9 +1301,10 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                     </div>
 
                                     <div className="text-[11.5px] font-semibold text-slate-800 mt-1.5 leading-tight">
-                                      {opt.freeShipping
-                                        ? "Frete grátis"
-                                        : "Envio por conta do comprador"}
+                                      {opt.shippingModeLabel ||
+                                        (opt.freeShipping
+                                          ? "Frete grátis"
+                                          : "Envio por conta do comprador")}
                                     </div>
                                     <div className="text-[11px] text-slate-400 leading-tight mt-0.5">
                                       A pagar {formatBRL(opt.shippingCost)}
@@ -1364,36 +1405,63 @@ export function MyListingsTable({ items }: ListingsTableProps) {
                                   <td className="py-3.5 px-3 align-top">
                                     <div className="flex items-start justify-between gap-2">
                                       <div>
-                                        {opt.shippingType === "ml_full" ? (
+                                        {opt.status === "under_review" ? (
+                                          <>
+                                            <div className="font-bold text-amber-700 text-[11.5px] flex items-center gap-1">
+                                              <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+                                              <span>Em revisão no ML</span>
+                                            </div>
+                                            {opt.subStatus && (
+                                              <div className="text-[10.5px] text-slate-500 mt-0.5">
+                                                Motivo: {opt.subStatus}
+                                              </div>
+                                            )}
+                                          </>
+                                        ) : opt.status !== "active" ? (
+                                          <>
+                                            <div className="font-bold text-rose-600 text-[11.5px]">
+                                              Anúncio pausado
+                                            </div>
+                                            {opt.subStatus && (
+                                              <div className="text-[10.5px] text-slate-500 mt-0.5">
+                                                {opt.subStatus}
+                                              </div>
+                                            )}
+                                          </>
+                                        ) : opt.recommendationTitle ? (
+                                          <>
+                                            <div className="font-bold text-slate-900 text-[11.5px]">
+                                              {opt.recommendationTitle}
+                                            </div>
+                                            {opt.recommendationAction && (
+                                              <div className="text-[10.5px] text-slate-500 mt-0.5">
+                                                {opt.recommendationAction}
+                                              </div>
+                                            )}
+                                          </>
+                                        ) : opt.shippingType === "ml_full" ? (
                                           <>
                                             <div className="font-bold text-emerald-800 text-[11.5px] flex items-center gap-1">
                                               <Zap className="w-3 h-3 fill-emerald-600 text-emerald-600" />
                                               <span>Mercado Envios Full</span>
                                             </div>
                                             <div className="text-[10.5px] text-slate-500 mt-0.5">
-                                              Máxima exposição ativa.
-                                            </div>
-                                          </>
-                                        ) : opt.qualityScore < 75 ? (
-                                          <>
-                                            <div className="font-bold text-slate-900 text-[11.5px]">
-                                              Ofereça envios no mesmo dia
-                                            </div>
-                                            <div className="text-[10.5px] text-slate-500 mt-0.5">
-                                              Atraia mais compradores.
+                                              Sem recomendações pendentes.
                                             </div>
                                           </>
                                         ) : (
                                           <>
-                                            <div className="font-bold text-slate-900 text-[11.5px]">
-                                              Crie um vídeo{" "}
-                                              <span className="text-rose-500">
-                                                ⚡
-                                              </span>
+                                            <div className="font-bold text-emerald-700 text-[11.5px]">
+                                              Anúncio ativo
                                             </div>
                                             <div className="text-[10.5px] text-slate-500 mt-0.5">
-                                              Adicione vídeos para não perder
-                                              vendas.
+                                              {opt.objectivesCount > 0
+                                                ? `${opt.objectivesCount} ${
+                                                    opt.objectivesCount === 1
+                                                      ? "objetivo pendente"
+                                                      : "objetivos pendentes"
+                                                  } no ML`
+                                                : "Sem pendências de qualidade"}
                                             </div>
                                           </>
                                         )}

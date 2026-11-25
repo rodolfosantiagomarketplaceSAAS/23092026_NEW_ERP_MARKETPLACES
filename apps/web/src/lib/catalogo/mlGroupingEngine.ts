@@ -84,6 +84,7 @@ export interface SellingOptionItem {
   saleFeePct: number;
   shippingCost: number;
   freeShipping: boolean;
+  shippingModeLabel?: string;
   shippingType: string;
   netAmount: number; // "Você recebe"
   stock: number;
@@ -95,8 +96,10 @@ export interface SellingOptionItem {
   trend: "up" | "down" | "stable" | "neutral";
   trendPct: number;
   sparkline: number[];
-  qualityScore: number;
+  qualityScore: number | null;
   objectivesCount: number;
+  recommendationTitle?: string | null;
+  recommendationAction?: string | null;
   status: string;
   subStatus?: string | null;
 }
@@ -163,7 +166,7 @@ export interface GroupedFamilyProduct {
   minNetAmount: number;
   maxNetAmount: number;
   // Qualidade e Status Consolidados
-  avgQualityScore: number;
+  avgQualityScore: number | null;
   totalObjectives: number;
   inactiveVariationsCount: number;
   primaryStatus: string;
@@ -744,6 +747,21 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
         }
         return a.price - b.price;
       });
+      // Reconstrói mlbIds na mesma ordem exata das sellingOptions (evita inversão visual)
+      const seenMlbs = new Set<string>();
+      vNode.mlbIds = [];
+      for (const opt of vNode.sellingOptions) {
+        if (seenMlbs.has(opt.externalId)) continue;
+        seenMlbs.add(opt.externalId);
+        vNode.mlbIds.push({
+          externalId: opt.externalId,
+          cleanDigits: opt.cleanMlbDigits,
+          permalink: opt.permalink,
+          channelLabel: opt.channelLabel,
+          isCatalog: opt.isCatalog,
+          status: opt.status,
+        });
+      }
     });
 
     variationsList.sort((a, b) => {
@@ -792,12 +810,16 @@ export function buildMercadoLivreHierarchy(items: MyListingItem[]): GroupedFamil
     const maxShippingCost =
       allOptions.length > 0 ? Math.max(...allOptions.map((o) => o.shippingCost)) : 0;
 
+    const scoredOptions = allOptions.filter(
+      (o): o is SellingOptionItem & { qualityScore: number } =>
+        typeof o.qualityScore === "number"
+    );
     const avgQualityScore =
-      allOptions.length > 0
+      scoredOptions.length > 0
         ? Math.round(
-            allOptions.reduce((acc, o) => acc + o.qualityScore, 0) / allOptions.length
+            scoredOptions.reduce((acc, o) => acc + o.qualityScore, 0) / scoredOptions.length
           )
-        : 80;
+        : null;
     const totalObjectives = variationsList.reduce(
       (acc, v) => acc + (v.sellingOptions[0]?.objectivesCount || 1),
       0
