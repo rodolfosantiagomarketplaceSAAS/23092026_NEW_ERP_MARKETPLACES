@@ -7,7 +7,6 @@ import {
   LayoutDashboard,
   Boxes,
   Radio,
-  ShoppingCart,
   TrendingUp,
   Store,
   Settings,
@@ -96,12 +95,6 @@ function SidebarContent() {
       href: "/vendas/gestao-diaria",
       icon: Wallet,
       badge: "ML",
-    },
-    {
-      label: "Vendas & Pedidos",
-      href: "/pedidos",
-      icon: ShoppingCart,
-      badge: null,
     },
     {
       label: "Inteligência de Negócios",
