@@ -78,7 +78,7 @@ function InteligenciaContent() {
                   ? "Fila de anúncios interessantes salvos para analisar, calcular lucro real, criar na sua loja e gerenciar."
                   : activeSubTab === "pesquisa"
                   ? "Pesquisa ativa de produtos com raio-X estatístico, campanhas promocionais, menores preços e pareamento 1-clique."
-                  : "Monitoramento 1:N de anúncios concorrentes pareados com sincronização e atualização de preços em tempo real."}
+                  : "Monitoramento 1:N dos seus anúncios e concorrentes seguidos com atualização sob demanda em 1 clique (Modo Econômico)."}
               </p>
             </div>
 

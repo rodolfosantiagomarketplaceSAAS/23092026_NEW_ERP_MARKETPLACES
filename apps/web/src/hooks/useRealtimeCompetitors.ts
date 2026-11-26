@@ -5,6 +5,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 import type { CompetitorListing } from "@crm/types";
 
 interface UseRealtimeCompetitorsProps {
+  enabled?: boolean;
   onPriceUpdate?: (payload: {
     competitorId: string;
     newPrice: number;
@@ -15,6 +16,7 @@ interface UseRealtimeCompetitorsProps {
 }
 
 export function useRealtimeCompetitors({
+  enabled = false,
   onPriceUpdate,
   onCompetitorChange,
 }: UseRealtimeCompetitorsProps = {}) {
@@ -43,6 +45,10 @@ export function useRealtimeCompetitors({
   }, []);
 
   useEffect(() => {
+    if (!enabled) {
+      return;
+    }
+
     const supabase = getSupabaseBrowserClient();
 
     // Cria o canal Realtime para escutar inserções e atualizações em competitor_listings
@@ -93,7 +99,7 @@ export function useRealtimeCompetitors({
       supabase.removeChannel(channel);
       Object.values(timeoutRefs.current).forEach((t) => clearTimeout(t));
     };
-  }, [triggerHighlight, onPriceUpdate, onCompetitorChange]);
+  }, [enabled, triggerHighlight, onPriceUpdate, onCompetitorChange]);
 
   return {
     highlightedIds,

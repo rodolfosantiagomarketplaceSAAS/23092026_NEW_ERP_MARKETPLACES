@@ -21,9 +21,9 @@ import {
   parsePrice,
   refineMlCreationDateFromImage,
   resolveAnyActiveMlToken,
-  scrapeCompetitorFromUrl,
   type VerifiedCompetitorData,
 } from "@/lib/services/competitorScraper";
+import { scrapeCompetitorCleanStructured } from "@/lib/mercadolivre/radar-sync-engine";
 
 export const dynamic = "force-dynamic";
 
@@ -251,12 +251,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Camada C: Web Scraper Multicamada (JSON-LD + Meta OpenGraph + Preloaded State + DOM + PoW Solver)
+    // Camada C: Web Scraper Estruturado Limpo (JSON-LD + Meta OpenGraph + Preloaded State + DOM Andes)
     if (
       (!partialData.current_price || partialData.current_price <= 0) &&
       normalizedPermalink
     ) {
-      const scraped = await scrapeCompetitorFromUrl(
+      const scraped = await scrapeCompetitorCleanStructured(
         normalizedPermalink,
         rawExternalId || mlbId
       );
@@ -452,16 +452,8 @@ export async function POST(req: NextRequest) {
           updatedCompetitorRow = cData;
         }
       }
-
-      const targetCompIdForHistory =
-        updatedCompetitorRow?.id || existingComp?.id || competitor_id;
-      if (targetCompIdForHistory) {
-        await supabase.from("price_history").insert({
-          competitor_listing_id: targetCompIdForHistory,
-          price: compVerified.current_price,
-          recorded_at: nowIso,
-        });
-      }
+      // Nota: O trigger nativo `trg_competitor_price_history_log` no PostgreSQL grava em `price_history`
+      // exclusivamente quando `OLD.current_price IS DISTINCT FROM NEW.current_price` (zero linhas duplicadas).
     } catch (dbErr) {
       console.warn(
         "[refresh-comparison] Aviso ao gravar concorrente no Supabase:",

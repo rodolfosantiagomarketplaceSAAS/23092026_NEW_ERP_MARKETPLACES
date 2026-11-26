@@ -47,15 +47,12 @@
     };
 
     pairWithErp();
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") pairWithErp();
-    });
 
     window.__CRM_MARKETPLACES_EXTENSION_ACTIVE__ = true;
     document.documentElement.setAttribute("data-crm-extension-installed", "true");
     window.dispatchEvent(
       new CustomEvent("CRM_EXTENSION_DETECTED", {
-        detail: { version: (typeof chrome !== "undefined" && chrome.runtime?.getManifest?.()?.version) || "1.5.0", origin: currentErpUrl },
+        detail: { version: (typeof chrome !== "undefined" && chrome.runtime?.getManifest?.()?.version) || "1.6.0", origin: currentErpUrl },
       })
     );
 
@@ -108,6 +105,26 @@
                 requestId,
                 result: response || {
                   success: false,
+                  error: err ? err.message : "Sem resposta da extensão",
+                },
+              },
+              "*"
+            );
+          }
+        );
+      } else if (event.data?.type === "CRM_BATCH_INSPECT_COMPETITORS") {
+        const { requestId, payload } = event.data;
+        chrome.runtime.sendMessage(
+          { action: "BATCH_INSPECT_COMPETITORS", payload },
+          (response) => {
+            const err = chrome.runtime.lastError;
+            window.postMessage(
+              {
+                type: "CRM_BATCH_INSPECT_RESULT",
+                requestId,
+                result: response || {
+                  success: false,
+                  verifiedMap: {},
                   error: err ? err.message : "Sem resposta da extensão",
                 },
               },

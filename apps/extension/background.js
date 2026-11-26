@@ -76,23 +76,19 @@ async function heartbeat(override = {}) {
 }
 
 function ensureHeartbeatAlarm() {
-  chrome.alarms.create(HEARTBEAT_ALARM, { periodInMinutes: HEARTBEAT_MINUTES });
+  // Modo Econômico (Free-Tier Friendly): remove alarmes periódicos antigos para não consumir
+  // invocações automáticas na Vercel/Supabase em background. A validação ocorre apenas sob demanda.
+  chrome.alarms.clear(HEARTBEAT_ALARM).catch(() => {});
 }
 
 chrome.runtime.onInstalled.addListener(async () => {
   const { erpUrl } = await chrome.storage.local.get(["erpUrl"]);
   if (!erpUrl) await chrome.storage.local.set({ erpUrl: DEFAULT_ERP_URL });
   ensureHeartbeatAlarm();
-  heartbeat();
 });
 
 chrome.runtime.onStartup.addListener(() => {
   ensureHeartbeatAlarm();
-  heartbeat();
-});
-
-chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm.name === HEARTBEAT_ALARM) heartbeat();
 });
 
 /** Pareamento automático: o content script do ERP envia o token emitido para o usuário logado. */
@@ -1320,6 +1316,77 @@ async function handleSearchMarketplaceBackground(payload) {
   };
 }
 
+/**
+ * Inspeção em Lote Paralela Controlada (Radar Comparativo 1-Clique)
+ * Extrai dados reais dos concorrentes usando o IP residencial e sessão do navegador sem enviar N requisições ao ERP.
+ * Retorna o mapa consolidado `{ [competitorId]: verifiedData }` para uma única chamada batch no servidor.
+ */
+async function handleBatchInspectCompetitors(payload) {
+  const items = Array.isArray(payload?.competitors) ? payload.competitors : [];
+  if (items.length === 0) {
+    return { success: true, count: 0, verifiedMap: {} };
+  }
+
+  const verifiedMap = {};
+  const CONCURRENCY = 4;
+  let cursor = 0;
+
+  async function worker() {
+    while (cursor < items.length) {
+      const idx = cursor++;
+      const item = items[idx];
+      if (!item || !item.id) continue;
+
+      const rawPermalink = item.permalink || "";
+      const extId = item.external_id || "";
+      const cleanDigits = String(extId).replace(/^MLB-?/i, "");
+      const permalink = (
+        rawPermalink ||
+        (cleanDigits ? `https://produto.mercadolivre.com.br/MLB-${cleanDigits}` : "")
+      ).replace(
+        /produto\.mercadolivre\.com\.br\/MLB(\d+)/i,
+        "produto.mercadolivre.com.br/MLB-$1"
+      );
+
+      if (!permalink || !permalink.startsWith("http")) continue;
+
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 5000);
+        const res = await fetch(permalink, {
+          credentials: "include",
+          headers: {
+            Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "pt-BR,pt;q=0.9",
+          },
+          signal: controller.signal,
+        });
+        clearTimeout(timer);
+
+        if (res.ok) {
+          const html = await res.text();
+          const parsed = parseHtmlMultilayer(html, permalink, extId);
+          if (parsed && parsed.current_price > 0) {
+            verifiedMap[item.id] = parsed;
+          }
+        }
+      } catch {
+        // Continua silenciosamente; o servidor fará fallback via Multiget API Oficial ML
+      }
+    }
+  }
+
+  const runners = Array.from({ length: Math.min(CONCURRENCY, items.length) }, () => worker());
+  await Promise.all(runners);
+
+  return {
+    success: true,
+    count: Object.keys(verifiedMap).length,
+    totalRequested: items.length,
+    verifiedMap,
+  };
+}
+
 const handlers = {
   ERP_SESSION: (req) => handleErpSession(req),
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
@@ -1330,6 +1397,7 @@ const handlers = {
   GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),
   GET_COMPETITOR_FEES: (req) => handleGetCompetitorFees(req),
   INSPECT_COMPETITOR_LINK: (req) => handleInspectCompetitorLink(req.payload),
+  BATCH_INSPECT_COMPETITORS: (req) => handleBatchInspectCompetitors(req.payload),
   DOWNLOAD_SINGLE_PHOTO: (req) => handleDownloadSinglePhoto(req.payload),
   DOWNLOAD_PHOTOS: (req) => handleDownloadPhotos(req.payload),
   FETCH_PAGE_HTML: async (req) => {
