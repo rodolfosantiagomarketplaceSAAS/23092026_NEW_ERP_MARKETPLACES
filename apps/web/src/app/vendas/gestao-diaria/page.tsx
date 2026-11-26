@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import {
   AlertTriangle,
@@ -8,11 +8,13 @@ import {
   CalendarDays,
   CheckCircle2,
   Download,
+  Filter,
   Infinity as InfinityIcon,
   ListChecks,
   Loader2,
   Radio,
   RefreshCw,
+  RotateCcw,
   Search,
   Settings2,
   ShieldAlert,
@@ -23,6 +25,10 @@ import type {
   MlSalesDashboardResponse,
   SalesAnalysisMode,
 } from "@/types/ml-sales";
+import {
+  computeSalesDashboardAnalytics,
+  filterOrdersByAnalysisMode,
+} from "@/lib/mercadolivre/sales-analytics";
 import {
   computeDatePresetRange,
   computeSpecificMonthRange,
@@ -260,6 +266,7 @@ export default function GestaoDiariaVendasPage() {
   }
 
   function handleRestorePreviousPeriod() {
+    setSpotlightDayKey(null);
     if (!previousRangeBeforeDay) {
       handleSelectPreset("thisMonth");
       return;
@@ -268,6 +275,32 @@ export default function GestaoDiariaVendasPage() {
     setFromDate(previousRangeBeforeDay.from);
     setToDate(previousRangeBeforeDay.to);
     setPreviousRangeBeforeDay(null);
+  }
+
+  /**
+   * Seleciona um dia específico na barra superior ou na tabela de fechamento:
+   * - Se o dia já faz parte do período carregado em memória, filtra instantaneamente a tabela inferior
+   *   sem apagar os botões dos outros dias e sem gastar requisições ao servidor.
+   * - Se o usuário digitou no calendário uma data fora do período atual, busca a data no servidor.
+   */
+  function handleSelectSpotlightDay(nextDayKey: string | null) {
+    if (!nextDayKey) {
+      if (preset === "specificDay") {
+        handleRestorePreviousPeriod();
+      } else {
+        setSpotlightDayKey(null);
+      }
+      return;
+    }
+
+    setSpotlightDayKey(nextDayKey);
+    setActiveSubTab("operational");
+
+    const isOutOfLoadedRange =
+      !isAllSales && (nextDayKey < fromDate || nextDayKey > toDate);
+    if (isOutOfLoadedRange) {
+      handleFilterToSingleDay(nextDayKey);
+    }
   }
 
   async function handleSyncMercadoLivre() {
@@ -325,12 +358,64 @@ export default function GestaoDiariaVendasPage() {
       ? data.availableYears
       : [currentYear, currentYear - 1, currentYear - 2];
 
-  const totalOrdersInPills =
-    data.unassignedCount +
-    Object.values(data.sellerOrderCounts).reduce((a, b) => a + b, 0);
+  // Quando um dia específico está selecionado, filtra instantaneamente os produtos exibidos abaixo
+  const displayedOrders = useMemo(() => {
+    if (!spotlightDayKey) return data.orders;
+    return filterOrdersByAnalysisMode({
+      orders: data.orders,
+      fromDate: spotlightDayKey,
+      toDate: spotlightDayKey,
+      analysisMode,
+    });
+  }, [data.orders, spotlightDayKey, analysisMode]);
 
-  const csvFromLabel = isAllSales ? "historico-completo" : fromDate;
-  const csvToLabel = isAllSales ? todayBr : toDate;
+  const activeDayLabel = useMemo(() => {
+    if (!spotlightDayKey || spotlightDayKey.length < 10) return null;
+    const [y, m, d] = spotlightDayKey.split("-");
+    return `${d}/${m}/${y}`;
+  }, [spotlightDayKey]);
+
+  // Recalcula KPIs e resumos por vendedor para refletir exatamente o dia selecionado (quando ativo)
+  const displayedAnalytics = useMemo(() => {
+    if (!spotlightDayKey) {
+      return {
+        kpis: data.kpis,
+        sellerSummaries: data.sellerSummaries,
+      };
+    }
+    const computed = computeSalesDashboardAnalytics({
+      filteredOrders: displayedOrders,
+      sellers: data.sellers,
+      analysisMode,
+    });
+    return {
+      kpis: computed.kpis,
+      sellerSummaries: computed.sellerSummaries,
+    };
+  }, [spotlightDayKey, displayedOrders, data.kpis, data.sellerSummaries, data.sellers, analysisMode]);
+
+  const activeSellerCounts = useMemo(() => {
+    if (!spotlightDayKey || sellerFilter !== "all") {
+      return {
+        sellerOrderCounts: data.sellerOrderCounts,
+        unassignedCount: data.unassignedCount,
+      };
+    }
+    const counts: Record<string, number> = {};
+    let unassigned = 0;
+    for (const o of displayedOrders) {
+      if (!o.assigned_seller_id) unassigned += 1;
+      else counts[o.assigned_seller_id] = (counts[o.assigned_seller_id] ?? 0) + 1;
+    }
+    return { sellerOrderCounts: counts, unassignedCount: unassigned };
+  }, [spotlightDayKey, sellerFilter, displayedOrders, data.sellerOrderCounts, data.unassignedCount]);
+
+  const totalOrdersInPills =
+    activeSellerCounts.unassignedCount +
+    Object.values(activeSellerCounts.sellerOrderCounts).reduce((a, b) => a + b, 0);
+
+  const csvFromLabel = spotlightDayKey || (isAllSales ? "historico-completo" : fromDate);
+  const csvToLabel = spotlightDayKey || (isAllSales ? todayBr : toDate);
 
   return (
     <>
@@ -707,9 +792,7 @@ export default function GestaoDiariaVendasPage() {
                   aria-label="Filtrar um único dia específico"
                   value={preset === "specificDay" ? fromDate : spotlightDayKey || ""}
                   onChange={(e) => {
-                    if (e.target.value) {
-                      handleFilterToSingleDay(e.target.value);
-                    }
+                    handleSelectSpotlightDay(e.target.value || null);
                   }}
                   className={`px-2 py-1 border rounded-xs font-mono focus:outline-none ${
                     preset === "specificDay"
@@ -794,14 +877,14 @@ export default function GestaoDiariaVendasPage() {
                       : "bg-amber-200/80 text-amber-950"
                   }`}
                 >
-                  {data.unassignedCount}
+                  {activeSellerCounts.unassignedCount}
                 </span>
               </button>
 
               {data.sellers
                 .filter((s) => s.active || (data.sellerOrderCounts[s.id] ?? 0) > 0)
                 .map((seller) => {
-                  const count = data.sellerOrderCounts[seller.id] ?? 0;
+                  const count = activeSellerCounts.sellerOrderCounts[seller.id] ?? 0;
                   const active = sellerFilter === seller.id;
                   return (
                     <button
@@ -842,78 +925,114 @@ export default function GestaoDiariaVendasPage() {
             </div>
           </div>
 
-          {/* Painel Interativo de Resultado Obtido por Dia Específico de Envio */}
+          {/* Painel Interativo de Resultado Obtido por Dia Específico (Filtra os produtos abaixo em 1 clique) */}
           <ShippingDaySpotlightBar
             dailyClosing={data.dailyClosing}
             sellers={data.sellers}
             analysisMode={analysisMode}
             selectedDayKey={spotlightDayKey}
-            onSelectDayKey={setSpotlightDayKey}
-            onFilterTableToSingleDay={handleFilterToSingleDay}
-            isSingleDayFiltered={preset === "specificDay"}
-            onRestorePreviousPeriod={handleRestorePreviousPeriod}
+            onSelectDayKey={handleSelectSpotlightDay}
+            filteredDayOrdersCount={displayedOrders.length}
+            totalPeriodOrdersCount={data.orders.length}
+            onScrollToProducts={() => {
+              setActiveSubTab("operational");
+              document
+                .getElementById("vendas-tabela-produtos")
+                ?.scrollIntoView({ behavior: "smooth", block: "start" });
+            }}
           />
 
           {/* KPIs Financeiros & Cards Lado a Lado por Vendedor */}
           <SalesKpiSection
-            kpis={data.kpis}
-            sellerSummaries={data.sellerSummaries}
+            kpis={displayedAnalytics.kpis}
+            sellerSummaries={displayedAnalytics.sellerSummaries}
             selectedSellerId={sellerFilter}
             analysisMode={analysisMode}
+            selectedDayLabel={activeDayLabel}
             onSelectSeller={(id) => setSellerFilter(id)}
             onRefresh={() => loadDashboard({ silent: true })}
           />
 
           {/* Navegação entre Sub-Abas: Operacional vs Consolidado Dia a Dia */}
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pt-1">
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setActiveSubTab("operational")}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-colors ${
-                  activeSubTab === "operational"
-                    ? "border-slate-900 text-slate-900 bg-white rounded-t"
-                    : "border-transparent text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                <ListChecks className="w-3.5 h-3.5" />
-                {analysisMode === "shipping_date"
-                  ? `Envios Operacionais Dia a Dia (${data.orders.length})`
-                  : `Visão Operacional Dia a Dia (${data.orders.length})`}
-              </button>
+          <div
+            id="vendas-tabela-produtos"
+            className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pt-1"
+          >
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveSubTab("operational")}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-colors ${
+                    activeSubTab === "operational"
+                      ? "border-slate-900 text-slate-900 bg-white rounded-t"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <ListChecks className="w-3.5 h-3.5" />
+                  {activeDayLabel
+                    ? analysisMode === "shipping_date"
+                      ? `Produtos Enviados em ${activeDayLabel} (${displayedOrders.length})`
+                      : `Produtos Vendidos em ${activeDayLabel} (${displayedOrders.length})`
+                    : analysisMode === "shipping_date"
+                    ? `Envios Operacionais Dia a Dia (${displayedOrders.length})`
+                    : `Visão Operacional Dia a Dia (${displayedOrders.length})`}
+                </button>
 
-              <button
-                type="button"
-                onClick={() => setActiveSubTab("closing")}
-                className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-colors ${
-                  activeSubTab === "closing"
-                    ? "border-slate-900 text-slate-900 bg-white rounded-t"
-                    : "border-transparent text-slate-500 hover:text-slate-800"
-                }`}
-              >
-                <Table2 className="w-3.5 h-3.5" />
-                {analysisMode === "shipping_date"
-                  ? `Consolidado por Dia do Envio (${data.dailyClosing.length})`
-                  : `Consolidado Dia a Dia (Fechamento) (${data.dailyClosing.length})`}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveSubTab("closing")}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-colors ${
+                    activeSubTab === "closing"
+                      ? "border-slate-900 text-slate-900 bg-white rounded-t"
+                      : "border-transparent text-slate-500 hover:text-slate-800"
+                  }`}
+                >
+                  <Table2 className="w-3.5 h-3.5" />
+                  {analysisMode === "shipping_date"
+                    ? `Consolidado por Dia do Envio (${data.dailyClosing.length})`
+                    : `Consolidado Dia a Dia (Fechamento) (${data.dailyClosing.length})`}
+                </button>
+              </div>
+
+              {activeDayLabel && (
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-1 mb-1 rounded-xs bg-emerald-50 border border-emerald-300 text-emerald-950 text-[11px] font-bold">
+                  <Filter className="w-3 h-3 text-emerald-700" />
+                  <span>
+                    Filtrando somente {activeDayLabel} ({displayedOrders.length} de{" "}
+                    {data.orders.length} do período)
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectSpotlightDay(null)}
+                    className="ml-1 inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs bg-white hover:bg-emerald-100 border border-emerald-300 text-[10px] font-bold text-emerald-900 cursor-pointer"
+                    title="Voltar a mostrar os produtos de todos os dias do período"
+                  >
+                    <RotateCcw className="w-2.5 h-2.5" />
+                    Ver todos
+                  </button>
+                </div>
+              )}
             </div>
 
-            {activeSubTab === "operational" && data.orders.length > 0 && (
+            {activeSubTab === "operational" && displayedOrders.length > 0 && (
               <button
                 type="button"
                 onClick={() =>
                   exportDetailedOrdersToCsv({
-                    orders: data.orders,
+                    orders: displayedOrders,
                     sellers: data.sellers,
                     from: csvFromLabel,
                     to: csvToLabel,
                     analysisMode,
                   })
                 }
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 mb-1 rounded-xs border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700"
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 mb-1 rounded-xs border border-slate-300 bg-white hover:bg-slate-50 text-[11px] font-semibold text-slate-700 cursor-pointer"
               >
                 <Download className="w-3 h-3 text-emerald-700" />
-                Exportar Pedidos Filtrados (CSV)
+                {activeDayLabel
+                  ? `Exportar Dia ${activeDayLabel} (CSV)`
+                  : "Exportar Pedidos Filtrados (CSV)"}
               </button>
             )}
           </div>
@@ -930,7 +1049,7 @@ export default function GestaoDiariaVendasPage() {
             </div>
           ) : activeSubTab === "operational" ? (
             <DailySalesTable
-              orders={data.orders}
+              orders={displayedOrders}
               sellers={data.sellers}
               templates={data.templates}
               analysisMode={analysisMode}
@@ -945,7 +1064,7 @@ export default function GestaoDiariaVendasPage() {
               analysisMode={analysisMode}
               selectedDayKey={spotlightDayKey}
               onSelectDay={(dayKey) =>
-                setSpotlightDayKey((prev) => (prev === dayKey ? null : dayKey))
+                handleSelectSpotlightDay(spotlightDayKey === dayKey ? null : dayKey)
               }
             />
           )}

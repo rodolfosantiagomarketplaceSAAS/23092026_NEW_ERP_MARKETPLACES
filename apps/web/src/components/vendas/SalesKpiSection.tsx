@@ -25,6 +25,7 @@ interface SalesKpiSectionProps {
   sellerSummaries: SellerTransferSummary[];
   selectedSellerId: string;
   analysisMode?: SalesAnalysisMode;
+  selectedDayLabel?: string | null;
   onSelectSeller: (sellerId: string) => void;
   onRefresh?: () => void;
 }
@@ -34,6 +35,7 @@ export function SalesKpiSection({
   sellerSummaries,
   selectedSellerId,
   analysisMode = "order_date",
+  selectedDayLabel = null,
   onSelectSeller,
   onRefresh,
 }: SalesKpiSectionProps) {
@@ -49,7 +51,13 @@ export function SalesKpiSection({
         <div className="bg-white border border-[#E2E8F0] rounded p-3.5 shadow-2xs flex flex-col justify-between">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-              {isShippingMode ? "1. Vendas Enviadas no Período" : "1. Vendas Brutas Válidas"}
+              {selectedDayLabel
+                ? isShippingMode
+                  ? `1. Vendas Enviadas em ${selectedDayLabel}`
+                  : `1. Vendas Brutas em ${selectedDayLabel}`
+                : isShippingMode
+                ? "1. Vendas Enviadas no Período"
+                : "1. Vendas Brutas Válidas"}
             </span>
             {isShippingMode ? (
               <Truck className="w-4 h-4 text-emerald-700" />

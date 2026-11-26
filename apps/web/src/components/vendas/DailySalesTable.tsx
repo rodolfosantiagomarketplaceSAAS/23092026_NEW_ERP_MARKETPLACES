@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
   BookmarkCheck,
@@ -103,6 +103,21 @@ export function DailySalesTable({
       }
     }
     return counts;
+  }, [orders]);
+
+  // Garante que seleções em lote nunca incluam pedidos ocultos ao trocar de dia filtrado
+  useEffect(() => {
+    setSelectedIds((prev) => {
+      if (prev.size === 0) return prev;
+      const visibleSet = new Set(orders.map((o) => o.id));
+      let changed = false;
+      const next = new Set<string>();
+      prev.forEach((id) => {
+        if (visibleSet.has(id)) next.add(id);
+        else changed = true;
+      });
+      return changed ? next : prev;
+    });
   }, [orders]);
 
   const allVisibleSelected =

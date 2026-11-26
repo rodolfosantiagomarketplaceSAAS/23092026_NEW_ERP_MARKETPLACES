@@ -2,8 +2,9 @@
 
 import React, { useMemo } from "react";
 import {
+  ArrowDown,
   CalendarCheck2,
-  Filter,
+  CheckCircle2,
   RotateCcw,
   Sparkles,
   Truck,
@@ -18,15 +19,16 @@ interface ShippingDaySpotlightBarProps {
   analysisMode: SalesAnalysisMode;
   selectedDayKey: string | null;
   onSelectDayKey: (dayKey: string | null) => void;
-  onFilterTableToSingleDay: (dayKey: string) => void;
-  isSingleDayFiltered: boolean;
-  onRestorePreviousPeriod?: () => void;
+  filteredDayOrdersCount?: number;
+  totalPeriodOrdersCount?: number;
+  onScrollToProducts?: () => void;
 }
 
 /**
- * Faixa interativa que permite inspecionar imediatamente o valor obtido em um Dia Específico
- * (especialmente no modo "Por Dia do Envio"), exibindo Venda Bruta, Base de Repasse Pós-ML,
- * Lucro Limpo e divisão por vendedor daquela data exata.
+ * Faixa interativa que permite selecionar qualquer dia específico para:
+ * 1) Consultar imediatamente Faturamento Bruto, Repasse Pós-ML, Lucro Limpo e divisão por vendedor.
+ * 2) Filtrar instantaneamente a tabela inferior para exibir SOMENTE os produtos daquele dia selecionado,
+ *    preservando todos os botões dos demais dias visíveis para navegação rápida em 1 clique.
  */
 export function ShippingDaySpotlightBar({
   dailyClosing,
@@ -34,9 +36,9 @@ export function ShippingDaySpotlightBar({
   analysisMode,
   selectedDayKey,
   onSelectDayKey,
-  onFilterTableToSingleDay,
-  isSingleDayFiltered,
-  onRestorePreviousPeriod,
+  filteredDayOrdersCount,
+  totalPeriodOrdersCount,
+  onScrollToProducts,
 }: ShippingDaySpotlightBarProps) {
   const isShippingMode = analysisMode === "shipping_date";
 
@@ -74,7 +76,7 @@ export function ShippingDaySpotlightBar({
       .filter((entry) => entry.amount > 0);
   }, [activeDayRow, sellers]);
 
-  if (!isShippingMode && !selectedDayKey) {
+  if (dailyClosing.length === 0 && !selectedDayKey) {
     return null;
   }
 
@@ -84,10 +86,12 @@ export function ShippingDaySpotlightBar({
         <div className="flex flex-wrap items-center gap-2">
           <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-xs bg-emerald-950 text-emerald-200 text-[10px] font-bold uppercase tracking-wider">
             <Truck className="w-3 h-3 text-emerald-400" />
-            Valor Obtido por Data de Envio
+            {isShippingMode
+              ? "Valor Obtido por Data de Envio"
+              : "Valor Obtido por Data da Venda"}
           </span>
           <span className="text-[11px] text-slate-600">
-            Selecione qualquer data abaixo (ou escolha no calendário) para consultar quanto obteve nos envios daquele dia específico:
+            Clique em qualquer dia abaixo para <strong>exibir na tabela somente os produtos daquela data</strong> (clique novamente para limpar):
           </span>
         </div>
 
@@ -97,19 +101,11 @@ export function ShippingDaySpotlightBar({
           </label>
           <input
             type="date"
-            aria-label="Consultar valor obtido em uma data específica de envio"
+            aria-label="Filtrar produtos e valores de uma data específica"
             value={selectedDayKey || ""}
             onChange={(e) => {
               const val = e.target.value;
-              if (!val) {
-                onSelectDayKey(null);
-              } else {
-                const existsInLoaded = dailyClosing.some((r) => r.date_key === val);
-                onSelectDayKey(val);
-                if (!existsInLoaded) {
-                  onFilterTableToSingleDay(val);
-                }
-              }
+              onSelectDayKey(val || null);
             }}
             className="px-2 py-1 border border-emerald-400 bg-emerald-50/40 rounded-xs text-[11px] font-mono font-bold text-slate-900 focus:outline-none focus:border-emerald-700"
           />
@@ -118,18 +114,19 @@ export function ShippingDaySpotlightBar({
             <button
               type="button"
               onClick={() => onSelectDayKey(null)}
-              className="inline-flex items-center gap-1 px-2 py-1 rounded-xs border border-slate-200 bg-slate-50 hover:bg-slate-100 text-[10px] font-bold text-slate-600"
+              className="inline-flex items-center gap-1 px-2 py-1 rounded-xs border border-slate-300 bg-slate-50 hover:bg-slate-100 text-[10px] font-bold text-slate-700 cursor-pointer"
             >
+              <RotateCcw className="w-2.5 h-2.5" />
               Limpar seleção
             </button>
           )}
         </div>
       </div>
 
-      {/* Faixa horizontal de dias com envios registrados no período */}
+      {/* Faixa horizontal de dias com envios/vendas registrados no período */}
       {dailyClosing.length > 0 && (
         <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
-          {dailyClosing.slice(0, 31).map((day) => {
+          {dailyClosing.slice(0, 90).map((day) => {
             const isSelected = selectedDayKey === day.date_key;
             const dayTransfer =
               day.effective_transfer_total ??
@@ -143,9 +140,14 @@ export function ShippingDaySpotlightBar({
                 onClick={() =>
                   onSelectDayKey(isSelected ? null : day.date_key)
                 }
-                className={`shrink-0 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xs border text-[11px] font-mono transition-all ${
+                title={
                   isSelected
-                    ? "bg-emerald-900 text-white border-emerald-950 shadow-2xs"
+                    ? `Mostrando somente os produtos de ${day.date_label}. Clique para voltar a todos os dias.`
+                    : `Clique para exibir abaixo somente os ${day.valid_orders_count} pedido(s) de ${day.date_label}`
+                }
+                className={`shrink-0 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-xs border text-[11px] font-mono transition-all cursor-pointer ${
+                  isSelected
+                    ? "bg-emerald-900 text-white border-emerald-950 shadow-xs ring-2 ring-emerald-500/30"
                     : "bg-slate-50 hover:bg-emerald-50/70 text-slate-800 border-slate-200 hover:border-emerald-300"
                 }`}
               >
@@ -157,7 +159,7 @@ export function ShippingDaySpotlightBar({
                       : "bg-white text-slate-600 border border-slate-200"
                   }`}
                 >
-                  {day.valid_orders_count} env.
+                  {day.valid_orders_count} {isShippingMode ? "env." : "ped."}
                 </span>
                 <span
                   className={`font-black ${
@@ -176,47 +178,61 @@ export function ShippingDaySpotlightBar({
       {selectedDayKey && (
         <div className="p-3 rounded-xs bg-slate-900 text-white border border-slate-800 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <CalendarCheck2 className="w-4 h-4 text-emerald-400 shrink-0" />
               <span className="text-xs font-black tracking-tight">
-                Resultado Obtido na Data de Envio: {activeDayLabel}
+                {isShippingMode
+                  ? `Resultado Obtido na Data de Envio: ${activeDayLabel}`
+                  : `Resultado Obtido na Data da Venda: ${activeDayLabel}`}
               </span>
               {activeDayRow ? (
                 <span className="px-2 py-0.5 rounded-xs bg-emerald-950 border border-emerald-700 text-emerald-300 font-mono text-[10px] font-bold">
                   {activeDayRow.valid_orders_count}{" "}
-                  {activeDayRow.valid_orders_count === 1
-                    ? "pedido enviado válido"
-                    : "pedidos enviados válidos"}
+                  {isShippingMode
+                    ? activeDayRow.valid_orders_count === 1
+                      ? "pedido enviado válido"
+                      : "pedidos enviados válidos"
+                    : activeDayRow.valid_orders_count === 1
+                    ? "pedido válido"
+                    : "pedidos válidos"}
                 </span>
               ) : (
                 <span className="px-2 py-0.5 rounded-xs bg-slate-800 text-slate-300 font-mono text-[10px]">
-                  0 envios registrados nesta data
+                  0 registros válidos nesta data
                 </span>
               )}
             </div>
 
-            <div className="flex items-center gap-1.5">
-              {!isSingleDayFiltered ? (
-                <button
-                  type="button"
-                  onClick={() => onFilterTableToSingleDay(selectedDayKey)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xs bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold transition-colors"
-                >
-                  <Filter className="w-3 h-3" />
-                  Listar somente vendas enviadas em {activeDayLabel}
-                </button>
-              ) : (
-                onRestorePreviousPeriod && (
-                  <button
-                    type="button"
-                    onClick={onRestorePreviousPeriod}
-                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xs bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-[11px] font-bold transition-colors"
-                  >
-                    <RotateCcw className="w-3 h-3" />
-                    Voltar ao período completo
-                  </button>
-                )
-              )}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onScrollToProducts?.()}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xs bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-700 text-emerald-200 text-[11px] font-bold transition-colors cursor-pointer"
+                title="Rolar até a tabela filtrada com os produtos deste dia"
+              >
+                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                <span>
+                  Exibindo somente {activeDayLabel}
+                  {typeof filteredDayOrdersCount === "number"
+                    ? ` (${filteredDayOrdersCount} na tabela)`
+                    : ""}
+                </span>
+                <ArrowDown className="w-3 h-3 text-emerald-400" />
+              </button>
+
+              <button
+                type="button"
+                onClick={() => onSelectDayKey(null)}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-xs bg-slate-800 hover:bg-slate-700 border border-slate-600 text-slate-200 text-[11px] font-bold transition-colors cursor-pointer"
+              >
+                <RotateCcw className="w-3 h-3" />
+                <span>
+                  Mostrar período completo
+                  {typeof totalPeriodOrdersCount === "number"
+                    ? ` (${totalPeriodOrdersCount})`
+                    : ""}
+                </span>
+              </button>
             </div>
           </div>
 
