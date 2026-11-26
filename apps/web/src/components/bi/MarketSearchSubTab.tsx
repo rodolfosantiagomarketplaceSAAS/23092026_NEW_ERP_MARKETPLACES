@@ -74,8 +74,28 @@ export function MarketSearchSubTab() {
 
   // Estados de Dados
   const [loading, setLoading] = useState(false);
+  const [searchStatusMsg, setSearchStatusMsg] = useState<string | null>(null);
+  const [extensionInstalled, setExtensionInstalled] = useState(false);
   const [data, setData] = useState<MarketSearchResponse | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+  // Detecta se a Extensão Chrome do ERP está instalada
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (
+      document.documentElement.getAttribute("data-crm-extension-installed") === "true" ||
+      (window as any).__CRM_MARKETPLACES_EXTENSION_ACTIVE__
+    ) {
+      setExtensionInstalled(true);
+    }
+    const onDetected = () => setExtensionInstalled(true);
+    window.addEventListener("CRM_EXTENSION_DETECTED", onDetected);
+    window.addEventListener("CRM_EXTENSION_CONNECTED", onDetected);
+    return () => {
+      window.removeEventListener("CRM_EXTENSION_DETECTED", onDetected);
+      window.removeEventListener("CRM_EXTENSION_CONNECTED", onDetected);
+    };
+  }, []);
 
   // Modal de Pareamento
   const [pairingItem, setPairingItem] = useState<MarketSearchItem | null>(null);
@@ -143,37 +163,153 @@ export function MarketSearchSubTab() {
     }
   };
 
-  const handleSearch = useCallback(async () => {
-    if (!query.trim()) return;
-    setLoading(true);
+  /**
+   * Aciona a busca silenciosa em background na Extensão Chrome v1.5.0+
+   * (usa cookies reais da sessão do navegador, sem tirar o usuário da tela do ERP)
+   */
+  const runExtensionBackgroundSearch = useCallback(
+    (searchQuery: string, targetPlatform: "mercadolivre" | "shopee", maxItems: number) => {
+      return new Promise<{ success: boolean; count?: number; error?: string }>((resolve) => {
+        if (typeof window === "undefined") {
+          return resolve({ success: false, error: "Ambiente inválido" });
+        }
+        const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const timeout = setTimeout(() => {
+          window.removeEventListener("message", onMessage);
+          resolve({ success: false, error: "Tempo esgotado aguardando a extensão." });
+        }, 18000);
 
-    try {
-      const params = new URLSearchParams();
-      params.set("q", query.trim());
-      params.set("platform", platform);
-      params.set("limit", limit.toString());
-      params.set("sort", sort);
-      if (campaignOnly) params.set("campaignOnly", "true");
-      if (topRatedOnly) params.set("topRated", "true");
-      if (fastShippingOnly) params.set("fastShipping", "true");
-      if (freeShippingOnly) params.set("freeShipping", "true");
-      if (minPrice) params.set("minPrice", minPrice);
-      if (maxPrice) params.set("maxPrice", maxPrice);
+        const onMessage = (event: MessageEvent) => {
+          if (
+            event.data?.type === "CRM_SEARCH_MARKETPLACE_RESULT" &&
+            event.data?.requestId === requestId
+          ) {
+            clearTimeout(timeout);
+            window.removeEventListener("message", onMessage);
+            resolve(event.data.result || { success: false });
+          }
+        };
 
-      const res = await fetch(`/api/bi/market-search?${params.toString()}`);
-      if (res.ok) {
+        window.addEventListener("message", onMessage);
+        window.postMessage(
+          {
+            type: "CRM_SEARCH_MARKETPLACE_EXT",
+            requestId,
+            payload: {
+              query: searchQuery,
+              platform: targetPlatform,
+              limit: maxItems,
+            },
+          },
+          "*"
+        );
+      });
+    },
+    []
+  );
+
+  const handleSearch = useCallback(
+    async (overrides?: {
+      query?: string;
+      platform?: MarketplacePlatform | "all";
+      fresh?: boolean;
+      skipAutoExtension?: boolean;
+    }) => {
+      const effectiveQuery = (overrides?.query ?? query).trim();
+      const effectivePlatform = overrides?.platform ?? platform;
+      const isFresh = Boolean(overrides?.fresh);
+
+      if (!effectiveQuery) return;
+      setLoading(true);
+      setSearchStatusMsg("Consultando API Oficial e cache inteligente...");
+
+      try {
+        const buildParams = (freshFlag: boolean) => {
+          const params = new URLSearchParams();
+          params.set("q", effectiveQuery);
+          params.set("platform", effectivePlatform);
+          params.set("limit", limit.toString());
+          params.set("sort", sort);
+          if (freshFlag) params.set("fresh", "true");
+          if (campaignOnly) params.set("campaignOnly", "true");
+          if (topRatedOnly) params.set("topRated", "true");
+          if (fastShippingOnly) params.set("fastShipping", "true");
+          if (freeShippingOnly) params.set("freeShipping", "true");
+          if (minPrice) params.set("minPrice", minPrice);
+          if (maxPrice) params.set("maxPrice", maxPrice);
+          return params;
+        };
+
+        const res = await fetch(`/api/bi/market-search?${buildParams(isFresh).toString()}`);
+        if (!res.ok) {
+          showToast("Erro ao realizar pesquisa de mercado.");
+          return;
+        }
+
         const json: MarketSearchResponse = await res.json();
+
+        // Se o servidor retornou 0 itens (ex: bloqueio de IP em nuvem) e a Extensão Chrome está instalada,
+        // dispara automaticamente a coleta silenciosa em segundo plano com a sessão do navegador!
+        const hasExt =
+          extensionInstalled ||
+          document.documentElement.getAttribute("data-crm-extension-installed") === "true";
+
+        if (
+          (!json.items || json.items.length === 0) &&
+          hasExt &&
+          !overrides?.skipAutoExtension
+        ) {
+          const targetPlat = effectivePlatform === "shopee" ? "shopee" : "mercadolivre";
+          setSearchStatusMsg(
+            `⚡ Coletando anúncios reais no ${
+              targetPlat === "mercadolivre" ? "Mercado Livre" : "Shopee"
+            } via Extensão Chrome...`
+          );
+          const extRes = await runExtensionBackgroundSearch(
+            effectiveQuery,
+            targetPlat,
+            Math.max(limit, 40)
+          );
+
+          if (extRes.success && (extRes.count ?? 0) > 0) {
+            const refreshedRes = await fetch(
+              `/api/bi/market-search?${buildParams(false).toString()}`
+            );
+            if (refreshedRes.ok) {
+              const refreshedJson: MarketSearchResponse = await refreshedRes.json();
+              setData(refreshedJson);
+              showToast(
+                `🎉 ${refreshedJson.items.length} anúncios reais coletados via Extensão Chrome!`
+              );
+              return;
+            }
+          }
+        }
+
         setData(json);
-      } else {
-        showToast("Erro ao realizar pesquisa de mercado.");
+      } catch (err) {
+        console.error("Falha na busca:", err);
+        showToast("Falha de conexão com a API de pesquisa.");
+      } finally {
+        setLoading(false);
+        setSearchStatusMsg(null);
       }
-    } catch (err) {
-      console.error("Falha na busca:", err);
-      showToast("Falha de conexão com a API de pesquisa.");
-    } finally {
-      setLoading(false);
-    }
-  }, [query, platform, limit, sort, campaignOnly, topRatedOnly, fastShippingOnly, freeShippingOnly, minPrice, maxPrice]);
+    },
+    [
+      query,
+      platform,
+      limit,
+      sort,
+      campaignOnly,
+      topRatedOnly,
+      fastShippingOnly,
+      freeShippingOnly,
+      minPrice,
+      maxPrice,
+      extensionInstalled,
+      runExtensionBackgroundSearch,
+    ]
+  );
 
   // Itens filtrados em tempo real pelas colunas
   const filteredItems = useMemo(() => {
@@ -252,37 +388,95 @@ export function MarketSearchSubTab() {
     return `https://shopee.com.br/search?keyword=${encodeURIComponent(q.trim())}#crm_auto_sync=1&erp_url=${encodeURIComponent(origin)}`;
   }, []);
 
-  const handleCollectWithExtension = useCallback((targetPlatform: "mercadolivre" | "shopee" = "mercadolivre") => {
-    if (!query.trim()) return;
-    setIsCollectingWithExt(true);
-    showToast(`⚡ Abrindo ${targetPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"} com coleta da extensão...`);
+  const handleCollectWithExtension = useCallback(
+    async (targetPlatform: "mercadolivre" | "shopee" = "mercadolivre") => {
+      if (!query.trim()) return;
+      setIsCollectingWithExt(true);
 
-    const url = targetPlatform === "mercadolivre" ? getMlSearchUrl(query) : getShopeeSearchUrl(query);
-    window.open(url, "_blank");
+      const hasExt =
+        extensionInstalled ||
+        (typeof document !== "undefined" &&
+          document.documentElement.getAttribute("data-crm-extension-installed") === "true");
 
-    // Polling inteligente para atualizar assim que a extensão enviar
-    let attempts = 0;
-    const pollInterval = setInterval(async () => {
-      attempts++;
-      try {
-        const res = await fetch(`/api/bi/market-search?q=${encodeURIComponent(query.trim())}&platform=${platform}`);
-        if (res.ok) {
-          const json: MarketSearchResponse = await res.json();
-          if (json?.items && json.items.length > 0) {
-            setData(json);
-            setIsCollectingWithExt(false);
-            clearInterval(pollInterval);
-            showToast(`🎉 ${json.items.length} anúncios sincronizados com sucesso pela extensão!`);
-          }
+      // 1. Se a Extensão v1.5.0+ estiver instalada, executa busca silenciosa em background primeiro!
+      if (hasExt) {
+        setSearchStatusMsg(
+          `⚡ Buscando ao vivo no ${
+            targetPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"
+          } via Extensão (sem sair da página)...`
+        );
+        showToast(
+          `⚡ Coletando anúncios ao vivo no ${
+            targetPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"
+          }...`
+        );
+        const bgRes = await runExtensionBackgroundSearch(
+          query.trim(),
+          targetPlatform,
+          Math.max(limit, 40)
+        );
+        if (bgRes.success && (bgRes.count ?? 0) > 0) {
+          setIsCollectingWithExt(false);
+          setSearchStatusMsg(null);
+          await handleSearch({ skipAutoExtension: true });
+          showToast(
+            `🎉 ${bgRes.count} anúncios reais sincronizados pela Extensão Chrome!`
+          );
+          return;
         }
-      } catch {}
-
-      if (attempts >= 12) {
-        setIsCollectingWithExt(false);
-        clearInterval(pollInterval);
+        setSearchStatusMsg(null);
       }
-    }, 2000);
-  }, [query, platform, getMlSearchUrl, getShopeeSearchUrl]);
+
+      // 2. Fallback: abre a aba no marketplace com auto_sync
+      showToast(
+        `⚡ Abrindo ${
+          targetPlatform === "mercadolivre" ? "Mercado Livre" : "Shopee"
+        } com coleta da extensão...`
+      );
+
+      const url =
+        targetPlatform === "mercadolivre"
+          ? getMlSearchUrl(query)
+          : getShopeeSearchUrl(query);
+      window.open(url, "_blank");
+
+      let attempts = 0;
+      const pollInterval = setInterval(async () => {
+        attempts++;
+        try {
+          const res = await fetch(
+            `/api/bi/market-search?q=${encodeURIComponent(query.trim())}&platform=${platform}`
+          );
+          if (res.ok) {
+            const json: MarketSearchResponse = await res.json();
+            if (json?.items && json.items.length > 0) {
+              setData(json);
+              setIsCollectingWithExt(false);
+              clearInterval(pollInterval);
+              showToast(
+                `🎉 ${json.items.length} anúncios sincronizados com sucesso pela extensão!`
+              );
+            }
+          }
+        } catch {}
+
+        if (attempts >= 12) {
+          setIsCollectingWithExt(false);
+          clearInterval(pollInterval);
+        }
+      }, 2000);
+    },
+    [
+      query,
+      platform,
+      limit,
+      extensionInstalled,
+      getMlSearchUrl,
+      getShopeeSearchUrl,
+      runExtensionBackgroundSearch,
+      handleSearch,
+    ]
+  );
 
   // Ouve notificações em tempo real enviadas pela Extensão via BroadcastChannel
   useEffect(() => {
@@ -302,18 +496,23 @@ export function MarketSearchSubTab() {
 
   // Carrega busca padrão inicial ou lê query params caso venha da extensão
   useEffect(() => {
+    let initialQ = query;
+    let initialP: MarketplacePlatform | "all" = platform;
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
       const urlQ = sp.get("q");
       const urlP = sp.get("platform");
       if (urlQ) {
+        initialQ = urlQ;
         setQuery(urlQ);
       }
       if (urlP && (urlP === "mercadolivre" || urlP === "shopee" || urlP === "all")) {
-        setPlatform(urlP as any);
+        initialP = urlP;
+        setPlatform(urlP);
       }
     }
-    handleSearch();
+    handleSearch({ query: initialQ, platform: initialP });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Monitorar anúncio com 1 clique (sem parear de imediato)
@@ -590,9 +789,52 @@ export function MarketSearchSubTab() {
               </button>
             </div>
 
-            <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              <span className="font-medium text-slate-600">Extensão Chrome Integrada (Sem bloqueios de IP)</span>
+            <div className="text-[11px] text-slate-500 flex items-center gap-2 flex-wrap">
+              {searchStatusMsg ? (
+                <span className="inline-flex items-center gap-1.5 text-sky-700 font-semibold">
+                  <RefreshCw className="w-3 h-3 animate-spin" />
+                  {searchStatusMsg}
+                </span>
+              ) : (
+                <>
+                  {data?.source && data.source !== "none" && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-[10px] font-semibold text-slate-700">
+                      Fonte:{" "}
+                      {data.source === "extension_live"
+                        ? "Extensão Chrome (Ao Vivo)"
+                        : data.source === "ml_official_api"
+                        ? "API Oficial ML"
+                        : data.source === "ml_catalog_api"
+                        ? "Catálogo Oficial ML"
+                        : data.source === "supabase_cache"
+                        ? "Cache Inteligente (6h)"
+                        : "Extração ML"}
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    disabled={loading || isCollectingWithExt}
+                    onClick={() => handleSearch({ fresh: true })}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white hover:bg-slate-50 border border-slate-200 text-[10px] font-semibold text-slate-600 hover:text-slate-900 disabled:opacity-50 transition"
+                    title="Ignorar cache de 6h e buscar dados novos agora"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${loading ? "animate-spin" : ""}`} />
+                    Forçar atualização
+                  </button>
+                  <span className="inline-flex items-center gap-1.5">
+                    <span
+                      className={`inline-block w-2 h-2 rounded-full ${
+                        extensionInstalled ? "bg-emerald-500 animate-pulse" : "bg-amber-400"
+                      }`}
+                    />
+                    <span className="font-medium text-slate-600">
+                      {extensionInstalled
+                        ? "Extensão Chrome Conectada (Busca Silenciosa Ativa)"
+                        : "Instale a Extensão v1.5.0 na barra lateral para busca ilimitada"}
+                    </span>
+                  </span>
+                </>
+              )}
             </div>
           </div>
         </form>
@@ -954,7 +1196,7 @@ export function MarketSearchSubTab() {
             </div>
             <button
               type="button"
-              onClick={handleSearch}
+              onClick={() => handleSearch()}
               className="px-3 py-1 bg-indigo-600 text-white rounded-md text-xs font-bold hover:bg-indigo-700 transition"
             >
               Aplicar Faixa
@@ -1021,7 +1263,7 @@ export function MarketSearchSubTab() {
                 <div className="pt-2">
                   <button
                     type="button"
-                    onClick={handleSearch}
+                    onClick={() => handleSearch()}
                     className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg transition"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />

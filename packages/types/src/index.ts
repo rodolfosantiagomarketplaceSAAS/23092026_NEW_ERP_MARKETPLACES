@@ -257,6 +257,8 @@ export interface MarketSearchResponse {
   analytics: MarketSearchAnalytics;
   items: MarketSearchItem[];
   needs_extension?: boolean;
+  source?: 'extension_live' | 'supabase_cache' | 'ml_official_api' | 'ml_catalog_api' | 'server_scraper' | 'none';
+  fetched_at?: string;
 }
 
 export const importFromSearchSchema = z.object({

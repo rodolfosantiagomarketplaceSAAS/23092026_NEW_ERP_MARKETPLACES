@@ -884,10 +884,447 @@ async function handleDownloadPhotos(payload) {
   };
 }
 
+/**
+ * Normaliza termo de busca para slug do Mercado Livre
+ */
+function normalizeMlSearchSlug(query) {
+  return String(query || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^\w\s-]/g, " ")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+/**
+ * Parser estruturado de busca ML a partir de HTML (__PRELOADED_STATE__ JSON + JSON-LD)
+ */
+function parseMlSearchHtmlStructured(html, maxItems = 50) {
+  if (!html || html.length < 1500) return [];
+  if (html.includes("/gz/account-verification")) return [];
+
+  const items = [];
+  const seen = new Set();
+
+  // 1. __PRELOADED_STATE__ JSON
+  try {
+    const stateMatch =
+      html.match(/<script[^>]*id=["']__PRELOADED_STATE__["'][^>]*>([\s\S]*?)<\/script>/i) ||
+      html.match(/window\.__PRELOADED_STATE__\s*=\s*(\{[\s\S]*?\});\s*<\/script>/i);
+
+    if (stateMatch && stateMatch[1]) {
+      const parsed = JSON.parse(stateMatch[1].trim());
+      const results =
+        parsed?.pageState?.initialState?.results ||
+        parsed?.initialState?.results ||
+        parsed?.results ||
+        [];
+
+      if (Array.isArray(results)) {
+        for (const r of results) {
+          if (items.length >= maxItems) break;
+          const poly = r?.polycard || r;
+          const meta = poly?.metadata || {};
+          const components = Array.isArray(poly?.components) ? poly.components : [];
+
+          const externalId = String(meta.id || r.id || "").trim();
+          if (!externalId || seen.has(externalId)) continue;
+
+          const titleComp = components.find((c) => c.type === "title");
+          const priceComp = components.find((c) => c.type === "price");
+          const shippingComp = components.find((c) => c.type === "shipping");
+          const sellerComp = components.find((c) => c.type === "seller");
+          const reviewsComp = components.find((c) => c.type === "reviews");
+
+          const title = String(titleComp?.title?.text || r.title || "").trim();
+          const price = Number(priceComp?.price?.current_price?.value ?? r.price ?? 0);
+          if (!title || !price || isNaN(price)) continue;
+
+          seen.add(externalId);
+
+          const prevRaw = priceComp?.price?.previous_price?.value
+            ? Number(priceComp.price.previous_price.value)
+            : null;
+          const originalPrice = prevRaw && prevRaw > price ? prevRaw : null;
+          const discountPct = priceComp?.price?.discount?.value
+            ? Number(priceComp.price.discount.value)
+            : originalPrice
+            ? Math.round(((originalPrice - price) / originalPrice) * 100)
+            : null;
+
+          const shipText = String(shippingComp?.shipping?.text || "").toLowerCase();
+          const isFull =
+            shippingComp?.shipping?.promise_type === "same_day" ||
+            shipText.includes("full") ||
+            JSON.stringify(shippingComp || {}).toLowerCase().includes("poly_full");
+          const isFree = shipText.includes("grátis") || shipText.includes("gratis");
+
+          const rawUrl = String(meta.url || r.permalink || "");
+          const permalink = rawUrl
+            ? rawUrl.startsWith("http")
+              ? rawUrl
+              : `https://${rawUrl.replace(/^\/+/, "")}`
+            : `https://produto.mercadolivre.com.br/MLB-${externalId.replace(/^MLB-?/i, "")}`;
+
+          const picId = poly?.pictures?.pictures?.[0]?.id;
+          const thumbnail = picId
+            ? `https://http2.mlstatic.com/D_NQ_NP_${picId}-V.webp`
+            : r.thumbnail || null;
+
+          const sellerText = String(sellerComp?.seller?.text || "")
+            .replace(/^Por\s+/i, "")
+            .replace(/\{icon_cockade\}/g, "")
+            .trim();
+
+          items.push({
+            id: externalId,
+            platform: "mercadolivre",
+            external_id: externalId,
+            title,
+            current_price: Number(price.toFixed(2)),
+            original_price: originalPrice ? Number(originalPrice.toFixed(2)) : null,
+            discount_pct: discountPct,
+            shipping_type: isFull ? "ml_full" : isFree ? "ml_correios" : "padrao",
+            is_free_shipping: isFree,
+            is_full_or_flex: isFull,
+            promo_badge: discountPct ? `${discountPct}% OFF` : isFull ? "FULL" : null,
+            campaign_type: discountPct ? "Campanha Mercado Livre" : isFull ? "Full" : null,
+            listing_type: isFull ? "gold_pro" : "gold_special",
+            permalink: permalink.split("#")[0],
+            thumbnail_url: thumbnail,
+            seller_name: sellerText || "Vendedor Mercado Livre",
+            seller_reputation: sellerText ? "platinum" : null,
+            sales_count_approx: 0,
+            rating: Number(reviewsComp?.reviews?.rating_average || 4.8) || 4.8,
+            reviews_count: Number(reviewsComp?.reviews?.total || 0) || 0,
+            is_already_monitored: false,
+            matched_my_listing_id: null,
+          });
+        }
+      }
+    }
+  } catch (e) {
+    console.warn("[Background] Falha parser __PRELOADED_STATE__:", e);
+  }
+
+  return items;
+}
+
+/**
+ * Fallback via aba silenciosa em background (executa JS real + scroll rápido para carregar todos os cards)
+ */
+async function extractSearchViaBackgroundTab(searchUrl, platform = "mercadolivre", maxItems = 50) {
+  let tabId = null;
+  try {
+    const createdTab = await chrome.tabs.create({ url: searchUrl, active: false });
+    tabId = createdTab.id;
+
+    await new Promise((resolve) => {
+      const timeout = setTimeout(resolve, 6500);
+      const listener = (updatedTabId, changeInfo) => {
+        if (updatedTabId === tabId && changeInfo.status === "complete") {
+          setTimeout(() => {
+            clearTimeout(timeout);
+            chrome.tabs.onUpdated.removeListener(listener);
+            resolve();
+          }, 1200);
+        }
+      };
+      chrome.tabs.onUpdated.addListener(listener);
+    });
+
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      args: [platform, maxItems],
+      func: async (plat, limit) => {
+        // Scroll rápido para hidratar lazy-load de imagens e cards
+        try {
+          window.scrollTo(0, 900);
+          await new Promise((r) => setTimeout(r, 350));
+          window.scrollTo(0, 1800);
+          await new Promise((r) => setTimeout(r, 350));
+        } catch {}
+
+        const items = [];
+        const seen = new Set();
+
+        if (plat === "mercadolivre") {
+          // 1. Tenta __PRELOADED_STATE__ no DOM primeiro
+          try {
+            const stateEl = document.getElementById("__PRELOADED_STATE__");
+            const rawState = stateEl ? JSON.parse(stateEl.textContent || "{}") : window.__PRELOADED_STATE__;
+            const resList = rawState?.pageState?.initialState?.results || rawState?.initialState?.results || [];
+            if (Array.isArray(resList) && resList.length > 0) {
+              for (const r of resList) {
+                if (items.length >= limit) break;
+                const poly = r?.polycard || r;
+                const meta = poly?.metadata || {};
+                const comps = Array.isArray(poly?.components) ? poly.components : [];
+                const extId = String(meta.id || r.id || "").trim();
+                if (!extId || seen.has(extId)) continue;
+                const titleComp = comps.find((c) => c.type === "title");
+                const priceComp = comps.find((c) => c.type === "price");
+                const shipComp = comps.find((c) => c.type === "shipping");
+                const sellerComp = comps.find((c) => c.type === "seller");
+                const revComp = comps.find((c) => c.type === "reviews");
+                const title = String(titleComp?.title?.text || r.title || "").trim();
+                const price = Number(priceComp?.price?.current_price?.value ?? r.price ?? 0);
+                if (!title || !price) continue;
+                seen.add(extId);
+                const prevRaw = priceComp?.price?.previous_price?.value ? Number(priceComp.price.previous_price.value) : null;
+                const orig = prevRaw && prevRaw > price ? prevRaw : null;
+                const disc = priceComp?.price?.discount?.value
+                  ? Number(priceComp.price.discount.value)
+                  : orig
+                  ? Math.round(((orig - price) / orig) * 100)
+                  : null;
+                const shipTxt = String(shipComp?.shipping?.text || "").toLowerCase();
+                const isFull = shipTxt.includes("full") || JSON.stringify(shipComp || {}).toLowerCase().includes("poly_full");
+                const isFree = shipTxt.includes("grátis") || shipTxt.includes("gratis");
+                const rawUrl = String(meta.url || r.permalink || "");
+                const permalink = rawUrl
+                  ? rawUrl.startsWith("http")
+                    ? rawUrl
+                    : `https://${rawUrl.replace(/^\/+/, "")}`
+                  : `https://produto.mercadolivre.com.br/MLB-${extId.replace(/^MLB-?/i, "")}`;
+                const picId = poly?.pictures?.pictures?.[0]?.id;
+                const thumb = picId ? `https://http2.mlstatic.com/D_NQ_NP_${picId}-V.webp` : null;
+                const seller = String(sellerComp?.seller?.text || "").replace(/^Por\s+/i, "").replace(/\{icon_cockade\}/g, "").trim();
+
+                items.push({
+                  id: extId,
+                  platform: "mercadolivre",
+                  external_id: extId,
+                  title,
+                  current_price: Number(price.toFixed(2)),
+                  original_price: orig ? Number(orig.toFixed(2)) : null,
+                  discount_pct: disc,
+                  shipping_type: isFull ? "ml_full" : isFree ? "ml_correios" : "padrao",
+                  is_free_shipping: isFree,
+                  is_full_or_flex: isFull,
+                  promo_badge: disc ? `${disc}% OFF` : isFull ? "FULL" : null,
+                  campaign_type: disc ? "Campanha ML" : isFull ? "Full" : null,
+                  listing_type: isFull ? "gold_pro" : "gold_special",
+                  permalink: permalink.split("#")[0],
+                  thumbnail_url: thumb,
+                  seller_name: seller || "Vendedor Mercado Livre",
+                  seller_reputation: seller ? "platinum" : null,
+                  sales_count_approx: 0,
+                  rating: Number(revComp?.reviews?.rating_average || 4.8) || 4.8,
+                  reviews_count: Number(revComp?.reviews?.total || 0) || 0,
+                  is_already_monitored: false,
+                  matched_my_listing_id: null,
+                });
+              }
+            }
+          } catch {}
+
+          // 2. Complemento via DOM poly-card / ui-search-layout__item
+          if (items.length < 5) {
+            const cards = Array.from(document.querySelectorAll("div.poly-card, li.ui-search-layout__item"));
+            for (const el of cards) {
+              if (items.length >= limit) break;
+              const titleEl = el.querySelector("a.poly-component__title, .poly-component__title a, h2 a, a.ui-search-link");
+              const title = titleEl?.innerText?.trim();
+              const rawHref = titleEl?.getAttribute("href") || titleEl?.href || "";
+              if (!title || !rawHref) continue;
+
+              const fracEl = el.querySelector(".poly-price__current .andes-money-amount__fraction, .andes-money-amount__fraction");
+              const centsEl = el.querySelector(".poly-price__current .andes-money-amount__cents, .andes-money-amount__cents");
+              const frac = fracEl ? parseFloat(fracEl.innerText.replace(/\./g, "").trim()) : 0;
+              const cents = centsEl ? parseFloat(centsEl.innerText.trim()) / 100 : 0;
+              const price = frac + cents;
+              if (!price || isNaN(price)) continue;
+
+              const permalink = rawHref.split("#")[0];
+              const idMatch = permalink.match(/(MLB-?\d+)/i) || el.innerHTML.match(/wid=(MLB\d+)/i);
+              const extId = idMatch ? idMatch[1].replace("-", "").toUpperCase() : `MLB_${items.length}_${Date.now()}`;
+              if (seen.has(extId)) continue;
+              seen.add(extId);
+
+              const imgEl = el.querySelector("img");
+              let thumb = imgEl?.getAttribute("data-src") || imgEl?.src || null;
+              if (thumb && thumb.startsWith("data:")) thumb = null;
+
+              const sellerEl = el.querySelector(".poly-component__seller");
+              const seller = sellerEl ? sellerEl.innerText.replace(/^Por\s+/i, "").trim() : "Vendedor Mercado Livre";
+              const isFull = /full/i.test(el.innerHTML);
+              const isFree = /frete gr[áa]tis|chegar[áa] gr[áa]tis/i.test(el.innerText);
+
+              items.push({
+                id: extId,
+                platform: "mercadolivre",
+                external_id: extId,
+                title,
+                current_price: Number(price.toFixed(2)),
+                original_price: null,
+                discount_pct: null,
+                shipping_type: isFull ? "ml_full" : isFree ? "ml_correios" : "padrao",
+                is_free_shipping: isFree,
+                is_full_or_flex: isFull,
+                promo_badge: isFull ? "FULL" : null,
+                campaign_type: isFull ? "Full" : null,
+                listing_type: isFull ? "gold_pro" : "gold_special",
+                permalink,
+                thumbnail_url: thumb,
+                seller_name: seller,
+                seller_reputation: null,
+                sales_count_approx: 0,
+                rating: 4.8,
+                reviews_count: 0,
+                is_already_monitored: false,
+                matched_my_listing_id: null,
+              });
+            }
+          }
+        } else if (plat === "shopee") {
+          const cards = Array.from(document.querySelectorAll('div[data-sqe="item"], div.shopee-search-item-result__item, a[data-sqe="link"]'));
+          for (let i = 0; i < cards.length && items.length < limit; i++) {
+            const el = cards[i];
+            const linkEl = el.tagName === "A" ? el : el.querySelector("a");
+            const rawHref = linkEl?.getAttribute("href") || "";
+            if (!rawHref) continue;
+            const imgEl = el.querySelector("img");
+            const titleEl = el.querySelector('div[data-sqe="name"], [class*="line-clamp"]') || imgEl;
+            const title = (titleEl?.innerText || titleEl?.alt || "").trim();
+            const priceMatch = (el.innerText || "").match(/R\$\s*([\d.,]+)/i);
+            const price = priceMatch
+              ? parseFloat(priceMatch[1].replace(/\./g, "").replace(",", "."))
+              : 0;
+            if (!title || !price) continue;
+            const extId = `SHP_${Date.now()}_${i}`;
+            items.push({
+              id: extId,
+              platform: "shopee",
+              external_id: extId,
+              title,
+              current_price: Number(price.toFixed(2)),
+              original_price: null,
+              discount_pct: null,
+              shipping_type: "shopee_xpress",
+              is_free_shipping: true,
+              is_full_or_flex: true,
+              promo_badge: "Shopee",
+              campaign_type: null,
+              listing_type: "oficial",
+              permalink: rawHref.startsWith("http") ? rawHref : `https://shopee.com.br${rawHref}`,
+              thumbnail_url: imgEl?.src || null,
+              seller_name: "Vendedor Shopee",
+              seller_reputation: "indicado",
+              sales_count_approx: 0,
+              rating: 4.8,
+              reviews_count: 0,
+              is_already_monitored: false,
+              matched_my_listing_id: null,
+            });
+          }
+        }
+
+        return items;
+      },
+    });
+
+    return Array.isArray(results?.[0]?.result) ? results[0].result : [];
+  } catch (err) {
+    console.warn("[Background] Erro na busca em aba silenciosa:", err);
+    return [];
+  } finally {
+    if (tabId !== null) {
+      chrome.tabs.remove(tabId).catch(() => {});
+    }
+  }
+}
+
+/**
+ * Busca de Mercado Silenciosa via Extensão (sessão humana real do navegador -> bulk-sync ERP)
+ */
+async function handleSearchMarketplaceBackground(payload) {
+  const {
+    query = "",
+    platform = "mercadolivre",
+    limit = 40,
+    erpUrl: rawErpUrl,
+  } = payload || {};
+
+  const cleanQuery = String(query || "").trim();
+  if (!cleanQuery) {
+    return { success: false, error: "Termo de busca vazio." };
+  }
+
+  const targetPlatform = platform === "shopee" ? "shopee" : "mercadolivre";
+  const maxItems = Math.min(60, Math.max(15, Number(limit) || 40));
+  const searchUrl =
+    targetPlatform === "shopee"
+      ? `https://shopee.com.br/search?keyword=${encodeURIComponent(cleanQuery)}`
+      : `https://lista.mercadolivre.com.br/${encodeURIComponent(normalizeMlSearchSlug(cleanQuery))}`;
+
+  let items = [];
+
+  // 1. Tentativa ultrarrápida (~800ms): fetch com cookies humanos + parser __PRELOADED_STATE__
+  if (targetPlatform === "mercadolivre") {
+    try {
+      const res = await fetch(searchUrl, {
+        credentials: "include",
+        headers: {
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+          "Accept-Language": "pt-BR,pt;q=0.9",
+        },
+      });
+      if (res.ok) {
+        const html = await res.text();
+        items = parseMlSearchHtmlStructured(html, maxItems);
+      }
+    } catch (err) {
+      console.warn("[Background] Fetch direto busca ML falhou, tentando aba silenciosa:", err);
+    }
+  }
+
+  // 2. Fallback automático: aba silenciosa em background (executa JS real + scroll)
+  if (items.length === 0) {
+    items = await extractSearchViaBackgroundTab(searchUrl, targetPlatform, maxItems);
+  }
+
+  if (items.length === 0) {
+    return {
+      success: false,
+      count: 0,
+      items: [],
+      error: "Não foi possível extrair anúncios automaticamente. Tente abrir a busca no navegador.",
+    };
+  }
+
+  // 3. Persiste no ERP (bulk-sync -> Supabase snapshot 6h + memória)
+  try {
+    await postToErp(
+      "/api/bi/market-search/bulk-sync",
+      {
+        query: cleanQuery,
+        platform: targetPlatform,
+        items,
+      },
+      { erpUrl: rawErpUrl }
+    );
+  } catch (syncErr) {
+    console.warn("[Background] Aviso ao sincronizar busca com ERP:", syncErr);
+  }
+
+  return {
+    success: true,
+    count: items.length,
+    query: cleanQuery,
+    platform: targetPlatform,
+    items,
+  };
+}
+
 const handlers = {
   ERP_SESSION: (req) => handleErpSession(req),
   SYNC_COMPETITOR: (req) => handleSyncCompetitor(req.payload),
   SYNC_SEARCH_ITEMS: (req) => handleSyncSearchItems(req.erpUrl, req.payload),
+  SEARCH_MARKETPLACE_BACKGROUND: (req) => handleSearchMarketplaceBackground(req.payload),
   SYNC_STORE_ITEMS: (req) => handleSyncStoreItems(req.erpUrl, req.payload),
   SAVE_OPPORTUNITY_LISTING: (req) => handleSaveOpportunityListing(req.erpUrl, req.payload),
   GET_MY_LISTINGS: (req) => handleGetMyListings(req.platform, req.query),

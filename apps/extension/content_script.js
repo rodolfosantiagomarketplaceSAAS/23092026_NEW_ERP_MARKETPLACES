@@ -55,7 +55,7 @@
     document.documentElement.setAttribute("data-crm-extension-installed", "true");
     window.dispatchEvent(
       new CustomEvent("CRM_EXTENSION_DETECTED", {
-        detail: { version: (typeof chrome !== "undefined" && chrome.runtime?.getManifest?.()?.version) || "1.4.0", origin: currentErpUrl },
+        detail: { version: (typeof chrome !== "undefined" && chrome.runtime?.getManifest?.()?.version) || "1.5.0", origin: currentErpUrl },
       })
     );
 
@@ -74,6 +74,28 @@
             "_blank"
           );
         }
+      } else if (event.data?.type === "CRM_SEARCH_MARKETPLACE_EXT") {
+        const { requestId, payload } = event.data;
+        chrome.runtime.sendMessage(
+          {
+            action: "SEARCH_MARKETPLACE_BACKGROUND",
+            payload: { ...(payload || {}), erpUrl: currentErpUrl },
+          },
+          (response) => {
+            const err = chrome.runtime.lastError;
+            window.postMessage(
+              {
+                type: "CRM_SEARCH_MARKETPLACE_RESULT",
+                requestId,
+                result: response || {
+                  success: false,
+                  error: err ? err.message : "Sem resposta da extensão",
+                },
+              },
+              "*"
+            );
+          }
+        );
       } else if (event.data?.type === "CRM_CHECK_COMPETITOR_LINK") {
         const { requestId, payload } = event.data;
         chrome.runtime.sendMessage(
