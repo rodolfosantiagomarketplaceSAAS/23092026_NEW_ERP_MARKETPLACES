@@ -15,7 +15,6 @@ import {
   toBrazilDateKeyAndLabel,
 } from "@/lib/mercadolivre/sales-analytics";
 import type {
-  AccountReputationHealth,
   ActionRadarPayload,
   ConversionDropAlertItem,
   CriticalMarginAlertItem,
@@ -31,7 +30,7 @@ const ML_API_BASE = "https://api.mercadolibre.com";
 /**
  * Long-lived server-side caches to protect Supabase, Vercel, and Mercado Livre free-tier limits:
  * - Dashboard payload cache: 30 minutes (1800s)
- * - ML live API (reputation, visits, questions): 60 minutes (3600s)
+ * - ML live API (unanswered questions): 60 minutes (3600s)
  */
 export const DASHBOARD_CACHE_TTL_MS = 30 * 60 * 1000;
 export const ML_ENRICHMENT_CACHE_TTL_MS = 60 * 60 * 1000;
@@ -44,20 +43,25 @@ interface CacheEntry<T> {
   generatedAt: string;
 }
 
+export interface MlQuestionsSummary {
+  unansweredQuestionsCount: number;
+  overdueQuestionsCount: number;
+}
+
 const globalForDashboardCache = globalThis as unknown as {
-  __erpExecutiveDashboardCache?: Map<string, CacheEntry<ExecutiveDashboardResponse>>;
-  __erpMlLiveEnrichmentCache?: Map<string, CacheEntry<MlLiveEnrichment>>;
+  __erpExecutiveDashboardCacheV2?: Map<string, CacheEntry<ExecutiveDashboardResponse>>;
+  __erpMlQuestionsCache?: Map<string, CacheEntry<MlQuestionsSummary>>;
 };
 
 const dashboardCache =
-  globalForDashboardCache.__erpExecutiveDashboardCache ??
+  globalForDashboardCache.__erpExecutiveDashboardCacheV2 ??
   new Map<string, CacheEntry<ExecutiveDashboardResponse>>();
-globalForDashboardCache.__erpExecutiveDashboardCache = dashboardCache;
+globalForDashboardCache.__erpExecutiveDashboardCacheV2 = dashboardCache;
 
-const mlLiveCache =
-  globalForDashboardCache.__erpMlLiveEnrichmentCache ??
-  new Map<string, CacheEntry<MlLiveEnrichment>>();
-globalForDashboardCache.__erpMlLiveEnrichmentCache = mlLiveCache;
+const mlQuestionsCache =
+  globalForDashboardCache.__erpMlQuestionsCache ??
+  new Map<string, CacheEntry<MlQuestionsSummary>>();
+globalForDashboardCache.__erpMlQuestionsCache = mlQuestionsCache;
 
 function pruneMapIfNeeded<T>(map: Map<string, CacheEntry<T>>) {
   if (map.size <= MAX_CACHE_ENTRIES) return;
@@ -71,20 +75,6 @@ function pruneMapIfNeeded<T>(map: Map<string, CacheEntry<T>>) {
     const oldestKey = map.keys().next().value;
     if (oldestKey) map.delete(oldestKey);
   }
-}
-
-export interface MlLiveEnrichment {
-  reputation: AccountReputationHealth;
-  currentPeriodVisits: number | null;
-  previousPeriodVisits: number | null;
-}
-
-function calcDeltaPct(current: number, previous: number): number | null {
-  if (!Number.isFinite(previous) || previous === 0) {
-    if (current > 0) return 100;
-    return null;
-  }
-  return roundCurrency(((current - previous) / Math.abs(previous)) * 100);
 }
 
 function addDaysToIsoDate(dateStr: string, deltaDays: number): string {
@@ -108,7 +98,6 @@ function diagnoseDecliningProduct(row: {
   listingVisits: number;
   unitsSold: number;
   prevUnitsSold: number;
-  marginPct: number;
 }): { diagnosis: string; tone: "danger" | "warning" | "info" } {
   if (row.listingStatus && row.listingStatus !== "active") {
     return { diagnosis: "Anúncio pausado ou encerrado", tone: "danger" };
@@ -131,7 +120,7 @@ function diagnoseDecliningProduct(row: {
 async function fetchJsonWithTimeout<T>(
   url: string,
   accessToken: string,
-  timeoutMs = 5500
+  timeoutMs = 5000
 ): Promise<{ ok: boolean; status: number; data: T | null }> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
@@ -156,14 +145,13 @@ async function fetchJsonWithTimeout<T>(
   }
 }
 
-async function fetchMlLiveEnrichment(params: {
+async function fetchMlQuestionsSummary(params: {
   ctx: Pick<AuthContext, "userId" | "organizationId">;
   accounts: MarketplaceAccountInfo[];
   selectedStore: string;
-  daysSpan: number;
   forceRefresh: boolean;
-}): Promise<MlLiveEnrichment> {
-  const { ctx, accounts, selectedStore, daysSpan, forceRefresh } = params;
+}): Promise<MlQuestionsSummary> {
+  const { ctx, accounts, selectedStore, forceRefresh } = params;
   const mlAccounts = accounts.filter(
     (a) =>
       a.platform === "mercadolivre" &&
@@ -171,63 +159,22 @@ async function fetchMlLiveEnrichment(params: {
       (selectedStore === "all" || a.account_name === selectedStore)
   );
 
-  const fallbackReputation: AccountReputationHealth = {
-    levelId: null,
-    powerSellerStatus: null,
-    claimsRatePct: null,
-    claimsCount: 0,
-    delayedRatePct: null,
-    delayedCount: 0,
-    cancellationsRatePct: null,
-    cancellationsCount: 0,
-    openClaimsCount: 0,
-    unansweredQuestionsCount: 0,
-    overdueQuestionsCount: 0,
-    accountName: mlAccounts[0]?.account_name ?? null,
-    source: mlAccounts.length > 0 ? "db_fallback" : "no_account",
-    lastSyncedAt: null,
-  };
-
   if (mlAccounts.length === 0) {
-    return {
-      reputation: fallbackReputation,
-      currentPeriodVisits: null,
-      previousPeriodVisits: null,
-    };
+    return { unansweredQuestionsCount: 0, overdueQuestionsCount: 0 };
   }
 
   const tenantKey = ctx.organizationId ?? ctx.userId;
-  const cacheKey = `${tenantKey}:${selectedStore}:${Math.min(daysSpan, 60)}`;
+  const cacheKey = `${tenantKey}:${selectedStore}`;
   if (!forceRefresh) {
-    const cached = mlLiveCache.get(cacheKey);
+    const cached = mlQuestionsCache.get(cacheKey);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
     }
   }
 
-  // Query at most 3 connected accounts to stay lightweight & rate-limit safe
   const accountsToQuery = mlAccounts.slice(0, 3);
-  const windowDays = Math.min(Math.max(daysSpan * 2, 2), 90);
-
-  let primaryLevelId: string | null = null;
-  let primaryPowerSeller: string | null = null;
-  let primaryAccountName: string | null = accountsToQuery[0]?.account_name ?? null;
-  let claimsRateSum = 0;
-  let claimsRateCount = 0;
-  let claimsCountTotal = 0;
-  let delayedRateSum = 0;
-  let delayedRateCount = 0;
-  let delayedCountTotal = 0;
-  let cancelRateSum = 0;
-  let cancelRateCount = 0;
-  let cancelCountTotal = 0;
   let unansweredTotal = 0;
   let overdueQuestionsTotal = 0;
-  let currentVisitsTotal = 0;
-  let previousVisitsTotal = 0;
-  let gotAnyLiveVisits = false;
-  let gotAnyLiveReputation = false;
-
   const fifteenMinAgoMs = Date.now() - 15 * 60 * 1000;
 
   await Promise.all(
@@ -240,68 +187,13 @@ async function fetchMlLiveEnrichment(params: {
 
       if (!token) return;
 
-      const [userRes, questionsRes, visitsRes] = await Promise.all([
-        fetchJsonWithTimeout<{
-          nickname?: string;
-          seller_reputation?: {
-            level_id?: string | null;
-            power_seller_status?: string | null;
-            metrics?: {
-              claims?: { rate?: number; value?: number };
-              delayed_handling_time?: { rate?: number; value?: number };
-              cancellations?: { rate?: number; value?: number };
-            };
-          };
-        }>(`${ML_API_BASE}/users/${account.seller_id}`, token),
-        fetchJsonWithTimeout<{
-          total?: number;
-          questions?: Array<{ date_created?: string }>;
-        }>(
-          `${ML_API_BASE}/questions/search?seller_id=${account.seller_id}&status=UNANSWERED&limit=50&api_version=4`,
-          token
-        ),
-        fetchJsonWithTimeout<{
-          results?: Array<{ date?: string; total?: number }>;
-        }>(
-          `${ML_API_BASE}/users/${account.seller_id}/items_visits/time_window?last=${windowDays}&unit=day`,
-          token
-        ),
-      ]);
-
-      if (userRes.ok && userRes.data?.seller_reputation) {
-        gotAnyLiveReputation = true;
-        const rep = userRes.data.seller_reputation;
-        if (!primaryLevelId && rep.level_id) primaryLevelId = rep.level_id;
-        if (!primaryPowerSeller && rep.power_seller_status) {
-          primaryPowerSeller = rep.power_seller_status;
-        }
-        if (userRes.data.nickname && !primaryAccountName) {
-          primaryAccountName = userRes.data.nickname;
-        }
-
-        const metrics = rep.metrics;
-        if (metrics?.claims) {
-          if (typeof metrics.claims.rate === "number") {
-            claimsRateSum += metrics.claims.rate * 100;
-            claimsRateCount += 1;
-          }
-          claimsCountTotal += Number(metrics.claims.value || 0);
-        }
-        if (metrics?.delayed_handling_time) {
-          if (typeof metrics.delayed_handling_time.rate === "number") {
-            delayedRateSum += metrics.delayed_handling_time.rate * 100;
-            delayedRateCount += 1;
-          }
-          delayedCountTotal += Number(metrics.delayed_handling_time.value || 0);
-        }
-        if (metrics?.cancellations) {
-          if (typeof metrics.cancellations.rate === "number") {
-            cancelRateSum += metrics.cancellations.rate * 100;
-            cancelRateCount += 1;
-          }
-          cancelCountTotal += Number(metrics.cancellations.value || 0);
-        }
-      }
+      const questionsRes = await fetchJsonWithTimeout<{
+        total?: number;
+        questions?: Array<{ date_created?: string }>;
+      }>(
+        `${ML_API_BASE}/questions/search?seller_id=${account.seller_id}&status=UNANSWERED&limit=50&api_version=4`,
+        token
+      );
 
       if (questionsRes.ok && questionsRes.data) {
         const list = questionsRes.data.questions ?? [];
@@ -315,94 +207,28 @@ async function fetchMlLiveEnrichment(params: {
           }
         }
       }
-
-      if (visitsRes.ok && Array.isArray(visitsRes.data?.results) && visitsRes.data.results.length > 0) {
-        gotAnyLiveVisits = true;
-        const results = visitsRes.data.results;
-        const len = results.length;
-        const currSlice = results.slice(Math.max(len - daysSpan, 0));
-        const prevSlice = results.slice(
-          Math.max(len - daysSpan * 2, 0),
-          Math.max(len - daysSpan, 0)
-        );
-        for (const pt of currSlice) {
-          currentVisitsTotal += Number(pt.total || 0);
-        }
-        for (const pt of prevSlice) {
-          previousVisitsTotal += Number(pt.total || 0);
-        }
-      }
     })
   );
 
-  const enrichment: MlLiveEnrichment = {
-    reputation: {
-      levelId: primaryLevelId,
-      powerSellerStatus: primaryPowerSeller,
-      claimsRatePct:
-        claimsRateCount > 0 ? roundCurrency(claimsRateSum / claimsRateCount) : null,
-      claimsCount: claimsCountTotal,
-      delayedRatePct:
-        delayedRateCount > 0 ? roundCurrency(delayedRateSum / delayedRateCount) : null,
-      delayedCount: delayedCountTotal,
-      cancellationsRatePct:
-        cancelRateCount > 0 ? roundCurrency(cancelRateSum / cancelRateCount) : null,
-      cancellationsCount: cancelCountTotal,
-      openClaimsCount: claimsCountTotal,
-      unansweredQuestionsCount: unansweredTotal,
-      overdueQuestionsCount: overdueQuestionsTotal,
-      accountName: primaryAccountName,
-      source: gotAnyLiveReputation ? "ml_live" : "db_fallback",
-      lastSyncedAt: new Date().toISOString(),
-    },
-    currentPeriodVisits: gotAnyLiveVisits ? currentVisitsTotal : null,
-    previousPeriodVisits: gotAnyLiveVisits ? previousVisitsTotal : null,
+  const summary: MlQuestionsSummary = {
+    unansweredQuestionsCount: unansweredTotal,
+    overdueQuestionsCount: overdueQuestionsTotal,
   };
 
-  pruneMapIfNeeded(mlLiveCache);
-  mlLiveCache.set(cacheKey, {
-    value: enrichment,
+  pruneMapIfNeeded(mlQuestionsCache);
+  mlQuestionsCache.set(cacheKey, {
+    value: summary,
     expiresAt: Date.now() + ML_ENRICHMENT_CACHE_TTL_MS,
     generatedAt: new Date().toISOString(),
   });
 
-  return enrichment;
+  return summary;
 }
 
 interface RawRpcPayload {
   days_span: number;
   prev_from_date: string;
   prev_to_date: string;
-  current_kpis: {
-    valid_orders_count: number;
-    cancelled_orders_count: number;
-    units_sold: number;
-    gross_sales: number;
-    net_profit: number;
-    seller_transfer: number;
-    ml_commission: number;
-    ml_shipping: number;
-    ml_promo_rebate: number;
-    tax_total: number;
-    operational_costs: number;
-  };
-  previous_kpis: {
-    valid_orders_count: number;
-    cancelled_orders_count: number;
-    units_sold: number;
-    gross_sales: number;
-    net_profit: number;
-    seller_transfer: number;
-    ml_commission: number;
-    ml_shipping: number;
-    ml_promo_rebate: number;
-    tax_total: number;
-    operational_costs: number;
-  };
-  listings_totals: {
-    active_listings_count: number;
-    total_listing_visits: number;
-  };
   daily_series: Array<{
     date_key: string;
     date_label: string;
@@ -475,7 +301,6 @@ function mapProductRow(
       listingVisits,
       unitsSold,
       prevUnitsSold,
-      marginPct,
     });
     base.diagnosis = diag.diagnosis;
     base.diagnosisTone = diag.tone;
@@ -506,7 +331,7 @@ async function computeFallbackFromSupabase(params: {
   const currEndIso = `${toDate}T23:59:59.999-03:00`;
 
   const ORDER_COLS =
-    "ml_order_id,ml_pack_id,store_name,order_date,shipping_deadline,logistic_type,status,mlb_id,sku,product_title,product_thumbnail,permalink,quantity,gross_sale_amount,ml_commission_amount,ml_shipping_cost,ml_promo_rebate,tax_amount,cost_material,cost_packaging,cost_logistics,cost_printing,cost_accessories_kit,seller_transfer_profit,net_operational_profit";
+    "ml_order_id,ml_pack_id,store_name,order_date,shipping_deadline,logistic_type,status,mlb_id,sku,product_title,product_thumbnail,permalink,quantity,gross_sale_amount,net_operational_profit";
 
   let ordersQuery = applyTenantFilter(
     admin
@@ -552,7 +377,7 @@ async function computeFallbackFromSupabase(params: {
   if (isMissingTableError(ordersRes.error)) {
     return {
       schemaReady: false,
-      payload: buildEmptyRawRpc(daysSpan, fromDate, toDate, prevFromDate, prevToDate),
+      payload: buildEmptyRawRpc(daysSpan, fromDate, prevFromDate, prevToDate),
     };
   }
 
@@ -573,47 +398,21 @@ async function computeFallbackFromSupabase(params: {
     }
   >();
 
-  let activeListingsCount = 0;
-  let totalListingVisits = 0;
-
   for (const l of listings) {
     const mlbId = String(l.external_id || "").trim().toUpperCase();
     if (!mlbId) continue;
-    const status = String(l.status || "active");
-    const visits = Number(l.visits || 0);
-    if (status === "active") {
-      activeListingsCount += 1;
-      totalListingVisits += visits;
-    }
     listingsMap.set(mlbId, {
       mlb_id: mlbId,
       title: String(l.title || mlbId),
       thumbnail_url: l.thumbnail_url ? String(l.thumbnail_url) : null,
       permalink: l.permalink ? String(l.permalink) : null,
-      listing_status: status,
+      listing_status: String(l.status || "active"),
       available_quantity: Number(l.available_quantity || 0),
-      visits,
+      visits: Number(l.visits || 0),
     });
   }
 
-  const emptyKpi = () => ({
-    valid_orders_count: 0,
-    cancelled_orders_count: 0,
-    units_sold: 0,
-    gross_sales: 0,
-    net_profit: 0,
-    seller_transfer: 0,
-    ml_commission: 0,
-    ml_shipping: 0,
-    ml_promo_rebate: 0,
-    tax_total: 0,
-    operational_costs: 0,
-  });
-
-  const currKpis = emptyKpi();
-  const prevKpis = emptyKpi();
   const storeSet = new Set<string>();
-
   const currDaily = new Map<string, { gross: number; profit: number; orders: number; units: number }>();
   const prevDaily = new Map<string, { gross: number; profit: number; orders: number; units: number }>();
 
@@ -636,42 +435,16 @@ async function computeFallbackFromSupabase(params: {
 
   for (const o of orders) {
     if (o.store_name) storeSet.add(String(o.store_name));
+    const status = String(o.status || "paid");
+    if (isCancelledOrReturned(status)) continue;
+
     const orderDateStr = String(o.order_date || "");
     const orderMs = Date.parse(orderDateStr);
     const isCurrent = orderMs >= currStartMs;
-    const status = String(o.status || "paid");
-    const targetKpi = isCurrent ? currKpis : prevKpis;
-
-    if (isCancelledOrReturned(status)) {
-      targetKpi.cancelled_orders_count += 1;
-      continue;
-    }
 
     const qty = Number(o.quantity || 1);
     const gross = Number(o.gross_sale_amount || 0);
-    const comm = Number(o.ml_commission_amount || 0);
-    const ship = Number(o.ml_shipping_cost || 0);
-    const rebate = Number(o.ml_promo_rebate || 0);
-    const tax = Number(o.tax_amount || 0);
-    const opCosts =
-      Number(o.cost_material || 0) +
-      Number(o.cost_packaging || 0) +
-      Number(o.cost_logistics || 0) +
-      Number(o.cost_printing || 0) +
-      Number(o.cost_accessories_kit || 0);
-    const transfer = Number(o.seller_transfer_profit || 0);
     const netProfit = Number(o.net_operational_profit || 0);
-
-    targetKpi.valid_orders_count += 1;
-    targetKpi.units_sold += qty;
-    targetKpi.gross_sales = roundCurrency(targetKpi.gross_sales + gross);
-    targetKpi.net_profit = roundCurrency(targetKpi.net_profit + netProfit);
-    targetKpi.seller_transfer = roundCurrency(targetKpi.seller_transfer + transfer);
-    targetKpi.ml_commission = roundCurrency(targetKpi.ml_commission + comm);
-    targetKpi.ml_shipping = roundCurrency(targetKpi.ml_shipping + ship);
-    targetKpi.ml_promo_rebate = roundCurrency(targetKpi.ml_promo_rebate + rebate);
-    targetKpi.tax_total = roundCurrency(targetKpi.tax_total + tax);
-    targetKpi.operational_costs = roundCurrency(targetKpi.operational_costs + opCosts);
 
     const { dateKey } = toBrazilDateKeyAndLabel(orderDateStr);
     const dailyMap = isCurrent ? currDaily : prevDaily;
@@ -838,12 +611,6 @@ async function computeFallbackFromSupabase(params: {
       days_span: daysSpan,
       prev_from_date: prevFromDate,
       prev_to_date: prevToDate,
-      current_kpis: currKpis,
-      previous_kpis: prevKpis,
-      listings_totals: {
-        active_listings_count: activeListingsCount,
-        total_listing_visits: totalListingVisits,
-      },
       daily_series: dailySeries,
       top_by_revenue: topByRevenue,
       top_by_profit: topByProfit,
@@ -860,7 +627,6 @@ async function computeFallbackFromSupabase(params: {
 function buildEmptyRawRpc(
   daysSpan: number,
   fromDate: string,
-  _toDate: string,
   prevFromDate: string,
   prevToDate: string
 ): RawRpcPayload {
@@ -879,26 +645,10 @@ function buildEmptyRawRpc(
       prev_orders_count: 0,
     });
   }
-  const zeroKpis = {
-    valid_orders_count: 0,
-    cancelled_orders_count: 0,
-    units_sold: 0,
-    gross_sales: 0,
-    net_profit: 0,
-    seller_transfer: 0,
-    ml_commission: 0,
-    ml_shipping: 0,
-    ml_promo_rebate: 0,
-    tax_total: 0,
-    operational_costs: 0,
-  };
   return {
     days_span: daysSpan,
     prev_from_date: prevFromDate,
     prev_to_date: prevToDate,
-    current_kpis: zeroKpis,
-    previous_kpis: zeroKpis,
-    listings_totals: { active_listings_count: 0, total_listing_visits: 0 },
     daily_series,
     top_by_revenue: [],
     top_by_profit: [],
@@ -936,9 +686,7 @@ export async function getExecutiveDashboardData(params: {
   }
 
   const admin = createSupabaseAdminClient();
-  const daysSpan = diffDaysInclusive(fromDate, toDate);
 
-  // Run DB aggregation + integrations list in parallel
   const [rpcRes, integrations] = await Promise.all([
     admin.rpc("fn_get_executive_dashboard_metrics", {
       p_organization_id: ctx.organizationId,
@@ -972,48 +720,12 @@ export async function getExecutiveDashboardData(params: {
     raw = fallback.payload;
   }
 
-  // Enrich with cached ML Live API (60 min TTL)
-  const mlLive = await fetchMlLiveEnrichment({
+  const questionsSummary = await fetchMlQuestionsSummary({
     ctx,
     accounts: integrations,
     selectedStore,
-    daysSpan,
     forceRefresh,
   });
-
-  const curr = raw.current_kpis;
-  const prev = raw.previous_kpis;
-
-  const grossSales = roundCurrency(Number(curr.gross_sales || 0));
-  const prevGrossSales = roundCurrency(Number(prev.gross_sales || 0));
-
-  const netProfit = roundCurrency(Number(curr.net_profit || 0));
-  const prevNetProfit = roundCurrency(Number(prev.net_profit || 0));
-
-  const validOrders = Number(curr.valid_orders_count || 0);
-  const prevValidOrders = Number(prev.valid_orders_count || 0);
-
-  const marginPct = grossSales > 0 ? roundCurrency((netProfit / grossSales) * 100) : 0;
-  const prevMarginPct =
-    prevGrossSales > 0 ? roundCurrency((prevNetProfit / prevGrossSales) * 100) : 0;
-
-  const avgTicket = validOrders > 0 ? roundCurrency(grossSales / validOrders) : 0;
-  const prevAvgTicket =
-    prevValidOrders > 0 ? roundCurrency(prevGrossSales / prevValidOrders) : 0;
-
-  // Visits & conversion rate (prefer live ML time-window visits; fallback to DB listings visits)
-  const dbVisits = Number(raw.listings_totals?.total_listing_visits || 0);
-  const totalVisits =
-    mlLive.currentPeriodVisits !== null ? mlLive.currentPeriodVisits : dbVisits;
-  const prevTotalVisits =
-    mlLive.previousPeriodVisits !== null ? mlLive.previousPeriodVisits : dbVisits;
-  const visitsSource: "ml_live" | "db_fallback" =
-    mlLive.currentPeriodVisits !== null ? "ml_live" : "db_fallback";
-
-  const conversionRate =
-    totalVisits > 0 ? roundCurrency((validOrders / totalVisits) * 100) : 0;
-  const prevConversionRate =
-    prevTotalVisits > 0 ? roundCurrency((prevValidOrders / prevTotalVisits) * 100) : 0;
 
   const dailySeries: DailyEvolutionPoint[] = (raw.daily_series ?? []).map((d) => ({
     dateKey: d.date_key,
@@ -1026,19 +738,6 @@ export async function getExecutiveDashboardData(params: {
     prevNetProfit: roundCurrency(Number(d.prev_net_profit || 0)),
     prevOrdersCount: Number(d.prev_orders_count || 0),
   }));
-
-  const grossSparkline = dailySeries.map((d) => d.grossSales);
-  const profitSparkline = dailySeries.map((d) => d.netProfit);
-  const ticketSparkline = dailySeries.map((d) =>
-    d.ordersCount > 0 ? roundCurrency(d.grossSales / d.ordersCount) : 0
-  );
-  const ordersSparkline = dailySeries.map((d) => d.ordersCount);
-
-  const mlFeesAndShippingTotal = roundCurrency(
-    Number(curr.ml_commission || 0) +
-      Number(curr.ml_shipping || 0) -
-      Number(curr.ml_promo_rebate || 0)
-  );
 
   const nowMs = Date.now();
   const urgentShipments: UrgentShipmentAlertItem[] = (raw.urgent_shipments ?? []).map((u) => {
@@ -1097,8 +796,8 @@ export async function getExecutiveDashboardData(params: {
     conversionDrop,
     criticalMargin,
     urgentShipments,
-    unansweredQuestionsCount: mlLive.reputation.unansweredQuestionsCount,
-    overdueQuestionsCount: mlLive.reputation.overdueQuestionsCount,
+    unansweredQuestionsCount: questionsSummary.unansweredQuestionsCount,
+    overdueQuestionsCount: questionsSummary.overdueQuestionsCount,
     criticalMarginThresholdPct: CRITICAL_MARGIN_THRESHOLD_PCT,
   };
 
@@ -1129,46 +828,6 @@ export async function getExecutiveDashboardData(params: {
     },
     stores: Array.from(storeSet).sort(),
     selectedStore,
-    kpis: {
-      grossSales: {
-        value: grossSales,
-        previousValue: prevGrossSales,
-        deltaPct: calcDeltaPct(grossSales, prevGrossSales),
-        sparkline: grossSparkline,
-        validOrdersCount: validOrders,
-        previousValidOrdersCount: prevValidOrders,
-        cancelledOrdersCount: Number(curr.cancelled_orders_count || 0),
-        unitsSold: Number(curr.units_sold || 0),
-      },
-      netProfit: {
-        value: netProfit,
-        previousValue: prevNetProfit,
-        deltaPct: calcDeltaPct(netProfit, prevNetProfit),
-        sparkline: profitSparkline,
-        marginPct,
-        previousMarginPct: prevMarginPct,
-        marginDeltaPts: roundCurrency(marginPct - prevMarginPct),
-        mlFeesAndShippingTotal,
-        taxTotal: roundCurrency(Number(curr.tax_total || 0)),
-        operationalCostsTotal: roundCurrency(Number(curr.operational_costs || 0)),
-      },
-      averageTicket: {
-        value: avgTicket,
-        previousValue: prevAvgTicket,
-        deltaPct: calcDeltaPct(avgTicket, prevAvgTicket),
-        sparkline: ticketSparkline,
-      },
-      conversionRate: {
-        value: conversionRate,
-        previousValue: prevConversionRate,
-        deltaPct: calcDeltaPct(conversionRate, prevConversionRate),
-        sparkline: ordersSparkline,
-        totalVisits,
-        previousTotalVisits: prevTotalVisits,
-        visitsSource,
-      },
-      reputation: mlLive.reputation,
-    },
     dailySeries,
     topProductsByRevenue: (raw.top_by_revenue ?? []).map((r) => mapProductRow(r, false)),
     topProductsByProfit: (raw.top_by_profit ?? []).map((r) => mapProductRow(r, false)),

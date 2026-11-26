@@ -9,13 +9,12 @@ import type {
 } from "@/types/executive-dashboard";
 import { getTodayBrazilISO } from "@/components/vendas/formatters";
 import { DashboardFilterBar } from "./DashboardFilterBar";
-import { ExecutiveKpiCards } from "./ExecutiveKpiCards";
 import { ActionRadarPanel } from "./ActionRadarPanel";
 import { EvolutionChartCard } from "./EvolutionChartCard";
 import { PortfolioIntelligenceSection } from "./PortfolioIntelligenceSection";
 
 const CLIENT_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutos no navegador (zero requests ao trocar de aba)
-const CLIENT_CACHE_PREFIX = "erp_exec_dash_v1:";
+const CLIENT_CACHE_PREFIX = "erp_exec_dash_v2:";
 
 interface ClientCacheRecord {
   data: ExecutiveDashboardResponse;
@@ -172,7 +171,7 @@ export function ExecutiveDashboardClient() {
             Central de Comando Executiva
           </h1>
           <p className="text-xs text-slate-500">
-            Faturamento, margem líquida real, conversão, reputação e alertas acionáveis do Mercado Livre.
+            Alertas acionáveis, evolução diária e inteligência de portfólio no Mercado Livre.
           </p>
         </div>
 
@@ -245,16 +244,13 @@ export function ExecutiveDashboardClient() {
         <DashboardSkeleton />
       ) : data ? (
         <div className={`space-y-4 transition-opacity ${loading ? "opacity-60" : "opacity-100"}`}>
-          {/* Bloco A: 5 KPIs Principais */}
-          <ExecutiveKpiCards kpis={data.kpis} />
-
-          {/* Bloco B: Radar de Ação Imediata */}
+          {/* Radar de Ação Imediata */}
           <ActionRadarPanel radar={data.actionRadar} />
 
-          {/* Bloco C: Gráfico Principal de Evolução */}
+          {/* Gráfico Principal de Evolução */}
           <EvolutionChartCard series={data.dailySeries} />
 
-          {/* Bloco D: Inteligência de Portfólio (Curva A vs. Produtos em Queda) */}
+          {/* Inteligência de Portfólio (Curva A vs. Produtos em Queda) */}
           <PortfolioIntelligenceSection
             topByRevenue={data.topProductsByRevenue}
             topByProfit={data.topProductsByProfit}
@@ -269,18 +265,6 @@ export function ExecutiveDashboardClient() {
 function DashboardSkeleton() {
   return (
     <div className="space-y-4 animate-pulse">
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <div
-            key={i}
-            className="bg-white border border-[#E2E8F0] rounded p-3.5 h-[148px] flex flex-col justify-between"
-          >
-            <div className="h-3 w-28 bg-slate-200 rounded" />
-            <div className="h-7 w-36 bg-slate-200 rounded" />
-            <div className="h-7 w-full bg-slate-100 rounded" />
-          </div>
-        ))}
-      </div>
       <div className="bg-white border border-[#E2E8F0] rounded h-[160px]" />
       <div className="bg-white border border-[#E2E8F0] rounded h-[320px]" />
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">

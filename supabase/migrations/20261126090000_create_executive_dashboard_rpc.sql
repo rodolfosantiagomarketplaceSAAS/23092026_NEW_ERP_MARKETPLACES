@@ -5,11 +5,10 @@
 -- Descrição:
 --   1. Índices compostos para acelerar consolidação por período/loja/anúncio
 --   2. Função RPC `fn_get_executive_dashboard_metrics` que agrega diretamente no
---      PostgreSQL (período atual vs. período anterior, série diária, Curva A,
+--      PostgreSQL (série diária comparada ao período anterior, Curva A,
 --      produtos em queda e radar de alertas), retornando um JSONB compacto.
 -- ==============================================================================
 
--- Índices compostos para consultas analíticas rápidas
 CREATE INDEX IF NOT EXISTS idx_ml_sales_orders_org_store_date
     ON public.ml_sales_orders(organization_id, store_name, order_date DESC);
 
@@ -20,9 +19,6 @@ CREATE INDEX IF NOT EXISTS idx_ml_sales_orders_paid_deadline
 CREATE INDEX IF NOT EXISTS idx_my_listings_external_id
     ON public.my_listings(external_id);
 
--- ==============================================================================
--- RPC: fn_get_executive_dashboard_metrics
--- ==============================================================================
 CREATE OR REPLACE FUNCTION public.fn_get_executive_dashboard_metrics(
     p_organization_id UUID,
     p_user_id UUID,
@@ -49,7 +45,6 @@ BEGIN
     v_prev_to_date := p_from_date - INTERVAL '1 day';
     v_prev_from_date := v_prev_to_date - ((v_days_span - 1) * INTERVAL '1 day');
 
-    -- Fronteiras exatas no fuso America/Sao_Paulo (-03:00)
     v_curr_start := (p_from_date::TEXT || ' 00:00:00 America/Sao_Paulo')::TIMESTAMPTZ;
     v_curr_end   := (p_to_date::TEXT   || ' 23:59:59.999 America/Sao_Paulo')::TIMESTAMPTZ;
     v_prev_start := (v_prev_from_date::TEXT || ' 00:00:00 America/Sao_Paulo')::TIMESTAMPTZ;
@@ -57,7 +52,6 @@ BEGIN
 
     WITH tenant_orders AS (
         SELECT
-            o.id,
             o.ml_order_id,
             o.ml_pack_id,
             o.store_name,
@@ -73,18 +67,6 @@ BEGIN
             o.permalink,
             COALESCE(o.quantity, 1) AS quantity,
             COALESCE(o.gross_sale_amount, 0)::NUMERIC AS gross_sale_amount,
-            COALESCE(o.ml_commission_amount, 0)::NUMERIC AS ml_commission_amount,
-            COALESCE(o.ml_shipping_cost, 0)::NUMERIC AS ml_shipping_cost,
-            COALESCE(o.ml_promo_rebate, 0)::NUMERIC AS ml_promo_rebate,
-            COALESCE(o.tax_amount, 0)::NUMERIC AS tax_amount,
-            (
-                COALESCE(o.cost_material, 0) +
-                COALESCE(o.cost_packaging, 0) +
-                COALESCE(o.cost_logistics, 0) +
-                COALESCE(o.cost_printing, 0) +
-                COALESCE(o.cost_accessories_kit, 0)
-            )::NUMERIC AS operational_costs,
-            COALESCE(o.seller_transfer_profit, 0)::NUMERIC AS seller_transfer_profit,
             COALESCE(o.net_operational_profit, 0)::NUMERIC AS net_operational_profit
         FROM public.ml_sales_orders o
         WHERE
@@ -94,51 +76,16 @@ BEGIN
             )
             AND o.order_date >= v_prev_start
             AND o.order_date <= v_curr_end
+            AND o.status NOT IN ('cancelled', 'returned')
             AND (p_store_name IS NULL OR p_store_name = '' OR p_store_name = 'all' OR o.store_name = p_store_name)
     ),
-    curr_orders AS (
+    curr_valid AS (
         SELECT * FROM tenant_orders
         WHERE order_date >= v_curr_start AND order_date <= v_curr_end
     ),
-    prev_orders AS (
+    prev_valid AS (
         SELECT * FROM tenant_orders
         WHERE order_date >= v_prev_start AND order_date <= v_prev_end
-    ),
-    curr_valid AS (
-        SELECT * FROM curr_orders WHERE status NOT IN ('cancelled', 'returned')
-    ),
-    prev_valid AS (
-        SELECT * FROM prev_orders WHERE status NOT IN ('cancelled', 'returned')
-    ),
-    curr_kpis AS (
-        SELECT
-            COUNT(*)::INTEGER AS valid_orders_count,
-            (SELECT COUNT(*)::INTEGER FROM curr_orders WHERE status IN ('cancelled', 'returned')) AS cancelled_orders_count,
-            COALESCE(SUM(quantity), 0)::INTEGER AS units_sold,
-            ROUND(COALESCE(SUM(gross_sale_amount), 0), 2) AS gross_sales,
-            ROUND(COALESCE(SUM(net_operational_profit), 0), 2) AS net_profit,
-            ROUND(COALESCE(SUM(seller_transfer_profit), 0), 2) AS seller_transfer,
-            ROUND(COALESCE(SUM(ml_commission_amount), 0), 2) AS ml_commission,
-            ROUND(COALESCE(SUM(ml_shipping_cost), 0), 2) AS ml_shipping,
-            ROUND(COALESCE(SUM(ml_promo_rebate), 0), 2) AS ml_promo_rebate,
-            ROUND(COALESCE(SUM(tax_amount), 0), 2) AS tax_total,
-            ROUND(COALESCE(SUM(operational_costs), 0), 2) AS operational_costs
-        FROM curr_valid
-    ),
-    prev_kpis AS (
-        SELECT
-            COUNT(*)::INTEGER AS valid_orders_count,
-            (SELECT COUNT(*)::INTEGER FROM prev_orders WHERE status IN ('cancelled', 'returned')) AS cancelled_orders_count,
-            COALESCE(SUM(quantity), 0)::INTEGER AS units_sold,
-            ROUND(COALESCE(SUM(gross_sale_amount), 0), 2) AS gross_sales,
-            ROUND(COALESCE(SUM(net_operational_profit), 0), 2) AS net_profit,
-            ROUND(COALESCE(SUM(seller_transfer_profit), 0), 2) AS seller_transfer,
-            ROUND(COALESCE(SUM(ml_commission_amount), 0), 2) AS ml_commission,
-            ROUND(COALESCE(SUM(ml_shipping_cost), 0), 2) AS ml_shipping,
-            ROUND(COALESCE(SUM(ml_promo_rebate), 0), 2) AS ml_promo_rebate,
-            ROUND(COALESCE(SUM(tax_amount), 0), 2) AS tax_total,
-            ROUND(COALESCE(SUM(operational_costs), 0), 2) AS operational_costs
-        FROM prev_valid
     ),
     date_spine AS (
         SELECT
@@ -190,11 +137,7 @@ BEGIN
             l.permalink,
             l.status::TEXT AS listing_status,
             COALESCE(l.available_quantity, 0)::INTEGER AS available_quantity,
-            COALESCE(l.visits, 0)::INTEGER AS visits,
-            COALESCE(l.sales_last_7_days, 0)::INTEGER AS sales_last_7_days,
-            COALESCE(l.sales_last_30_days, 0)::INTEGER AS sales_last_30_days,
-            COALESCE(l.current_price, 0)::NUMERIC AS current_price,
-            l.shipping_type
+            COALESCE(l.visits, 0)::INTEGER AS visits
         FROM public.my_listings l
         WHERE
             l.platform = 'mercadolivre'
@@ -220,9 +163,7 @@ BEGIN
             COUNT(*)::INTEGER AS orders_count,
             COALESCE(SUM(quantity), 0)::INTEGER AS units_sold,
             ROUND(COALESCE(SUM(gross_sale_amount), 0), 2) AS gross_sales,
-            ROUND(COALESCE(SUM(net_operational_profit), 0), 2) AS net_profit,
-            ROUND(COALESCE(SUM(ml_shipping_cost), 0), 2) AS ml_shipping,
-            ROUND(COALESCE(SUM(ml_commission_amount), 0), 2) AS ml_commission
+            ROUND(COALESCE(SUM(net_operational_profit), 0), 2) AS net_profit
         FROM curr_valid
         GROUP BY mlb_id
     ),
@@ -384,13 +325,6 @@ BEGIN
         ORDER BY o.shipping_deadline ASC
         LIMIT 8
     ),
-    listings_totals AS (
-        SELECT
-            COUNT(*)::INTEGER AS active_listings_count,
-            COALESCE(SUM(visits), 0)::INTEGER AS total_listing_visits
-        FROM tenant_listings
-        WHERE listing_status = 'active'
-    ),
     distinct_stores AS (
         SELECT DISTINCT o.store_name
         FROM public.ml_sales_orders o
@@ -407,9 +341,6 @@ BEGIN
         'days_span', v_days_span,
         'prev_from_date', to_char(v_prev_from_date, 'YYYY-MM-DD'),
         'prev_to_date', to_char(v_prev_to_date, 'YYYY-MM-DD'),
-        'current_kpis', (SELECT to_jsonb(curr_kpis.*) FROM curr_kpis),
-        'previous_kpis', (SELECT to_jsonb(prev_kpis.*) FROM prev_kpis),
-        'listings_totals', (SELECT to_jsonb(listings_totals.*) FROM listings_totals),
         'daily_series', COALESCE((SELECT jsonb_agg(to_jsonb(daily_series.*)) FROM daily_series), '[]'::jsonb),
         'top_by_revenue', COALESCE((SELECT jsonb_agg(to_jsonb(top_by_revenue.*)) FROM top_by_revenue), '[]'::jsonb),
         'top_by_profit', COALESCE((SELECT jsonb_agg(to_jsonb(top_by_profit.*)) FROM top_by_profit), '[]'::jsonb),
@@ -430,4 +361,4 @@ GRANT EXECUTE ON FUNCTION public.fn_get_executive_dashboard_metrics(UUID, UUID, 
     TO authenticated, service_role;
 
 COMMENT ON FUNCTION public.fn_get_executive_dashboard_metrics IS
-    'Consolida KPIs executivos, comparativo contra período anterior, série diária, Curva A, quedas e alertas operacionais diretamente no PostgreSQL com mínimo egress.';
+    'Consolida série diária comparada ao período anterior, Curva A, quedas e alertas operacionais diretamente no PostgreSQL com mínimo egress.';

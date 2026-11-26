@@ -6,54 +6,6 @@ export type DashboardPeriodPreset =
   | "thisMonth"
   | "custom";
 
-export interface KpiMetricWithDelta {
-  value: number;
-  previousValue: number;
-  deltaPct: number | null;
-  sparkline: number[];
-}
-
-export interface AccountReputationHealth {
-  levelId: string | null; // e.g. '5_green', '4_light_green', '3_yellow', '2_orange', '1_red'
-  powerSellerStatus: string | null; // 'platinum' | 'gold' | 'silver' | null
-  claimsRatePct: number | null;
-  claimsCount: number;
-  delayedRatePct: number | null;
-  delayedCount: number;
-  cancellationsRatePct: number | null;
-  cancellationsCount: number;
-  openClaimsCount: number;
-  unansweredQuestionsCount: number;
-  overdueQuestionsCount: number; // > 15 min without answer
-  accountName: string | null;
-  source: "ml_live" | "db_fallback" | "no_account";
-  lastSyncedAt: string | null;
-}
-
-export interface ExecutiveKpisPayload {
-  grossSales: KpiMetricWithDelta & {
-    validOrdersCount: number;
-    previousValidOrdersCount: number;
-    cancelledOrdersCount: number;
-    unitsSold: number;
-  };
-  netProfit: KpiMetricWithDelta & {
-    marginPct: number;
-    previousMarginPct: number;
-    marginDeltaPts: number;
-    mlFeesAndShippingTotal: number;
-    taxTotal: number;
-    operationalCostsTotal: number;
-  };
-  averageTicket: KpiMetricWithDelta;
-  conversionRate: KpiMetricWithDelta & {
-    totalVisits: number;
-    previousTotalVisits: number;
-    visitsSource: "ml_live" | "db_fallback";
-  };
-  reputation: AccountReputationHealth;
-}
-
 export interface DailyEvolutionPoint {
   dateKey: string;
   dateLabel: string;
@@ -163,7 +115,6 @@ export interface ExecutiveDashboardResponse {
   };
   stores: string[];
   selectedStore: string;
-  kpis: ExecutiveKpisPayload;
   dailySeries: DailyEvolutionPoint[];
   topProductsByRevenue: PortfolioProductRow[];
   topProductsByProfit: PortfolioProductRow[];
