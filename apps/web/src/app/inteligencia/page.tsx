@@ -17,30 +17,23 @@ function InteligenciaContent() {
       ? "radar"
       : rawTab === "salvos" || rawTab === "criar"
       ? "salvos"
-      : rawTab === "lojas" || rawTab === "concorrentes"
-      ? "lojas"
-      : "pesquisa";
+      : rawTab === "pesquisa"
+      ? "pesquisa"
+      : "lojas";
   const [activeSubTab, setActiveSubTab] = useState<
     "radar" | "pesquisa" | "lojas" | "salvos"
   >(initialTab);
 
   useEffect(() => {
     const tabParam = searchParams.get("tab");
-    if (
-      tabParam === "radar" ||
-      tabParam === "pesquisa" ||
-      tabParam === "lojas" ||
-      tabParam === "concorrentes" ||
-      tabParam === "salvos" ||
-      tabParam === "criar"
-    ) {
-      setActiveSubTab(
-        tabParam === "concorrentes"
-          ? "lojas"
-          : tabParam === "criar"
-          ? "salvos"
-          : (tabParam as any)
-      );
+    if (tabParam === "concorrentes" || tabParam === "lojas") {
+      setActiveSubTab("lojas");
+    } else if (tabParam === "criar" || tabParam === "salvos") {
+      setActiveSubTab("salvos");
+    } else if (tabParam === "pesquisa") {
+      setActiveSubTab("pesquisa");
+    } else if (tabParam === "radar") {
+      setActiveSubTab("radar");
     }
   }, [searchParams]);
 
@@ -49,90 +42,121 @@ function InteligenciaContent() {
     router.replace(`/inteligencia?tab=${tab}`, { scroll: false });
   };
 
+  const activeSubTabLabel =
+    activeSubTab === "lojas"
+      ? "Espião de Concorrentes"
+      : activeSubTab === "salvos"
+      ? "Anúncios para Analisar & Criar"
+      : activeSubTab === "pesquisa"
+      ? "Pesquisa de Mercado"
+      : "Radar Comparativo";
+
   return (
     <>
-      <Header platformName="Módulo de Inteligência de Negócios" />
+      <Header platformName={activeSubTabLabel} />
       <main className="p-4 sm:p-6 flex-1 min-w-0 w-full">
         <div className="max-w-[1600px] w-full mx-auto space-y-5 min-w-0">
-          {/* Cabeçalho do Módulo & Navegação de Subabas */}
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-1 border-b border-slate-200">
-            <div>
-              <h1 className="text-lg font-bold text-slate-900 tracking-tight flex items-center gap-2">
-                Inteligência de Negócios & Concorrência
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-700">
+          {/* Cabeçalho do Módulo & Navegação de Subabas no Canto Direito */}
+          <div className="flex flex-col xl:flex-row xl:items-center justify-between gap-3 pb-3 border-b border-slate-200">
+            {/* Lado Esquerdo: Identificação do Módulo */}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight flex items-center gap-2">
+                  Inteligência de Negócios
+                </h1>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700">
                   Mercado Livre & Shopee
                 </span>
-              </h1>
-              <p className="text-xs text-slate-500 mt-0.5">
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">
+                  {activeSubTabLabel}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-1 max-w-2xl">
                 {activeSubTab === "lojas"
-                  ? "Espião de lojas concorrentes no Mercado Livre: extração via extensão, análise de datas de criação, vendas e clonagem de anúncios."
+                  ? "Espião de lojas concorrentes no Mercado Livre: extração via extensão, datas de criação, vendas e clonagem de anúncios."
                   : activeSubTab === "salvos"
-                  ? "Fila de anúncios interessantes salvos via webscraping para analisar, criar na sua loja, marcar com OK em verde e gerenciar."
+                  ? "Fila de anúncios interessantes salvos para analisar, calcular lucro real, criar na sua loja e gerenciar."
                   : activeSubTab === "pesquisa"
-                  ? "Pesquisa ativa de produtos com raio-X estatístico, campanhas, melhores preços e pareamento 1-clique."
-                  : "Monitoramento 1:N de anúncios concorrentes pareados com atualização em tempo real (Supabase Realtime)."}
+                  ? "Pesquisa ativa de produtos com raio-X estatístico, campanhas promocionais, menores preços e pareamento 1-clique."
+                  : "Monitoramento 1:N de anúncios concorrentes pareados com sincronização e atualização de preços em tempo real."}
               </p>
             </div>
 
-            {/* Seletor de Subabas Estilizado */}
-            <div className="flex flex-wrap items-center bg-slate-100 p-1 rounded-xl border border-slate-200 text-xs font-semibold self-start sm:self-auto shadow-2xs">
-              <button
-                type="button"
-                onClick={() => handleSelectTab("lojas")}
-                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
-                  activeSubTab === "lojas"
-                    ? "bg-white text-indigo-700 shadow-sm font-bold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
+            {/* Lado Direito ("no canto direito as subabas"): Subabas Alinhadas */}
+            <div className="flex items-center justify-end ml-auto shrink-0 max-w-full overflow-x-auto pb-1 xl:pb-0">
+              <nav
+                aria-label="Subabas de Inteligência de Negócios"
+                className="flex items-center gap-1 bg-slate-100/90 p-1 rounded-xl border border-slate-200 text-[11px] font-semibold shadow-2xs"
               >
-                <Store className="w-4 h-4 text-indigo-600" />
-                <span>Espião de Concorrentes</span>
-              </button>
+                {/* 1. Espião de Concorrentes */}
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab("lojas")}
+                  className={`px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                    activeSubTab === "lojas"
+                      ? "bg-white text-indigo-700 shadow-xs font-bold border border-slate-200/80"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
+                  }`}
+                  title="Espião de Lojas e Anúncios Concorrentes no Mercado Livre"
+                >
+                  <Store className={`w-3.5 h-3.5 ${activeSubTab === "lojas" ? "text-indigo-600" : "text-slate-500"}`} />
+                  <span>Espião de Concorrentes</span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSelectTab("salvos")}
-                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
-                  activeSubTab === "salvos"
-                    ? "bg-white text-indigo-700 shadow-sm font-bold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                <BookmarkCheck className="w-4 h-4 text-amber-600" />
-                <span>Anúncios p/ Analisar & Criar</span>
-                <span className="text-[10px] bg-emerald-600 text-white px-1.5 py-0.2 rounded-full font-black">
-                  NOVO
-                </span>
-              </button>
+                {/* 2. Anúncios para Analisar & Criar */}
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab("salvos")}
+                  className={`px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                    activeSubTab === "salvos"
+                      ? "bg-white text-indigo-700 shadow-xs font-bold border border-slate-200/80"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
+                  }`}
+                  title="Fila de Anúncios Concorrentes Salvos para Analisar e Criar"
+                >
+                  <BookmarkCheck className={`w-3.5 h-3.5 ${activeSubTab === "salvos" ? "text-amber-600" : "text-slate-500"}`} />
+                  <span>Anúncios para Analisar & Criar</span>
+                  <span className="text-[9px] bg-emerald-600 text-white px-1.5 py-0.2 rounded-full font-black">
+                    NOVO
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSelectTab("pesquisa")}
-                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
-                  activeSubTab === "pesquisa"
-                    ? "bg-white text-indigo-700 shadow-sm font-bold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                <Search className="w-4 h-4 text-indigo-600" />
-                <span>Pesquisa de Mercado</span>
-                <span className="text-[10px] bg-indigo-600 text-white px-1.5 py-0.2 rounded-full font-bold">
-                  PRO
-                </span>
-              </button>
+                {/* 3. Pesquisa de Mercado */}
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab("pesquisa")}
+                  className={`px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                    activeSubTab === "pesquisa"
+                      ? "bg-white text-indigo-700 shadow-xs font-bold border border-slate-200/80"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
+                  }`}
+                  title="Pesquisa Ativa no Mercado Livre e Análise de Preços"
+                >
+                  <Search className={`w-3.5 h-3.5 ${activeSubTab === "pesquisa" ? "text-indigo-600" : "text-slate-500"}`} />
+                  <span>Pesquisa de Mercado</span>
+                  <span className="text-[9px] bg-indigo-600 text-white px-1.5 py-0.2 rounded-full font-bold">
+                    PRO
+                  </span>
+                </button>
 
-              <button
-                type="button"
-                onClick={() => handleSelectTab("radar")}
-                className={`px-3.5 py-2 rounded-lg transition-all flex items-center gap-2 cursor-pointer ${
-                  activeSubTab === "radar"
-                    ? "bg-white text-indigo-700 shadow-sm font-bold"
-                    : "text-slate-600 hover:text-slate-900"
-                }`}
-              >
-                <Radio className="w-4 h-4 text-emerald-600" />
-                <span>Radar Comparativo (1:N)</span>
-              </button>
+                {/* 4. Radar Comparativo */}
+                <button
+                  type="button"
+                  onClick={() => handleSelectTab("radar")}
+                  className={`px-2.5 py-1.5 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer whitespace-nowrap ${
+                    activeSubTab === "radar"
+                      ? "bg-white text-indigo-700 shadow-xs font-bold border border-slate-200/80"
+                      : "text-slate-600 hover:text-slate-900 hover:bg-slate-200/50"
+                  }`}
+                  title="Radar Comparativo de Preços e BuyBox em Tempo Real (1:N)"
+                >
+                  <Radio className={`w-3.5 h-3.5 ${activeSubTab === "radar" ? "text-emerald-600" : "text-slate-500"}`} />
+                  <span>Radar Comparativo</span>
+                  <span className="text-[9px] bg-emerald-50 text-emerald-700 border border-emerald-300 px-1.5 py-0.2 rounded-full font-bold">
+                    1:N
+                  </span>
+                </button>
+              </nav>
             </div>
           </div>
 

@@ -12,6 +12,9 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  Search,
+  BookmarkCheck,
   Zap,
   Building2,
   LogOut,
@@ -60,12 +63,43 @@ function SidebarContent() {
   }
 
   const isSuperAdmin = profile?.email?.toLowerCase() === "rodolfo.mecatronica@gmail.com";
-  const isRadar = pathname === "/inteligencia" && searchParams?.get("tab") === "radar";
-  const isLojas =
-    pathname === "/inteligencia" &&
-    (searchParams?.get("tab") === "lojas" || searchParams?.get("tab") === "concorrentes");
+  const isBiPage = pathname === "/inteligencia" || pathname === "/";
+  const rawTab = searchParams?.get("tab");
+  const currentBiTab =
+    rawTab === "radar"
+      ? "radar"
+      : rawTab === "salvos" || rawTab === "criar"
+      ? "salvos"
+      : rawTab === "pesquisa"
+      ? "pesquisa"
+      : "lojas";
 
-  const menuItems = [
+  const [biOpen, setBiOpen] = useState(true);
+
+  useEffect(() => {
+    if (isBiPage) {
+      setBiOpen(true);
+    }
+  }, [isBiPage]);
+
+  interface SubMenuItem {
+    label: string;
+    href: string;
+    icon: React.ComponentType<{ className?: string }>;
+    tab: string;
+    badge?: string | null;
+  }
+
+  interface MenuItem {
+    label: string;
+    href: string;
+    icon: React.ComponentType<{ className?: string }>;
+    badge?: string | null;
+    isPrimary?: boolean;
+    children?: SubMenuItem[];
+  }
+
+  const menuItems: MenuItem[] = [
     {
       label: "Dashboard Geral",
       href: "/dashboard",
@@ -79,18 +113,6 @@ function SidebarContent() {
       badge: null,
     },
     {
-      label: "Radar Comparativo",
-      href: "/inteligencia?tab=radar",
-      icon: Radio,
-      badge: "1:N",
-    },
-    {
-      label: "Espião de Concorrentes",
-      href: "/inteligencia?tab=lojas",
-      icon: Store,
-      badge: "NOVO",
-    },
-    {
       label: "Gestão de Vendas & Repasse",
       href: "/vendas/gestao-diaria",
       icon: Wallet,
@@ -98,10 +120,40 @@ function SidebarContent() {
     },
     {
       label: "Inteligência de Negócios",
-      href: "/inteligencia",
+      href: "/inteligencia?tab=lojas",
       icon: TrendingUp,
       badge: "PRO",
       isPrimary: true,
+      children: [
+        {
+          label: "Espião de Concorrentes",
+          href: "/inteligencia?tab=lojas",
+          icon: Store,
+          tab: "lojas",
+          badge: null,
+        },
+        {
+          label: "Anúncios para Analisar & Criar",
+          href: "/inteligencia?tab=salvos",
+          icon: BookmarkCheck,
+          tab: "salvos",
+          badge: "NOVO",
+        },
+        {
+          label: "Pesquisa de Mercado",
+          href: "/inteligencia?tab=pesquisa",
+          icon: Search,
+          tab: "pesquisa",
+          badge: null,
+        },
+        {
+          label: "Radar Comparativo",
+          href: "/inteligencia?tab=radar",
+          icon: Radio,
+          tab: "radar",
+          badge: "1:N",
+        },
+      ],
     },
     {
       label: "Configurações & APIs",
@@ -129,7 +181,7 @@ function SidebarContent() {
       }`}
     >
       {/* Topo: Logo & Toggle */}
-      <div>
+      <div className="flex-1 overflow-y-auto min-h-0">
         <div className="h-14 border-b border-slate-800 flex items-center justify-between px-3">
           <div className="flex items-center space-x-2.5 overflow-hidden">
             <div className="w-8 h-8 rounded-lg bg-sky-600 flex items-center justify-center text-white font-black text-xs shrink-0 shadow-sm shadow-sky-600/30">
@@ -179,18 +231,123 @@ function SidebarContent() {
         <nav className="p-2 space-y-1">
           {menuItems.map((item) => {
             const Icon = item.icon;
-            let isActive = false;
-            if (item.href === "/inteligencia?tab=radar") {
-              isActive = isRadar;
-            } else if (item.href === "/inteligencia?tab=lojas") {
-              isActive = isLojas;
-            } else if (item.href === "/inteligencia") {
-              isActive = (pathname === "/inteligencia" || pathname === "/") && !isRadar && !isLojas;
-            } else if (item.href === "/vendas/gestao-diaria") {
-              isActive = Boolean(pathname?.startsWith("/vendas"));
-            } else {
-              isActive = pathname === item.href;
+
+            // Se o item tem sub-abas (Inteligência de Negócios)
+            if (item.children && item.children.length > 0) {
+              if (collapsed) {
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={`flex items-center justify-center rounded-md p-2 text-xs font-medium transition-all ${
+                      isBiPage
+                        ? "bg-sky-600 text-white shadow-xs"
+                        : "text-slate-300 hover:bg-slate-800/80 hover:text-white"
+                    }`}
+                    title={`${item.label} (Espião, Analisar, Pesquisa, Radar)`}
+                  >
+                    <Icon className={`w-4 h-4 ${isBiPage ? "text-white" : "text-slate-400 group-hover:text-white"}`} />
+                  </Link>
+                );
+              }
+
+              return (
+                <div key={item.label} className="space-y-1">
+                  <div
+                    className={`flex items-center justify-between rounded-md px-2.5 py-2 text-xs font-medium transition-all ${
+                      isBiPage
+                        ? "bg-slate-800/80 text-white border border-slate-700/60 shadow-2xs"
+                        : "text-slate-300 hover:bg-slate-800/80 hover:text-white"
+                    }`}
+                  >
+                    <Link
+                      href={item.href}
+                      className="flex items-center space-x-2.5 overflow-hidden flex-1 group"
+                    >
+                      <Icon
+                        className={`w-4 h-4 shrink-0 transition-transform ${
+                          isBiPage ? "text-sky-400" : "text-slate-400 group-hover:text-white"
+                        }`}
+                      />
+                      <span className="truncate font-semibold">{item.label}</span>
+                    </Link>
+
+                    <div className="flex items-center gap-1 shrink-0">
+                      {item.badge && (
+                        <span className="text-[10px] px-1.5 py-0.2 rounded font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                          {item.badge}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setBiOpen(!biOpen);
+                        }}
+                        className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-700/60 transition-colors"
+                        title={biOpen ? "Recolher subabas" : "Expandir subabas"}
+                      >
+                        <ChevronDown
+                          className={`w-3.5 h-3.5 transition-transform duration-200 ${
+                            biOpen ? "rotate-0" : "-rotate-90"
+                          }`}
+                        />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Subabas Indentadas */}
+                  {biOpen && (
+                    <div className="ml-4 pl-2.5 border-l-2 border-slate-700/70 space-y-0.5 pt-0.5 pb-1">
+                      {item.children.map((sub) => {
+                        const SubIcon = sub.icon;
+                        const isSubActive = isBiPage && currentBiTab === sub.tab;
+                        return (
+                          <Link
+                            key={sub.tab}
+                            href={sub.href}
+                            title={sub.label}
+                            className={`flex items-center justify-between px-2.5 py-1.5 rounded-md text-[11px] font-medium transition-all ${
+                              isSubActive
+                                ? "bg-sky-600 text-white shadow-xs font-semibold -ml-[11px] border-l-2 border-white pl-2"
+                                : "text-slate-400 hover:text-white hover:bg-slate-800/60"
+                            }`}
+                          >
+                            <div className="flex items-center gap-2 overflow-hidden">
+                              <SubIcon
+                                className={`w-3.5 h-3.5 shrink-0 ${
+                                  isSubActive ? "text-white" : "text-slate-400"
+                                }`}
+                              />
+                              <span className="truncate">{sub.label}</span>
+                            </div>
+                            {sub.badge && (
+                              <span
+                                className={`text-[9px] px-1.5 py-0.2 rounded font-bold ${
+                                  isSubActive
+                                    ? "bg-white/20 text-white"
+                                    : sub.badge === "NOVO"
+                                    ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                                    : "bg-sky-500/20 text-sky-300 border border-sky-500/30"
+                                }`}
+                              >
+                                {sub.badge}
+                              </span>
+                            )}
+                          </Link>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
             }
+
+            const isActive =
+              item.href === "/vendas/gestao-diaria"
+                ? Boolean(pathname?.startsWith("/vendas"))
+                : pathname === item.href;
 
             return (
               <Link
@@ -219,10 +376,6 @@ function SidebarContent() {
                         ? "bg-sky-800 text-white"
                         : item.badge === "ADM"
                         ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
-                        : item.badge === "1:N"
-                        ? "bg-sky-500/20 text-sky-300 border border-sky-500/30"
-                        : item.isPrimary
-                        ? "bg-amber-400/20 text-amber-300 border border-amber-400/30"
                         : "bg-slate-800 text-slate-400"
                     }`}
                   >
