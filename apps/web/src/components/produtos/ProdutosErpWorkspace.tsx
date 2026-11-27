@@ -6,15 +6,19 @@ import {
   AlertTriangle,
   ArrowDownUp,
   Box,
+  Building2,
   CheckCircle2,
   Database,
   Eye,
   Layers,
   Link2,
   Loader2,
+  Mail,
+  MapPin,
   Package,
   PackagePlus,
   Pencil,
+  Phone,
   Plus,
   RefreshCw,
   Search,
@@ -29,14 +33,16 @@ import type {
   ErpProductWithSummary,
   ErpRollConsumptionSummary,
   ErpSalesConsumptionItem,
+  ErpSupplier,
 } from "@/types/erp-products";
 import { PpfRollFormModal } from "./PpfRollFormModal";
 import { ProductFormModal } from "./ProductFormModal";
 import { LinkListingModal } from "./LinkListingModal";
 import { StockMovementModal } from "./StockMovementModal";
 import { ProductDetailDrawer } from "./ProductDetailDrawer";
+import { SupplierFormModal } from "./SupplierFormModal";
 
-type SubTab = "produtos" | "bobinas" | "vinculos" | "consumo";
+type SubTab = "produtos" | "bobinas" | "fornecedores" | "vinculos" | "consumo";
 
 function formatBRL(v: number) {
   return v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -62,6 +68,10 @@ export function ProdutosErpWorkspace() {
   // Modais e Drawers
   const [rollModalOpen, setRollModalOpen] = useState(false);
   const [editingRoll, setEditingRoll] = useState<ErpPpfRoll | null>(null);
+
+  const [supplierModalOpen, setSupplierModalOpen] = useState(false);
+  const [editingSupplier, setEditingSupplier] = useState<ErpSupplier | null>(null);
+  const [supplierSearch, setSupplierSearch] = useState("");
 
   const [productModalOpen, setProductModalOpen] = useState(false);
   const [productDefaultType, setProductDefaultType] = useState<ErpProductType>("ppf_piece");
@@ -165,6 +175,32 @@ export function ProdutosErpWorkspace() {
       );
     });
   }, [overview?.products, search, typeFilter]);
+
+  const filteredSuppliers = useMemo(() => {
+    const list = overview?.suppliers ?? [];
+    const q = supplierSearch.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      (s) =>
+        s.trade_name.toLowerCase().includes(q) ||
+        (s.legal_name || "").toLowerCase().includes(q) ||
+        s.code.toLowerCase().includes(q) ||
+        (s.document_number || "").toLowerCase().includes(q) ||
+        (s.city || "").toLowerCase().includes(q)
+    );
+  }, [overview?.suppliers, supplierSearch]);
+
+  async function handleDeleteSupplier(supplier: ErpSupplier) {
+    if (!confirm(`Deseja excluir o fornecedor "${supplier.trade_name}" (${supplier.code})?`)) return;
+    const res = await fetch(`/api/erp/suppliers?id=${supplier.id}`, { method: "DELETE" });
+    const data = await res.json();
+    if (res.ok && data.success) {
+      showToast("Fornecedor excluído com sucesso.");
+      loadOverview();
+    } else {
+      alert(data.error || "Erro ao excluir fornecedor.");
+    }
+  }
 
   async function handleDeleteProduct(product: ErpProductWithSummary) {
     if (!confirm(`Deseja excluir o produto "${product.name}" (${product.sku})?`)) return;
@@ -274,12 +310,23 @@ export function ProdutosErpWorkspace() {
       <main className="flex-1 p-4 sm:p-6 max-w-[1600px] w-full mx-auto space-y-5">
         <div className="flex flex-col gap-0.5">
           <h1 className="text-xl font-extrabold text-slate-900 tracking-tight">
-            Produtos, Kits & Bobinas PPF
+            Cadastro Produtos, Kits e Fornecedores
           </h1>
           <p className="text-xs text-slate-500">
-            Cadastro mestre ERP padrão Tiny/Bling • Controle de custos, dimensões, bobinas de película e vínculo com anúncios & vendas
+            Cadastro mestre ERP padrão Tiny/Bling • Produtos, Kits (BOM), Fornecedores/Fabricantes, Bobinas PPF e vínculo com Anúncios & Vendas
           </p>
         </div>
+
+        {overview && overview.schemaReady && overview.suppliersSchemaReady === false && (
+          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 flex items-start gap-3">
+            <Database className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-900">
+              <strong>Migração SQL de Fornecedores pendente no Supabase:</strong> execute{" "}
+              <code>supabase/migrations/20261127140000_create_erp_suppliers.sql</code> no SQL Editor
+              do Supabase para ativar o cadastro de Fornecedores/Fabricantes e o vínculo nos produtos e bobinas.
+            </div>
+          </div>
+        )}
         {toastMsg && (
           <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl flex items-center gap-2 text-xs font-semibold">
             <CheckCircle2 className="w-4 h-4 text-emerald-400" />
@@ -321,6 +368,12 @@ export function ProdutosErpWorkspace() {
                 { id: "produtos", label: "Produtos & Kits", icon: Box, count: kpis?.totalProducts },
                 { id: "bobinas", label: "Bobinas PPF", icon: Layers, count: kpis?.totalRolls },
                 {
+                  id: "fornecedores",
+                  label: "Fornecedores",
+                  icon: Building2,
+                  count: kpis?.totalSuppliers,
+                },
+                {
                   id: "vinculos",
                   label: "Vínculos c/ Anúncios",
                   icon: Link2,
@@ -360,6 +413,17 @@ export function ProdutosErpWorkspace() {
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setEditingSupplier(null);
+                setSupplierModalOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-white border border-slate-200 text-slate-700 hover:bg-amber-50 hover:border-amber-300 shadow-2xs"
+            >
+              <Building2 className="w-3.5 h-3.5 text-amber-600" />
+              Novo Fornecedor
+            </button>
             <button
               type="button"
               onClick={() => {
@@ -837,6 +901,163 @@ export function ProdutosErpWorkspace() {
               })
             )}
           </div>
+        ) : activeTab === "fornecedores" ? (
+          <div className="space-y-4">
+            <div className="bg-white rounded-2xl border border-slate-200 p-4 flex flex-wrap items-center justify-between gap-3">
+              <div className="relative flex-1 min-w-[240px] max-w-md">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  value={supplierSearch}
+                  onChange={(e) => setSupplierSearch(e.target.value)}
+                  placeholder="Buscar por Nome Fantasia, Razão Social, CNPJ, código ou cidade..."
+                  className="w-full pl-9 pr-3 py-2 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingSupplier(null);
+                  setSupplierModalOpen(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold bg-amber-600 text-white hover:bg-amber-700 shadow-xs"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                Cadastrar Fornecedor / Fabricante
+              </button>
+            </div>
+
+            {filteredSuppliers.length === 0 ? (
+              <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center space-y-3">
+                <Building2 className="w-10 h-10 text-amber-400 mx-auto" />
+                <h3 className="text-sm font-bold text-slate-800">
+                  Nenhum fornecedor ou fabricante cadastrado
+                </h3>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Cadastre seus distribuidores de películas PPF e fabricantes (com logo, Razão Social, CNPJ, endereço, telefone e e-mail financeiro) para vincular diretamente aos produtos e bobinas.
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredSuppliers.map((sup) => {
+                  const fullAddress = [
+                    sup.street,
+                    sup.street_number ? `, ${sup.street_number}` : "",
+                    sup.neighborhood ? ` - ${sup.neighborhood}` : "",
+                  ]
+                    .join("")
+                    .trim();
+                  const cityLine = [sup.zip_code, sup.city, sup.state]
+                    .filter(Boolean)
+                    .join(" - ");
+
+                  return (
+                    <div
+                      key={sup.id}
+                      className="bg-white rounded-2xl border border-slate-200 p-5 shadow-2xs flex flex-col justify-between space-y-4 hover:border-sky-300 transition-colors"
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-start gap-3">
+                          <div className="w-16 h-16 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-center overflow-hidden shrink-0 p-1">
+                            {sup.logo_url ? (
+                              <img
+                                src={sup.logo_url}
+                                alt={sup.trade_name}
+                                className="w-full h-full object-contain"
+                              />
+                            ) : (
+                              <Building2 className="w-7 h-7 text-slate-300" />
+                            )}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-1.5 flex-wrap">
+                              <span className="font-mono text-[10px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800">
+                                {sup.code}
+                              </span>
+                              <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                                {sup.supplier_type}
+                              </span>
+                            </div>
+                            <h3 className="text-sm font-extrabold text-slate-900 mt-1 truncate">
+                              {sup.trade_name}
+                            </h3>
+                            {sup.legal_name && (
+                              <p className="text-[11px] font-medium text-slate-600 line-clamp-2 leading-snug">
+                                {sup.legal_name}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5 text-[11px] text-slate-600 bg-slate-50/80 p-3 rounded-xl border border-slate-100">
+                          {sup.document_number && (
+                            <p className="font-mono text-slate-700">
+                              <strong>CNPJ/CPF:</strong> {sup.document_number}
+                            </p>
+                          )}
+                          {(fullAddress || cityLine) && (
+                            <div className="flex items-start gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0 mt-0.5" />
+                              <div>
+                                {fullAddress && <p>{fullAddress}</p>}
+                                {cityLine && <p className="text-slate-500">{cityLine}</p>}
+                              </div>
+                            </div>
+                          )}
+                          {(sup.phone || sup.whatsapp) && (
+                            <div className="flex items-center gap-1.5">
+                              <Phone className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>
+                                {sup.phone || sup.whatsapp}
+                                {sup.contact_name ? ` (${sup.contact_name})` : ""}
+                              </span>
+                            </div>
+                          )}
+                          {(sup.financial_email || sup.email) && (
+                            <div className="flex items-center gap-1.5">
+                              <Mail className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span className="truncate">
+                                {sup.financial_email || sup.email}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center justify-between pt-3 border-t border-slate-100 text-[11px]">
+                        <div className="flex items-center gap-2 text-slate-500 font-semibold">
+                          <span>{sup.linked_products_count ?? 0} prod.</span>
+                          <span>•</span>
+                          <span>{sup.linked_rolls_count ?? 0} bobina(s)</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingSupplier(sup);
+                              setSupplierModalOpen(true);
+                            }}
+                            className="p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100"
+                            title="Editar fornecedor"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSupplier(sup)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-rose-600 hover:bg-rose-50"
+                            title="Excluir fornecedor"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         ) : activeTab === "vinculos" ? (
           <div className="bg-white rounded-2xl border border-slate-200 shadow-2xs overflow-hidden">
             <div className="p-4 border-b border-slate-100 flex items-center justify-between gap-3">
@@ -1157,14 +1378,26 @@ export function ProdutosErpWorkspace() {
       </main>
 
       {/* Modais e Drawers */}
+      <SupplierFormModal
+        open={supplierModalOpen}
+        supplier={editingSupplier}
+        onClose={() => setSupplierModalOpen(false)}
+        onSaved={() => {
+          showToast("Fornecedor salvo com sucesso!");
+          loadOverview();
+        }}
+      />
+
       <PpfRollFormModal
         open={rollModalOpen}
         roll={editingRoll}
+        suppliers={overview?.suppliers ?? []}
         onClose={() => setRollModalOpen(false)}
         onSaved={() => {
           showToast("Bobina PPF salva com sucesso!");
           loadOverview();
         }}
+        onSupplierCreated={() => loadOverview()}
       />
 
       <ProductFormModal
@@ -1172,12 +1405,14 @@ export function ProdutosErpWorkspace() {
         product={editingProduct}
         defaultType={productDefaultType}
         rolls={overview?.rolls ?? []}
+        suppliers={overview?.suppliers ?? []}
         allProducts={overview?.products ?? []}
         onClose={() => setProductModalOpen(false)}
         onSaved={() => {
           showToast("Produto / Kit salvo com sucesso!");
           loadOverview();
         }}
+        onSupplierCreated={() => loadOverview()}
       />
 
       <LinkListingModal

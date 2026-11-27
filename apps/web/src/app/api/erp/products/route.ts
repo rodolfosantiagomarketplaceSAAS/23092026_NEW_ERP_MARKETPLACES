@@ -119,6 +119,7 @@ export async function POST(request: NextRequest) {
       category: d.category?.trim() || null,
       brand: d.brand?.trim() || null,
       supplier: d.supplier?.trim() || null,
+      ...(d.supplier_id !== undefined ? { supplier_id: d.supplier_id || null } : {}),
       ncm: d.ncm?.trim() || null,
       unit: d.unit.trim().toUpperCase(),
       status: d.status,

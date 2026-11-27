@@ -114,7 +114,7 @@ function SidebarContent() {
       badge: null,
     },
     {
-      label: "Produtos, Kits & Bobinas",
+      label: "Cadastro Produtos, Kits e Fornecedores",
       href: "/produtos",
       icon: Package,
       badge: "ERP",

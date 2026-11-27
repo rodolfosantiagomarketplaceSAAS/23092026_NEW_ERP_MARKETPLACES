@@ -9,6 +9,48 @@ export type ErpCostCategory =
   | "printing"
   | "logistics";
 
+export type ErpSupplierType =
+  | "fornecedor"
+  | "fabricante"
+  | "distribuidor"
+  | "importador";
+
+export interface ErpSupplier {
+  id: string;
+  organization_id: string | null;
+  user_id: string | null;
+  code: string;
+  supplier_type: ErpSupplierType;
+  trade_name: string;
+  legal_name: string | null;
+  document_number: string | null;
+  state_registration: string | null;
+  logo_url: string | null;
+  contact_name: string | null;
+  phone: string | null;
+  whatsapp: string | null;
+  email: string | null;
+  financial_email: string | null;
+  website: string | null;
+  zip_code: string | null;
+  street: string | null;
+  street_number: string | null;
+  complement: string | null;
+  neighborhood: string | null;
+  city: string | null;
+  state: string | null;
+  payment_terms: string | null;
+  lead_time_days: number | null;
+  min_order_value: number | null;
+  pix_key: string | null;
+  notes: string | null;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+  linked_products_count?: number;
+  linked_rolls_count?: number;
+}
+
 export interface ErpProductPhoto {
   url: string;
   path?: string | null;
@@ -33,6 +75,8 @@ export interface ErpPpfRoll {
   remaining_meters: number;
   min_alert_meters: number;
   supplier: string | null;
+  supplier_id?: string | null;
+  supplier_ref?: ErpSupplier | null;
   lot_number: string | null;
   notes: string | null;
   active: boolean;
@@ -53,6 +97,8 @@ export interface ErpProduct {
   category: string | null;
   brand: string | null;
   supplier: string | null;
+  supplier_id?: string | null;
+  supplier_ref?: ErpSupplier | null;
   ncm: string | null;
   unit: string;
   status: ErpProductStatus;
@@ -189,6 +235,8 @@ export interface ErpSalesConsumptionItem {
 export interface ErpOverviewResponse {
   success: boolean;
   schemaReady: boolean;
+  suppliersSchemaReady?: boolean;
+  suppliers: ErpSupplier[];
   rolls: ErpPpfRoll[];
   products: ErpProductWithSummary[];
   links: ErpListingLink[];
@@ -203,6 +251,7 @@ export interface ErpOverviewResponse {
     totalRemainingRollMeters: number;
     lowRollCount: number;
     totalLinkedListings: number;
+    totalSuppliers: number;
     inventoryValue: number;
   };
 }

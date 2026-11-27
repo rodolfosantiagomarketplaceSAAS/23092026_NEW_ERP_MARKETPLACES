@@ -4,6 +4,7 @@ import React, { useState } from "react";
 import {
   Barcode,
   Box,
+  Building2,
   Layers,
   Package,
   Ruler,
@@ -310,6 +311,47 @@ export function ProductDetailDrawer({
                 Descrição do Produto
               </span>
               <p className="whitespace-pre-line leading-relaxed">{product.description}</p>
+            </div>
+          )}
+
+          {(product.supplier_ref || product.supplier) && (
+            <div className="p-3.5 rounded-xl border border-amber-200 bg-amber-50/50 flex items-center gap-3 text-xs">
+              {product.supplier_ref?.logo_url ? (
+                <img
+                  src={product.supplier_ref.logo_url}
+                  alt={product.supplier_ref.trade_name}
+                  className="w-12 h-12 rounded-lg border border-amber-200 bg-white object-contain p-1 shrink-0"
+                />
+              ) : (
+                <div className="w-10 h-10 rounded-lg bg-amber-100 text-amber-700 flex items-center justify-center shrink-0">
+                  <Building2 className="w-5 h-5" />
+                </div>
+              )}
+              <div className="min-w-0">
+                <span className="text-[10px] font-bold uppercase text-amber-700 block">
+                  Fornecedor / Fabricante Vinculado
+                </span>
+                <p className="font-bold text-slate-900 truncate">
+                  {product.supplier_ref?.trade_name || product.supplier}
+                </p>
+                {product.supplier_ref?.legal_name && (
+                  <p className="text-[11px] text-slate-600 truncate">
+                    {product.supplier_ref.legal_name}
+                  </p>
+                )}
+                <div className="flex flex-wrap gap-x-3 text-[10px] text-slate-500 mt-0.5">
+                  {product.supplier_ref?.phone && <span>Fone: {product.supplier_ref.phone}</span>}
+                  {product.supplier_ref?.financial_email && (
+                    <span>{product.supplier_ref.financial_email}</span>
+                  )}
+                  {product.supplier_ref?.city && (
+                    <span>
+                      {product.supplier_ref.city}
+                      {product.supplier_ref.state ? ` - ${product.supplier_ref.state}` : ""}
+                    </span>
+                  )}
+                </div>
+              </div>
             </div>
           )}
 

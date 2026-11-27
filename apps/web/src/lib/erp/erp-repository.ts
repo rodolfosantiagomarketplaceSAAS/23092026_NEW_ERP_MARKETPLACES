@@ -13,6 +13,7 @@ import type {
   ErpProduct,
   ErpProductWithSummary,
   ErpStockMovement,
+  ErpSupplier,
 } from "@/types/erp-products";
 
 export async function loadErpWorkspaceData(
@@ -20,32 +21,37 @@ export async function loadErpWorkspaceData(
 ): Promise<ErpOverviewResponse> {
   const admin = createSupabaseAdminClient();
 
-  const [rollsRes, productsRes, kitItemsRes, linksRes, movementsRes] = await Promise.all([
-    applyTenantFilter(
-      admin.from("erp_ppf_rolls").select("*").order("created_at", { ascending: false }),
-      ctx
-    ),
-    applyTenantFilter(
-      admin.from("erp_products").select("*").order("updated_at", { ascending: false }),
-      ctx
-    ),
-    applyTenantFilter(
-      admin.from("erp_kit_items").select("*").order("sort_order", { ascending: true }),
-      ctx
-    ),
-    applyTenantFilter(
-      admin.from("erp_listing_links").select("*").order("updated_at", { ascending: false }),
-      ctx
-    ),
-    applyTenantFilter(
-      admin
-        .from("erp_stock_movements")
-        .select("*")
-        .order("created_at", { ascending: false })
-        .limit(120),
-      ctx
-    ),
-  ]);
+  const [rollsRes, productsRes, kitItemsRes, linksRes, movementsRes, suppliersRes] =
+    await Promise.all([
+      applyTenantFilter(
+        admin.from("erp_ppf_rolls").select("*").order("created_at", { ascending: false }),
+        ctx
+      ),
+      applyTenantFilter(
+        admin.from("erp_products").select("*").order("updated_at", { ascending: false }),
+        ctx
+      ),
+      applyTenantFilter(
+        admin.from("erp_kit_items").select("*").order("sort_order", { ascending: true }),
+        ctx
+      ),
+      applyTenantFilter(
+        admin.from("erp_listing_links").select("*").order("updated_at", { ascending: false }),
+        ctx
+      ),
+      applyTenantFilter(
+        admin
+          .from("erp_stock_movements")
+          .select("*")
+          .order("created_at", { ascending: false })
+          .limit(120),
+        ctx
+      ),
+      applyTenantFilter(
+        admin.from("erp_suppliers").select("*").order("trade_name", { ascending: true }),
+        ctx
+      ),
+    ]);
 
   if (
     isMissingTableError(rollsRes.error) ||
@@ -56,6 +62,8 @@ export async function loadErpWorkspaceData(
     return {
       success: true,
       schemaReady: false,
+      suppliersSchemaReady: false,
+      suppliers: [],
       rolls: [],
       products: [],
       links: [],
@@ -70,13 +78,49 @@ export async function loadErpWorkspaceData(
         totalRemainingRollMeters: 0,
         lowRollCount: 0,
         totalLinkedListings: 0,
+        totalSuppliers: 0,
         inventoryValue: 0,
       },
     };
   }
 
-  const rolls = (rollsRes.data ?? []) as ErpPpfRoll[];
+  const suppliersSchemaReady = !isMissingTableError(suppliersRes.error);
+  const rawSuppliers = suppliersSchemaReady ? ((suppliersRes.data ?? []) as ErpSupplier[]) : [];
+  const rawRolls = (rollsRes.data ?? []) as ErpPpfRoll[];
   const rawProducts = (productsRes.data ?? []) as ErpProduct[];
+
+  const supplierById = new Map(rawSuppliers.map((s) => [s.id, s]));
+
+  const productsCountBySupplier = new Map<string, number>();
+  for (const p of rawProducts) {
+    if (p.supplier_id) {
+      productsCountBySupplier.set(
+        p.supplier_id,
+        (productsCountBySupplier.get(p.supplier_id) ?? 0) + 1
+      );
+    }
+  }
+
+  const rollsCountBySupplier = new Map<string, number>();
+  for (const r of rawRolls) {
+    if (r.supplier_id) {
+      rollsCountBySupplier.set(
+        r.supplier_id,
+        (rollsCountBySupplier.get(r.supplier_id) ?? 0) + 1
+      );
+    }
+  }
+
+  const suppliers: ErpSupplier[] = rawSuppliers.map((s) => ({
+    ...s,
+    linked_products_count: productsCountBySupplier.get(s.id) ?? 0,
+    linked_rolls_count: rollsCountBySupplier.get(s.id) ?? 0,
+  }));
+
+  const rolls: ErpPpfRoll[] = rawRolls.map((r) => ({
+    ...r,
+    supplier_ref: r.supplier_id ? supplierById.get(r.supplier_id) ?? null : null,
+  }));
   const rawKitItems = (kitItemsRes.data ?? []) as Array<{
     id: string;
     kit_product_id: string;
@@ -97,7 +141,10 @@ export async function loadErpWorkspaceData(
     rolls,
     rawKitItems,
     linkedCounts
-  );
+  ).map((p) => ({
+    ...p,
+    supplier_ref: p.supplier_id ? supplierById.get(p.supplier_id) ?? null : null,
+  }));
   const productById = new Map(enrichedProducts.map((p) => [p.id, p]));
   const rollById = new Map(rolls.map((r) => [r.id, r]));
 
@@ -137,6 +184,8 @@ export async function loadErpWorkspaceData(
   return {
     success: true,
     schemaReady: true,
+    suppliersSchemaReady,
+    suppliers,
     rolls,
     products: enrichedProducts,
     links,
@@ -160,6 +209,7 @@ export async function loadErpWorkspaceData(
         (r) => Number(r.remaining_meters || 0) <= Number(r.min_alert_meters || 0)
       ).length,
       totalLinkedListings: links.length,
+      totalSuppliers: suppliers.filter((s) => s.active).length,
       inventoryValue,
     },
   };

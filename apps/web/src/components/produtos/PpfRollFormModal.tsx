@@ -2,13 +2,16 @@
 
 import React, { useEffect, useState } from "react";
 import { Layers, Loader2, Save, X } from "lucide-react";
-import type { ErpPpfRoll } from "@/types/erp-products";
+import type { ErpPpfRoll, ErpSupplier } from "@/types/erp-products";
+import { SupplierFormModal } from "./SupplierFormModal";
 
 interface PpfRollFormModalProps {
   open: boolean;
   roll?: ErpPpfRoll | null;
+  suppliers?: ErpSupplier[];
   onClose: () => void;
   onSaved: () => void;
+  onSupplierCreated?: (supplier: ErpSupplier) => void;
 }
 
 function formatBRL(v: number) {
@@ -18,8 +21,10 @@ function formatBRL(v: number) {
 export function PpfRollFormModal({
   open,
   roll,
+  suppliers = [],
   onClose,
   onSaved,
+  onSupplierCreated,
 }: PpfRollFormModalProps) {
   const [code, setCode] = useState("");
   const [name, setName] = useState("");
@@ -33,6 +38,8 @@ export function PpfRollFormModal({
   const [remainingMeters, setRemainingMeters] = useState<string>("12");
   const [minAlertMeters, setMinAlertMeters] = useState<string>("2");
   const [supplier, setSupplier] = useState("");
+  const [supplierId, setSupplierId] = useState("");
+  const [quickSupplierOpen, setQuickSupplierOpen] = useState(false);
   const [lotNumber, setLotNumber] = useState("");
   const [notes, setNotes] = useState("");
   const [active, setActive] = useState(true);
@@ -55,6 +62,7 @@ export function PpfRollFormModal({
       setRemainingMeters(String(roll.remaining_meters));
       setMinAlertMeters(String(roll.min_alert_meters));
       setSupplier(roll.supplier || "");
+      setSupplierId(roll.supplier_id || "");
       setLotNumber(roll.lot_number || "");
       setNotes(roll.notes || "");
       setActive(roll.active);
@@ -71,6 +79,7 @@ export function PpfRollFormModal({
       setRemainingMeters("12");
       setMinAlertMeters("2");
       setSupplier("");
+      setSupplierId("");
       setLotNumber("");
       setNotes("");
       setActive(true);
@@ -109,6 +118,7 @@ export function PpfRollFormModal({
           remaining_meters: Number(remainingMeters),
           min_alert_meters: Number(minAlertMeters),
           supplier: supplier || null,
+          supplier_id: supplierId || null,
           lot_number: lotNumber || null,
           notes: notes || null,
           active,
@@ -336,14 +346,36 @@ export function PpfRollFormModal({
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Fornecedor</label>
-              <input
-                type="text"
-                value={supplier}
-                onChange={(e) => setSupplier(e.target.value)}
-                placeholder="Distribuidor"
-                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-sky-500"
-              />
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Fornecedor / Distribuidor
+              </label>
+              <div className="flex gap-1.5">
+                <select
+                  value={supplierId}
+                  onChange={(e) => {
+                    const nextId = e.target.value;
+                    setSupplierId(nextId);
+                    const found = suppliers.find((s) => s.id === nextId);
+                    setSupplier(found ? found.trade_name : "");
+                  }}
+                  className="flex-1 min-w-0 px-2.5 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+                >
+                  <option value="">Sem fornecedor</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.trade_name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setQuickSupplierOpen(true)}
+                  className="px-2 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold shrink-0"
+                  title="Cadastrar fornecedor"
+                >
+                  +
+                </button>
+              </div>
             </div>
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">Lote</label>
@@ -399,6 +431,16 @@ export function PpfRollFormModal({
           </div>
         </form>
       </div>
+
+      <SupplierFormModal
+        open={quickSupplierOpen}
+        onClose={() => setQuickSupplierOpen(false)}
+        onSaved={(created) => {
+          setSupplierId(created.id);
+          setSupplier(created.trade_name);
+          onSupplierCreated?.(created);
+        }}
+      />
     </div>
   );
 }

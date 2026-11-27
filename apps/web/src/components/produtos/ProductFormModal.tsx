@@ -24,17 +24,21 @@ import type {
   ErpProductStatus,
   ErpProductType,
   ErpProductWithSummary,
+  ErpSupplier,
 } from "@/types/erp-products";
 import { calculatePpfConsumption, round2 } from "@/lib/erp/ppf-calculator";
+import { SupplierFormModal } from "./SupplierFormModal";
 
 interface ProductFormModalProps {
   open: boolean;
   product?: ErpProductWithSummary | null;
   defaultType?: ErpProductType;
   rolls: ErpPpfRoll[];
+  suppliers?: ErpSupplier[];
   allProducts: ErpProductWithSummary[];
   onClose: () => void;
   onSaved: () => void;
+  onSupplierCreated?: (supplier: ErpSupplier) => void;
 }
 
 type ModalTab = "geral" | "fotos" | "dimensoes_ppf" | "kit" | "estoque_preco";
@@ -48,9 +52,11 @@ export function ProductFormModal({
   product,
   defaultType = "ppf_piece",
   rolls,
+  suppliers = [],
   allProducts,
   onClose,
   onSaved,
+  onSupplierCreated,
 }: ProductFormModalProps) {
   const [activeTab, setActiveTab] = useState<ModalTab>("geral");
   const [productType, setProductType] = useState<ErpProductType>(defaultType);
@@ -62,6 +68,8 @@ export function ProductFormModal({
   const [category, setCategory] = useState("");
   const [brand, setBrand] = useState("");
   const [supplier, setSupplier] = useState("");
+  const [supplierId, setSupplierId] = useState("");
+  const [quickSupplierOpen, setQuickSupplierOpen] = useState(false);
   const [ncm, setNcm] = useState("");
   const [unit, setUnit] = useState("UN");
   const [status, setStatus] = useState<ErpProductStatus>("active");
@@ -118,6 +126,7 @@ export function ProductFormModal({
       setCategory(product.category || "");
       setBrand(product.brand || "");
       setSupplier(product.supplier || "");
+      setSupplierId(product.supplier_id || "");
       setNcm(product.ncm || "");
       setUnit(product.unit || "UN");
       setStatus(product.status);
@@ -167,6 +176,7 @@ export function ProductFormModal({
       setCategory(isKit ? "Kit PPF" : isPpf ? "Película PPF" : "Acessório");
       setBrand("");
       setSupplier("");
+      setSupplierId("");
       setNcm("");
       setUnit(isKit ? "KIT" : "UN");
       setStatus("active");
@@ -356,6 +366,7 @@ export function ProductFormModal({
           category: category || null,
           brand: brand || null,
           supplier: supplier || null,
+          supplier_id: supplierId || null,
           ncm: ncm || null,
           unit,
           status,
@@ -670,14 +681,36 @@ export function ProductFormModal({
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Fornecedor</label>
-                  <input
-                    type="text"
-                    value={supplier}
-                    onChange={(e) => setSupplier(e.target.value)}
-                    placeholder="Fornecedor principal"
-                    className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg"
-                  />
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Fornecedor / Fabricante
+                  </label>
+                  <div className="flex gap-1.5">
+                    <select
+                      value={supplierId}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        setSupplierId(nextId);
+                        const found = suppliers.find((s) => s.id === nextId);
+                        setSupplier(found ? found.trade_name : "");
+                      }}
+                      className="flex-1 min-w-0 px-2.5 py-2 text-xs border border-slate-200 rounded-lg bg-white"
+                    >
+                      <option value="">Sem fornecedor vinculado</option>
+                      {suppliers.map((s) => (
+                        <option key={s.id} value={s.id}>
+                          {s.trade_name} {s.legal_name ? `— ${s.legal_name}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                    <button
+                      type="button"
+                      onClick={() => setQuickSupplierOpen(true)}
+                      className="px-2.5 py-2 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-xs font-bold shrink-0"
+                      title="Cadastrar novo fornecedor"
+                    >
+                      + Novo
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Status</label>
@@ -1303,6 +1336,16 @@ export function ProductFormModal({
           </div>
         </form>
       </div>
+
+      <SupplierFormModal
+        open={quickSupplierOpen}
+        onClose={() => setQuickSupplierOpen(false)}
+        onSaved={(created) => {
+          setSupplierId(created.id);
+          setSupplier(created.trade_name);
+          onSupplierCreated?.(created);
+        }}
+      />
     </div>
   );
 }
