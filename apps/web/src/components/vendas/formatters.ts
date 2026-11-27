@@ -1,5 +1,6 @@
 import type {
   DailyClosingRow,
+  MlProductReturnRankingRow,
   MlSaleOrder,
   SalesAnalysisMode,
   Seller,
@@ -381,6 +382,74 @@ export function exportDetailedOrdersToCsv(params: {
   const link = document.createElement("a");
   link.href = url;
   link.download = `vendas-detalhadas-ml-${modeSlug}-${from}-a-${to}.csv`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+export function exportReturnsRankingToCsv(params: {
+  rows: MlProductReturnRankingRow[];
+  from: string;
+  to: string;
+  analysisMode?: SalesAnalysisMode;
+}): void {
+  const { rows, from, to, analysisMode = "order_date" } = params;
+
+  const headers = [
+    "MLB",
+    "SKU",
+    "Produto",
+    "Total Pedidos no Periodo",
+    "Unidades Totais",
+    "Pedidos Validos",
+    "Devolucoes (Pos-Envio)",
+    "Cancelamentos",
+    "Total Ocorrencias",
+    "Unidades Afetadas",
+    "Taxa Devolucao (%)",
+    "Taxa Cancelamento (%)",
+    "Taxa Total Perda no Item (%)",
+    "Valor Bruto Devolvido (R$)",
+    "Valor Bruto Cancelado (R$)",
+    "Valor Bruto Total Perdido (R$)",
+    "Custo Operacional em Devolucoes (R$)",
+    "Principal Motivo ML",
+  ];
+
+  const lines = [headers.map(escapeCsvCell).join(";")];
+
+  for (const r of rows) {
+    const cells: Array<string | number> = [
+      r.mlb_id,
+      r.sku || "",
+      r.product_title,
+      String(r.total_orders_count),
+      String(r.total_units),
+      String(r.valid_orders_count),
+      String(r.returned_orders_count),
+      String(r.cancelled_orders_count),
+      String(r.affected_orders_count),
+      String(r.affected_units),
+      r.return_rate_pct,
+      r.cancel_rate_pct,
+      r.loss_rate_pct,
+      r.gross_returned_amount,
+      r.gross_cancelled_amount,
+      r.gross_affected_amount,
+      r.retained_operational_cost,
+      r.top_reason || "",
+    ];
+    lines.push(cells.map(escapeCsvCell).join(";"));
+  }
+
+  const modeSlug = analysisMode === "shipping_date" ? "por-dia-envio" : "por-data-venda";
+  const csvContent = "\uFEFF" + lines.join("\r\n");
+  const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `analise-devolucoes-cancelamentos-ml-${modeSlug}-${from}-a-${to}.csv`;
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
