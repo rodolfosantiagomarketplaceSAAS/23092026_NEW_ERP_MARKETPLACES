@@ -175,9 +175,13 @@ export type QuickDatePreset =
   | "all";
 
 export function computeDatePresetRange(
-  preset: QuickDatePreset
+  preset: QuickDatePreset,
+  referenceTodayIso?: string
 ): { from: string; to: string; isAll?: boolean } {
-  const todayStr = getTodayBrazilISO();
+  const todayStr =
+    referenceTodayIso && /^\d{4}-\d{2}-\d{2}$/.test(referenceTodayIso)
+      ? referenceTodayIso
+      : getTodayBrazilISO();
   const [y, m, d] = todayStr.split("-").map(Number);
   const base = new Date(Date.UTC(y, m - 1, d, 12, 0, 0));
 
@@ -201,11 +205,10 @@ export function computeDatePresetRange(
     return { from: toIso(start), to: todayStr };
   }
   if (preset === "thisMonth") {
-    const first = new Date(Date.UTC(y, m - 1, 1, 12, 0, 0));
-    return { from: toIso(first), to: todayStr };
+    return computeSpecificMonthRange(y, m);
   }
   if (preset === "thisYear") {
-    return { from: `${y}-01-01`, to: todayStr };
+    return { from: `${y}-01-01`, to: `${y}-12-31` };
   }
 
   // lastMonth
@@ -227,11 +230,9 @@ export function computeSpecificMonthRange(year: number, monthOneBased: number): 
 }
 
 export function computeSpecificYearRange(year: number): { from: string; to: string } {
-  const todayStr = getTodayBrazilISO();
-  const currentYear = Number(todayStr.slice(0, 4));
   return {
     from: `${year}-01-01`,
-    to: year === currentYear ? todayStr : `${year}-12-31`,
+    to: `${year}-12-31`,
   };
 }
 

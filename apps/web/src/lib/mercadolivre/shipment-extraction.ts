@@ -321,6 +321,24 @@ export function extractShipmentDatesAndLogistics(params: {
 }
 
 /**
+ * Garante que o intervalo enviado ao endpoint `GET /orders/search` (`order.date_created`)
+ * da API do Mercado Livre não avance para meses/dias futuros quando o operador estiver usando
+ * um filtro calendário fechado ("Este Mês" -> 30/11 ou "Este Ano" -> 31/12), preservando
+ * 100% da visibilidade de envios agendados no PostgreSQL sem gerar janelas vazias na API ML.
+ */
+export function clampSyncDateRangeToToday(
+  fromDateInput: string,
+  toDateInput: string,
+  todayBrIso: string
+): { from: string; to: string } {
+  const fromDay = fromDateInput.trim().slice(0, 10) || todayBrIso;
+  const toDay = toDateInput.trim().slice(0, 10) || todayBrIso;
+  const clampedTo = toDay > todayBrIso ? todayBrIso : toDay;
+  const clampedFrom = fromDay > clampedTo ? clampedTo : fromDay;
+  return { from: clampedFrom, to: clampedTo };
+}
+
+/**
  * Calcula o intervalo ISO de busca em `GET /orders/search`, aplicando lookback automático
  * quando `analysisMode === "shipping_date"` para capturar pedidos comprados dias antes
  * (ex: sexta-feira/fim de semana ou prazo de produção) e despachados dentro do filtro `[from, to]`.

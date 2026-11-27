@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth/context";
 import { syncMercadoLivreSales } from "@/lib/mercadolivre/sales-sync";
+import { clampSyncDateRangeToToday } from "@/lib/mercadolivre/shipment-extraction";
 import { syncSalesRequestSchema } from "@/lib/validators/ml-sales";
 
 export const dynamic = "force-dynamic";
@@ -49,6 +50,10 @@ export async function POST(request: NextRequest) {
       const oneYearAgo = new Date(Date.UTC(y - 1, m - 1, d, 12, 0, 0));
       effectiveFrom = oneYearAgo.toISOString().slice(0, 10);
       effectiveTo = todayBr;
+    } else {
+      const clamped = clampSyncDateRangeToToday(effectiveFrom, effectiveTo, todayBr);
+      effectiveFrom = clamped.from;
+      effectiveTo = clamped.to;
     }
 
     const result = await syncMercadoLivreSales({
