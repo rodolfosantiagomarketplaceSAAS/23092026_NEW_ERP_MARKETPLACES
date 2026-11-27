@@ -55,29 +55,37 @@ let memoryStores: CompetitorStore[] = [];
 let memoryStoreListings: CompetitorStoreListing[] = [];
 
 export function getMemoryStores(userId?: string): CompetitorStore[] {
+  if (process.env.NODE_ENV === "production" && !userId) return [];
   loadFromDisk();
-  return [...memoryStores];
+  return userId ? memoryStores.filter((s) => s.user_id === userId) : [...memoryStores];
 }
 
-export function getMemoryStoreById(id: string): CompetitorStore | null {
+export function getMemoryStoreById(id: string, userId?: string): CompetitorStore | null {
   loadFromDisk();
-  return memoryStores.find((s) => s.id === id) || null;
+  return (
+    memoryStores.find((s) => s.id === id && (!userId || s.user_id === userId)) || null
+  );
 }
 
-export function getMemoryStoreListings(storeId?: string): CompetitorStoreListing[] {
+export function getMemoryStoreListings(storeId?: string, userId?: string): CompetitorStoreListing[] {
   loadFromDisk();
-  if (storeId && storeId !== "all") {
-    return memoryStoreListings.filter((l) => l.store_id === storeId);
+  let items = memoryStoreListings;
+  if (userId) {
+    items = items.filter((l) => l.user_id === userId);
   }
-  return [...memoryStoreListings];
+  if (storeId && storeId !== "all") {
+    return items.filter((l) => l.store_id === storeId);
+  }
+  return [...items];
 }
 
 export function updateMemoryStore(
   id: string,
-  updates: Partial<Pick<CompetitorStore, "segment" | "is_following" | "store_name" | "notes">>
+  updates: Partial<Pick<CompetitorStore, "segment" | "is_following" | "store_name" | "notes">>,
+  userId?: string
 ): CompetitorStore | null {
   loadFromDisk();
-  const idx = memoryStores.findIndex((s) => s.id === id);
+  const idx = memoryStores.findIndex((s) => s.id === id && (!userId || s.user_id === userId));
   if (idx === -1) return null;
 
   memoryStores[idx] = {
@@ -86,7 +94,6 @@ export function updateMemoryStore(
     updated_at: new Date().toISOString(),
   };
 
-  // If segment changed, update cached store_segment in listings
   if (updates.segment) {
     memoryStoreListings = memoryStoreListings.map((l) =>
       l.store_id === id ? { ...l, store_segment: updates.segment } : l
@@ -97,11 +104,12 @@ export function updateMemoryStore(
   return memoryStores[idx];
 }
 
-export function deleteMemoryStore(id: string): boolean {
+export function deleteMemoryStore(id: string, userId?: string): boolean {
   loadFromDisk();
-  const initialLen = memoryStores.length;
-  memoryStores = memoryStores.filter((s) => s.id !== id);
-  memoryStoreListings = memoryStoreListings.filter((l) => l.store_id !== id);
+  const target = memoryStores.find((s) => s.id === id && (!userId || s.user_id === userId));
+  if (!target && userId) return false;
+  memoryStores = memoryStores.filter((s) => !(s.id === id && (!userId || s.user_id === userId)));
+  memoryStoreListings = memoryStoreListings.filter((l) => !(l.store_id === id && (!userId || l.user_id === userId)));
   saveToDisk();
   return true;
 }

@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAuthContext } from "@/lib/auth/context";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { getSyncedSearch, saveSyncedSearch } from "@/lib/data/marketSearchStore";
 import { getActiveMarketplaceToken } from "@/lib/services/marketplaceIntegrations";
-import { decryptSecret } from "@/lib/security/crypto";
 import {
   fetchViaMlCatalogApi,
   fetchViaMlSitesSearchApi,
@@ -54,21 +53,26 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    const ctx = await getAuthContext().catch(() => null);
-    const tenantKey = ctx?.organizationId ?? ctx?.userId ?? "global";
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+    const tenantKey = ctx.organizationId ?? ctx.userId;
     const supabase = createSupabaseAdminClient();
 
-    // 1. Busca anúncios monitorados + anúncios próprios em paralelo (apenas colunas mínimas)
+    // 1. Busca anúncios monitorados + anúncios próprios ESTRITAMENTE do tenant autenticado
     const [existingCompetitorsRes, myListingsRes] = await Promise.all([
       supabase
         .from("competitor_listings")
         .select(
           "id, external_id, platform, title, current_price, permalink, thumbnail_url, seller_name, rating, shipping_type"
         )
+        .eq("user_id", ctx.userId)
         .limit(500),
       supabase
         .from("my_listings")
         .select("id, title, current_price, platform")
+        .eq("user_id", ctx.userId)
         .eq("status", "active")
         .limit(300),
     ]);
@@ -123,7 +127,7 @@ export async function GET(req: NextRequest) {
     let fetchedAt = new Date().toISOString();
 
     if (!fresh) {
-      const memSynced = getSyncedSearch(query, platformFilter);
+      const memSynced = getSyncedSearch(query, platformFilter, tenantKey);
       if (memSynced && memSynced.length > 0) {
         rawItems = [...memSynced];
         resolvedSource = "extension_live";
@@ -147,32 +151,15 @@ export async function GET(req: NextRequest) {
       rawItems.length === 0 &&
       (platformFilter === "mercadolivre" || platformFilter === "all")
     ) {
-      // Resolve token ativo do ML (se conectado)
-      let activeMlToken =
-        (await getActiveMarketplaceToken(
-          "mercadolivre",
-          ctx ? { userId: ctx.userId, organizationId: ctx.organizationId } : undefined
-        ).catch(() => null)) ||
+      // SEGURANÇA MULTI-TENANT: Usa exclusivamente o token OAuth conectado da própria organização/usuário
+      const activeMlToken =
+        (await getActiveMarketplaceToken("mercadolivre", {
+          userId: ctx.userId,
+          organizationId: ctx.organizationId,
+        }).catch(() => null)) ||
         process.env.ML_ACCESS_TOKEN ||
         process.env.MERCADOLIVRE_ACCESS_TOKEN ||
         null;
-
-      if (!activeMlToken) {
-        const { data: directRow } = await supabase
-          .from("marketplace_integrations")
-          .select("access_token")
-          .eq("platform", "mercadolivre")
-          .eq("is_active", true)
-          .order("updated_at", { ascending: false })
-          .limit(1)
-          .maybeSingle();
-
-        if (directRow?.access_token) {
-          try {
-            activeMlToken = decryptSecret(directRow.access_token);
-          } catch {}
-        }
-      }
 
       // Camada 2A: API Oficial /sites/MLB/search (anúncios orgânicos + catálogo)
       const sitesSearchItems = await fetchViaMlSitesSearchApi({
@@ -215,10 +202,10 @@ export async function GET(req: NextRequest) {
       // Salva no cache persistente (6h) + memória para acelerar próximas consultas e proteger cotas
       if (rawItems.length > 0) {
         fetchedAt = new Date().toISOString();
-        saveSyncedSearch(query, "mercadolivre", rawItems);
+        saveSyncedSearch(query, "mercadolivre", rawItems, tenantKey);
         await saveSearchSnapshotToDb({
-          organizationId: ctx?.organizationId ?? null,
-          userId: ctx?.userId ?? null,
+          organizationId: ctx.organizationId,
+          userId: ctx.userId,
           tenantKey,
           query,
           platform: "mercadolivre",

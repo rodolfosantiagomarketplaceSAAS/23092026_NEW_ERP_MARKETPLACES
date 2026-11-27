@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import {
   getMemoryStores,
   updateMemoryStore,
   upsertMemoryStoreScrape,
 } from "@/lib/data/competitorStoresStore";
-import { resolveRequestUser } from "@/lib/extension/auth";
 import {
   isSlugOrGenericStoreName,
   resolveMercadoLivreStoreName,
@@ -15,29 +15,25 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest) {
   try {
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const search = searchParams.get("search")?.toLowerCase().trim() || "";
     const segment = searchParams.get("segment") || "all";
     const followingOnly = searchParams.get("followingOnly") === "true";
 
-    const supabaseAuth = createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabaseAuth.auth.getUser();
-
     const supabase = createSupabaseAdminClient();
     let stores: any[] = [];
 
-    // Try Supabase first
     try {
       let query = supabase
         .from("competitor_stores")
         .select("*")
+        .eq("user_id", ctx.userId)
         .order("total_sales_approx", { ascending: false });
-
-      if (user?.id) {
-        query = query.eq("user_id", user.id);
-      }
 
       if (segment !== "all") {
         query = query.eq("segment", segment);
@@ -49,60 +45,63 @@ export async function GET(req: NextRequest) {
 
       const { data, error } = await query;
       if (!error && Array.isArray(data)) {
-        // Se a consulta no banco funcionou, respeita fielmente os dados (inclusive lista vazia se o usuário excluiu lojas)
         stores = data;
       } else {
-        stores = getMemoryStores();
+        stores = getMemoryStores(ctx.userId);
       }
     } catch {
-      stores = getMemoryStores();
+      stores = getMemoryStores(ctx.userId);
     }
 
-    // Auto-heal stores whose store_name is generic, raw URL slug, or contains notification badges (e.g. "(9+) ")
-    await Promise.all(
-      stores.map(async (s: any) => {
+    // Performance: limita auto-heal a no máximo 3 lojas por chamada GET (elimina gargalo N+1!)
+    const healCandidates = stores
+      .filter((s: any) => {
         const rawName = s.store_name || "";
         const cleanedBadgeName = rawName.replace(/^\s*\(\d+\+?\)\s*/i, "").trim();
         const hasNotificationBadge = cleanedBadgeName !== rawName;
         const isGeneric = isSlugOrGenericStoreName(cleanedBadgeName, s.store_url);
-
-        if (
+        return (
           (s.platform === "mercadolivre" || !s.platform) &&
           s.store_url &&
           (isGeneric || hasNotificationBadge || !s.seller_nickname)
-        ) {
-          const resolved = await resolveMercadoLivreStoreName(
-            s.store_url,
-            cleanedBadgeName,
-            undefined,
-            s.seller_id
-          );
+        );
+      })
+      .slice(0, 3);
 
-          let finalName = resolved.storeName;
-          if (!finalName || isSlugOrGenericStoreName(finalName, null)) {
-            finalName = hasNotificationBadge ? cleanedBadgeName : s.store_name;
-          }
+    await Promise.all(
+      healCandidates.map(async (s: any) => {
+        const rawName = s.store_name || "";
+        const cleanedBadgeName = rawName.replace(/^\s*\(\d+\+?\)\s*/i, "").trim();
+        const hasNotificationBadge = cleanedBadgeName !== rawName;
 
-          const finalNickname = s.seller_nickname || resolved.sellerNickname || null;
+        const resolved = await resolveMercadoLivreStoreName(
+          s.store_url,
+          cleanedBadgeName,
+          undefined,
+          s.seller_id
+        );
 
-          if (finalName !== s.store_name || finalNickname !== s.seller_nickname) {
-            s.store_name = finalName;
-            if (finalNickname) s.seller_nickname = finalNickname;
+        let finalName = resolved.storeName;
+        if (!finalName || isSlugOrGenericStoreName(finalName, null)) {
+          finalName = hasNotificationBadge ? cleanedBadgeName : s.store_name;
+        }
 
-            updateMemoryStore(s.id, { store_name: finalName });
-            try {
-              await supabase
-                .from("competitor_stores")
-                .update({
-                  store_name: finalName,
-                  ...(finalNickname ? { seller_nickname: finalNickname } : {}),
-                  updated_at: new Date().toISOString(),
-                })
-                .eq("id", s.id);
-            } catch {
-              // ignore DB update errors
-            }
-          }
+        const finalNickname = s.seller_nickname || resolved.sellerNickname || null;
+
+        if (finalName !== s.store_name || finalNickname !== s.seller_nickname) {
+          s.store_name = finalName;
+          if (finalNickname) s.seller_nickname = finalNickname;
+
+          updateMemoryStore(s.id, { store_name: finalName }, ctx.userId);
+          await supabase
+            .from("competitor_stores")
+            .update({
+              store_name: finalName,
+              ...(finalNickname ? { seller_nickname: finalNickname } : {}),
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", s.id)
+            .eq("user_id", ctx.userId);
         }
       })
     );
@@ -159,9 +158,12 @@ export async function GET(req: NextRequest) {
 
 export async function POST(req: NextRequest) {
   try {
-    const authUser = await resolveRequestUser(req);
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
     const supabase = createSupabaseAdminClient();
-    const userId = authUser?.id || "demo-user-id";
+    const userId = ctx.userId;
 
     const body = await req.json();
     const { store_name, store_url, segment, is_following, notes, platform, seller_id } = body;

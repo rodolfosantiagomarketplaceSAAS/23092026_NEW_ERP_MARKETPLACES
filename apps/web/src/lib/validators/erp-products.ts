@@ -106,6 +106,27 @@ export const deductSalesStockSchema = z.object({
   deductPpfRolls: z.boolean().default(true),
 });
 
+export const createPpfRollLotSchema = z.object({
+  ppf_roll_id: z.string().uuid("Selecione uma bobina PPF válida."),
+  supplier_id: z.string().uuid().nullable().optional(),
+  supplier_name: z.string().trim().max(180).nullable().optional(),
+  lot_code: z.string().trim().min(1, "Informe o código do lote.").max(80),
+  invoice_number: z.string().trim().max(80).nullable().optional(),
+  purchase_date: z.string().trim().min(8, "Informe a data da compra.").max(32),
+  roll_width_cm: z.coerce.number().positive().optional(),
+  initial_meters: z.coerce.number().positive("Informe a metragem da bobina comprada (> 0)."),
+  total_purchase_cost: z.coerce.number().min(0, "Informe o valor pago pela bobina."),
+  activate_immediately: z.boolean().default(false),
+  notes: z.string().trim().max(1000).nullable().optional(),
+});
+
+export const ppfRollLotActionSchema = z.object({
+  lot_id: z.string().uuid("Lote inválido."),
+  action: z.enum(["exhaust", "activate", "adjust_meters"]),
+  remaining_meters: z.coerce.number().min(0).optional(),
+  reason: z.string().trim().max(300).nullable().optional(),
+});
+
 export const upsertSupplierSchema = z.object({
   id: z.string().uuid().optional(),
   code: z.string().trim().min(1, "Informe o código do fornecedor.").max(64),

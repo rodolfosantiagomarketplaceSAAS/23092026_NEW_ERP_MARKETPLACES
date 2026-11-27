@@ -22,16 +22,23 @@ export type ParsedMlWebhookTarget =
   | { kind: "ignored"; reason: string; topic: string };
 
 /**
- * Valida token secreto opcional (`ML_WEBHOOK_SECRET`) enviado na query `?token=...`
- * ou no header `x-webhook-secret`. Quando não configurado no ambiente, permite o fluxo
- * (a autenticidade do dado continua garantida porque buscamos tudo via GET OAuth no ML).
+ * Valida token secreto (`ML_WEBHOOK_SECRET`) enviado na query `?token=...` ou header `x-webhook-secret`.
+ * Se `ML_WEBHOOK_SECRET` estiver configurado, exige correspondência exata em tempo constante (`safeEqual`).
+ * Se não estiver configurado, só bloqueia quando `requireSecret` ou `ML_WEBHOOK_REQUIRE_SECRET=true` estiver ativo
+ * (evitando interromper webhooks oficiais do DevCenter ML que usam URL sem `?token=`, já protegidos por `verifyMlApplicationId` + re-fetch OAuth).
  */
 export function verifyMlWebhookSecret(params: {
   configuredSecret?: string | null;
   providedToken?: string | null;
+  requireSecret?: boolean;
 }): boolean {
   const expected = (params.configuredSecret ?? "").trim();
-  if (!expected) return true;
+  const mustRequire =
+    params.requireSecret ?? process.env.ML_WEBHOOK_REQUIRE_SECRET === "true";
+
+  if (!expected) {
+    return !mustRequire;
+  }
 
   const provided = (params.providedToken ?? "").trim();
   if (!provided) return false;
@@ -41,14 +48,20 @@ export function verifyMlWebhookSecret(params: {
 
 /**
  * Confere se o `application_id` notificado pelo Mercado Livre pertence ao `ML_CLIENT_ID` do ERP.
+ * Em produção, rejeita payloads que omitam `application_id` quando `ML_CLIENT_ID` está configurado.
  */
 export function verifyMlApplicationId(params: {
   configuredClientId?: string | null;
   payloadApplicationId?: string | number | null;
+  requireApplicationId?: boolean;
 }): boolean {
   const expected = (params.configuredClientId ?? "").trim();
   if (!expected || expected === "seu_client_id_aqui") return true;
-  if (params.payloadApplicationId == null) return true;
+
+  const mustRequire = params.requireApplicationId ?? process.env.NODE_ENV === "production";
+  if (params.payloadApplicationId == null) {
+    return !mustRequire;
+  }
 
   return String(params.payloadApplicationId).trim() === expected;
 }

@@ -1,6 +1,10 @@
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { getActiveMarketplaceToken, markReauthRequired } from "@/lib/services/marketplaceIntegrations";
-import { decryptSecret } from "@/lib/security/crypto";
+import {
+  getActiveMarketplaceToken,
+  markReauthRequired,
+  type IntegrationScope,
+} from "@/lib/services/marketplaceIntegrations";
+import { sanitizePostgrestFilterValue } from "@/lib/security/url-validator";
 
 export interface SyncPriceResult {
   success: boolean;
@@ -13,83 +17,75 @@ export interface SyncPriceResult {
 
 /**
  * Atualiza o preço atual e o preço promocional de um anúncio próprio no banco de dados,
- * consultando diretamente as APIs oficiais do Mercado Livre (/seller-promotions e /prices).
+ * validando isolamento por tenant (`expectedScope`) e usando exclusivamente o token OAuth do lojista dono.
  */
-export async function syncSingleMyListingPrice(myListingId: string): Promise<SyncPriceResult> {
+export async function syncSingleMyListingPrice(
+  myListingId: string,
+  expectedScope?: IntegrationScope
+): Promise<SyncPriceResult> {
   const supabase = createSupabaseAdminClient();
 
   try {
-    // 1. Busca dados do anúncio próprio (por UUID ou external_id)
+    const safeInput = sanitizePostgrestFilterValue(myListingId, 80);
+    if (!safeInput) {
+      return { success: false, myListingId, error: "Identificador de anúncio inválido." };
+    }
+
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+      safeInput
+    );
+
     let query = supabase
       .from("my_listings")
       .select("id, user_id, platform, external_id, current_price, original_price");
 
-    if (myListingId.includes("-") && myListingId.length === 36) {
-      query = query.eq("id", myListingId);
-    } else {
-      query = query.or(`id.eq.${myListingId},external_id.eq.${myListingId}`);
+    if (expectedScope?.userId) {
+      query = query.eq("user_id", expectedScope.userId);
     }
+
+    query = isUuid
+      ? query.eq("id", safeInput)
+      : query.eq("external_id", safeInput.toUpperCase());
 
     const { data: listing, error: listingErr } = await query.maybeSingle();
 
     if (listingErr || !listing) {
-      return { success: false, myListingId, error: "Anúncio próprio não encontrado." };
+      return { success: false, myListingId, error: "Anúncio próprio não encontrado no seu catálogo." };
     }
 
     if (listing.platform !== "mercadolivre") {
       return {
         success: true,
-        myListingId,
+        myListingId: listing.id,
         current_price: listing.current_price,
         original_price: listing.original_price,
       };
     }
 
-    // 2. Busca token do Mercado Livre
+    // Resolve o organization_id do dono do anúncio se não veio no expectedScope
+    let ownerOrgId = expectedScope?.organizationId ?? null;
+    if (!ownerOrgId && listing.user_id) {
+      const { data: prof } = await supabase
+        .from("user_profiles")
+        .select("organization_id")
+        .eq("id", listing.user_id)
+        .maybeSingle();
+      ownerOrgId = prof?.organization_id ?? null;
+    }
+
+    // SEGURANÇA MULTI-TENANT: Busca token OAuth EXCLUSIVAMENTE da loja/usuário dono do anúncio
     let accessToken: string | null = null;
-    try {
-      // 2.1 Tenta obter via contexto autenticado da sessão atual
-      accessToken = await getActiveMarketplaceToken("mercadolivre");
-    } catch {
-      accessToken = null;
-    }
-
-    if (!accessToken && listing.user_id) {
-      try {
-        accessToken = await getActiveMarketplaceToken("mercadolivre", {
-          userId: listing.user_id,
-          organizationId: null,
-        });
-      } catch {
-        accessToken = null;
-      }
-    }
-
-    // 2.2 Fallback de contingência: consulta diretamente a integração ativa mais recente no banco
-    if (!accessToken) {
-      let intQuery = supabase
-        .from("marketplace_integrations")
-        .select("access_token")
-        .eq("platform", "mercadolivre")
-        .eq("is_active", true)
-        .order("updated_at", { ascending: false });
-
-      if (listing.user_id) {
-        intQuery = intQuery.eq("user_id", listing.user_id);
-      }
-
-      const { data: intRow } = await intQuery.limit(1).maybeSingle();
-      if (intRow?.access_token) {
-        try {
-          accessToken = decryptSecret(intRow.access_token);
-        } catch {}
-      }
+    if (listing.user_id) {
+      accessToken = await getActiveMarketplaceToken("mercadolivre", {
+        userId: listing.user_id,
+        organizationId: ownerOrgId,
+      }).catch(() => null);
     }
 
     if (!accessToken) {
       return {
         success: false,
-        myListingId,
+        myListingId: listing.id,
         reauthRequired: true,
         error: "Autorização do Mercado Livre ausente ou expirada. Reconecte a conta em Configurações & APIs.",
       };
@@ -97,10 +93,9 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
 
     const cleanId = (listing.external_id || "").replace(/[^a-zA-Z0-9]/g, "").trim();
     if (!cleanId) {
-      return { success: false, myListingId, error: "external_id ausente." };
+      return { success: false, myListingId: listing.id, error: "external_id ausente." };
     }
 
-    // 3. Consulta em paralelo: dados base do anúncio, promoções ativas e lista de preços (/prices)
     const headers: Record<string, string> = {
       Authorization: `Bearer ${accessToken}`,
       "User-Agent": "CRM-Marketplaces-ERP/2.0",
@@ -126,24 +121,24 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
     const promoData = promoRes && promoRes.ok ? await promoRes.json().catch(() => null) : null;
     const pricesData = pricesRes && pricesRes.ok ? await pricesRes.json().catch(() => null) : null;
 
-    // Detecção de token expirado ou revogado pelo ML
-    // IMPORTANTE: Só consideramos inválido se a chamada do item falhar com 401 ou 403 PolicyAgent.
-    // Se o item retornou 200, o token está 100% válido.
     const isTokenRevoked =
       itemRes &&
       (itemRes.status === 401 ||
         (itemRes.status === 403 &&
-          (itemData?.code === "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" || itemData?.blocked_by === "PolicyAgent")));
+          (itemData?.code === "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" ||
+            itemData?.blocked_by === "PolicyAgent")));
 
     if (isTokenRevoked) {
-      // Localiza a integração correspondente para marcar reauth_required
-      const { data: intRow } = await supabase
+      let intQuery = supabase
         .from("marketplace_integrations")
         .select("id")
-        .eq("platform", "mercadolivre")
-        .eq("user_id", listing.user_id)
-        .maybeSingle();
+        .eq("platform", "mercadolivre");
 
+      intQuery = ownerOrgId
+        ? intQuery.eq("organization_id", ownerOrgId)
+        : intQuery.eq("user_id", listing.user_id);
+
+      const { data: intRow } = await intQuery.limit(1).maybeSingle();
       if (intRow?.id) {
         await markReauthRequired(
           intRow.id,
@@ -153,28 +148,30 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
 
       return {
         success: false,
-        myListingId,
+        myListingId: listing.id,
         reauthRequired: true,
         error: "Autorização da conta do Mercado Livre expirou. Reconecte em Configurações & APIs.",
       };
     }
 
-    let basePrice = Number(itemData?.price || listing.current_price || 0);
+    const basePrice = Number(itemData?.price || listing.current_price || 0);
     let resolvedCurrentPrice = basePrice;
     let resolvedOriginalPrice: number | null = null;
 
-    // Prioridade 1: /seller-promotions/items/{cleanId}?app_version=v2
     if (promoData) {
-      const promoList = (Array.isArray(promoData) ? promoData : promoData.results || []) as any[];
+      const promoList = (Array.isArray(promoData) ? promoData : promoData.results || []) as Array<
+        Record<string, unknown>
+      >;
       const activePromos = promoList.filter(
-        (p: any) =>
-          (p.status === "started" || p.status === "active" || p.status === "pending" || p.status === "sync_requested") &&
+        (p) =>
+          (p.status === "started" ||
+            p.status === "active" ||
+            p.status === "pending" ||
+            p.status === "sync_requested") &&
           Number(p.price ?? p.deal_price ?? p.top_deal_price ?? 0) > 0
       );
 
       if (activePromos.length > 0) {
-        // Se houver múltiplas promoções simultâneas (ex: Smart Deal de 119.92 + Desconto Individual de 140.71),
-        // o Mercado Livre sempre aplica o menor preço de venda vigente para o comprador.
         activePromos.sort((a, b) => {
           const priceA = Number(a.price ?? a.deal_price ?? a.top_deal_price);
           const priceB = Number(b.price ?? b.deal_price ?? b.top_deal_price);
@@ -182,7 +179,9 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
         });
 
         const bestPromo = activePromos[0];
-        resolvedCurrentPrice = Number(bestPromo.price ?? bestPromo.deal_price ?? bestPromo.top_deal_price);
+        resolvedCurrentPrice = Number(
+          bestPromo.price ?? bestPromo.deal_price ?? bestPromo.top_deal_price
+        );
 
         const origCandidates = activePromos
           .map((p) => Number(p.original_price || 0))
@@ -196,10 +195,13 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
       }
     }
 
-    // Prioridade 2: /items/{cleanId}/prices (caso a API retorne objeto estruturado de preços)
     if (resolvedCurrentPrice === basePrice && pricesData && Array.isArray(pricesData.prices)) {
-      const promoEntry = pricesData.prices.find((p: any) => p.type === "promotion" && Number(p.amount) > 0);
-      const standardEntry = pricesData.prices.find((p: any) => p.type === "standard" && Number(p.amount) > 0);
+      const promoEntry = pricesData.prices.find(
+        (p: Record<string, unknown>) => p.type === "promotion" && Number(p.amount) > 0
+      );
+      const standardEntry = pricesData.prices.find(
+        (p: Record<string, unknown>) => p.type === "standard" && Number(p.amount) > 0
+      );
       if (promoEntry) {
         resolvedCurrentPrice = Number(promoEntry.amount);
         if (standardEntry && Number(standardEntry.amount) > resolvedCurrentPrice) {
@@ -208,7 +210,6 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
       }
     }
 
-    // Fallback: original_price ou base_price do item
     if (!resolvedOriginalPrice) {
       if (itemData?.original_price && Number(itemData.original_price) > resolvedCurrentPrice) {
         resolvedOriginalPrice = Number(itemData.original_price);
@@ -217,7 +218,6 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
       }
     }
 
-    // 4. Salva no banco my_listings
     await supabase
       .from("my_listings")
       .update({
@@ -225,16 +225,18 @@ export async function syncSingleMyListingPrice(myListingId: string): Promise<Syn
         original_price: resolvedOriginalPrice,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", myListingId);
+      .eq("id", listing.id)
+      .eq("user_id", listing.user_id);
 
     return {
       success: true,
-      myListingId,
+      myListingId: listing.id,
       current_price: resolvedCurrentPrice,
       original_price: resolvedOriginalPrice,
     };
-  } catch (err: any) {
-    console.error(`[syncSingleMyListingPrice] Falha ao atualizar ${myListingId}:`, err);
-    return { success: false, myListingId, error: err.message || "Erro desconhecido" };
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Erro desconhecido";
+    console.error(`[syncSingleMyListingPrice] Falha ao atualizar ${myListingId}:`, message);
+    return { success: false, myListingId, error: message };
   }
 }

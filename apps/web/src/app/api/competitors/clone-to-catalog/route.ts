@@ -1,19 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import { cloneListingToCatalogSchema } from "@crm/types";
-import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import { updateSavedOpportunityListing } from "@/lib/data/savedListingsStore";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
-    const supabaseAuth = createSupabaseServerClient();
-    const {
-      data: { user },
-    } = await supabaseAuth.auth.getUser();
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
 
     const supabase = createSupabaseAdminClient();
-    const userId = user?.id || "demo-user-id";
+    const userId = ctx.userId;
 
     const body = await req.json();
     const parseResult = cloneListingToCatalogSchema.safeParse(body);
@@ -109,16 +110,24 @@ export async function POST(req: NextRequest) {
     // 3. Se este anúncio estava salvo na aba "Anúncios para Analisar & Criar", marca automaticamente como CRIADO (OK em verde)
     try {
       if (external_id) {
-        await updateSavedOpportunityListing(external_id, {
-          status: "created",
-          my_created_sku: sku.toUpperCase(),
-        });
+        await updateSavedOpportunityListing(
+          external_id,
+          {
+            status: "created",
+            my_created_sku: sku.toUpperCase(),
+          },
+          userId
+        );
       }
       if (competitor_listing_id && competitor_listing_id !== external_id) {
-        await updateSavedOpportunityListing(competitor_listing_id, {
-          status: "created",
-          my_created_sku: sku.toUpperCase(),
-        });
+        await updateSavedOpportunityListing(
+          competitor_listing_id,
+          {
+            status: "created",
+            my_created_sku: sku.toUpperCase(),
+          },
+          userId
+        );
       }
     } catch {
       // ignora erro secundário

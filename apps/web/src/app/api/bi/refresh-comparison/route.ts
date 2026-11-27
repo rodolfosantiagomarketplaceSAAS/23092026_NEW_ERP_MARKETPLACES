@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
-import { resolveRequestUser } from "@/lib/extension/auth";
-import { getAuthContext } from "@/lib/auth/context";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import {
   MOCK_COMPARATIVE_DATA,
   recalculateGroupStatus,
@@ -41,11 +40,16 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient();
 
-    // 1. Resolve autenticação via Bearer token (Extensão) ou Cookie de Sessão (Web App Vercel)
-    const authUser = await resolveRequestUser(req);
-    const webCtx = !authUser ? await getAuthContext().catch(() => null) : null;
-    let userId: string | null = authUser?.id ?? webCtx?.userId ?? null;
-    let organizationId: string | null = webCtx?.organizationId ?? null;
+    // 1. Autenticação obrigatória unificada (Extensão ou Web App) com isolamento estrito por tenant
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json(
+        { error: "Não autenticado." },
+        { status: 401, headers: CORS_HEADERS }
+      );
+    }
+    const userId = ctx.userId;
+    const organizationId = ctx.organizationId;
 
     const body = await req.json().catch(() => ({}));
     const {
@@ -64,7 +68,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 2. Busca o anúncio próprio e o concorrente existente no Supabase (independente de cookie/header)
+    // 2. Busca o anúncio próprio e o concorrente existente restritos ao `user_id` autenticado (previne IDOR!)
     const isMyListingRadar = String(my_listing_id).startsWith("radar-");
 
     const [myListingQuery, compByIdQuery] = await Promise.all([
@@ -73,6 +77,7 @@ export async function POST(req: NextRequest) {
             .from("my_listings")
             .select("*")
             .eq("id", my_listing_id)
+            .eq("user_id", userId)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
       competitor_id
@@ -80,6 +85,7 @@ export async function POST(req: NextRequest) {
             .from("competitor_listings")
             .select("*")
             .eq("id", competitor_id)
+            .eq("user_id", userId)
             .maybeSingle()
         : Promise.resolve({ data: null, error: null }),
     ]);
@@ -91,6 +97,7 @@ export async function POST(req: NextRequest) {
       const { data: compByExt } = await supabase
         .from("competitor_listings")
         .select("*")
+        .eq("user_id", userId)
         .eq("external_id", competitor_external_id)
         .eq("platform", platform)
         .order("updated_at", { ascending: false })
@@ -99,19 +106,14 @@ export async function POST(req: NextRequest) {
       existingComp = compByExt;
     }
 
-    // Garante userId a partir do registro existente no banco caso a chamada não tenha enviado token
-    if (!userId) {
-      userId = myListingData?.user_id || existingComp?.user_id || null;
-    }
-    if (!organizationId && myListingData?.organization_id) {
-      organizationId = myListingData.organization_id;
-    }
-
-    // 3. Sincroniza e confere o anúncio próprio via API Oficial do Mercado Livre (/items, /sale_price, /seller-promotions)
+    // 3. Sincroniza e confere o anúncio próprio via API Oficial do Mercado Livre com escopo do tenant
     let myListingPriceResult: any = null;
-    if (!isMyListingRadar) {
+    if (!isMyListingRadar && myListingData) {
       try {
-        myListingPriceResult = await syncSingleMyListingPrice(my_listing_id);
+        myListingPriceResult = await syncSingleMyListingPrice(my_listing_id, {
+          userId,
+          organizationId,
+        });
         if (myListingPriceResult?.success && myListingData) {
           if (myListingPriceResult.current_price !== undefined) {
             myListingData.current_price = myListingPriceResult.current_price;
@@ -427,6 +429,7 @@ export async function POST(req: NextRequest) {
           .from("competitor_listings")
           .update(updateFields)
           .eq("id", existingComp.id)
+          .eq("user_id", userId)
           .select()
           .maybeSingle();
 

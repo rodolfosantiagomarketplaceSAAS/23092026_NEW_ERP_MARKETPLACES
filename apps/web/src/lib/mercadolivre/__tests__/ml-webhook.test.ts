@@ -99,4 +99,17 @@ test("verifyMlWebhookSecret e verifyMlApplicationId validam autenticidade da ori
     verifyMlApplicationId({ configuredClientId: "998877", payloadApplicationId: 112233 }),
     false
   );
+  // Fail-closed em produção quando secret ou application_id não são enviados
+  assert.equal(
+    verifyMlWebhookSecret({ configuredSecret: "", providedToken: null, requireSecret: true }),
+    false
+  );
+  assert.equal(
+    verifyMlApplicationId({
+      configuredClientId: "998877",
+      payloadApplicationId: null,
+      requireApplicationId: true,
+    }),
+    false
+  );
 });

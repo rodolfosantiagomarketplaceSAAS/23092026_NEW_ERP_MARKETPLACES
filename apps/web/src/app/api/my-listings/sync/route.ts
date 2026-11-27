@@ -157,27 +157,55 @@ export async function POST() {
       rpcResult = (rpcData as Record<string, unknown>) || null;
     }
 
-    // 3. Espelhamento de compatibilidade em `my_listings` + `products` (mantém BI, Concorrentes, Extensão e Webhooks operando)
+    // 3. Espelhamento em lote em `products` (elimina loop N+1 de inserts sequenciais!) e `my_listings`
     const syncedExternalIds = new Set<string>();
     const skuToProductId = new Map<string, string>();
-    const uniqueSkus = Array.from(
-      new Set(
-        enrichedItems
-          .map((e) => extractItemSku(e.item))
-          .filter((s): s is string => Boolean(s))
-      )
-    );
+    const skuTitleMap = new Map<string, string>();
+
+    for (const entry of enrichedItems) {
+      const s = extractItemSku(entry.item);
+      if (s && !skuTitleMap.has(s)) {
+        skuTitleMap.set(s, entry.item.family_name || entry.item.title || s);
+      }
+    }
+
+    const uniqueSkus = Array.from(skuTitleMap.keys());
 
     if (uniqueSkus.length > 0) {
-      const { data: existingProducts } = await supabase
-        .from("products")
-        .select("id, sku")
-        .eq("user_id", ctx.userId)
-        .in("sku", uniqueSkus);
+      for (let i = 0; i < uniqueSkus.length; i += 300) {
+        const chunk = uniqueSkus.slice(i, i + 300);
+        const { data: existingProducts } = await supabase
+          .from("products")
+          .select("id, sku")
+          .eq("user_id", ctx.userId)
+          .in("sku", chunk);
 
-      for (const prod of existingProducts || []) {
-        if (prod.sku && prod.id) {
-          skuToProductId.set(prod.sku, prod.id);
+        for (const prod of existingProducts || []) {
+          if (prod.sku && prod.id) {
+            skuToProductId.set(prod.sku, prod.id);
+          }
+        }
+      }
+
+      const missingSkus = uniqueSkus.filter((sku) => !skuToProductId.has(sku));
+      for (let i = 0; i < missingSkus.length; i += 200) {
+        const batchPayload = missingSkus.slice(i, i + 200).map((sku) => ({
+          user_id: ctx.userId,
+          sku,
+          title: skuTitleMap.get(sku) || sku,
+          cost_price: 0,
+          min_selling_price: 0,
+        }));
+
+        const { data: createdProds } = await supabase
+          .from("products")
+          .upsert(batchPayload, { onConflict: "user_id,sku" })
+          .select("id, sku");
+
+        for (const prod of createdProds || []) {
+          if (prod.sku && prod.id) {
+            skuToProductId.set(prod.sku, prod.id);
+          }
         }
       }
     }
@@ -190,26 +218,7 @@ export async function POST() {
       syncedExternalIds.add(item.id);
 
       const itemSku = extractItemSku(item);
-      let productId = itemSku ? skuToProductId.get(itemSku) ?? null : null;
-
-      if (itemSku && !productId) {
-        const { data: newProd } = await supabase
-          .from("products")
-          .insert({
-            user_id: ctx.userId,
-            sku: itemSku,
-            title: item.family_name || item.title,
-            cost_price: 0,
-            min_selling_price: 0,
-          })
-          .select("id")
-          .maybeSingle();
-
-        if (newProd?.id) {
-          productId = newProd.id;
-          skuToProductId.set(itemSku, newProd.id);
-        }
-      }
+      const productId = itemSku ? skuToProductId.get(itemSku) ?? null : null;
 
       const primaryThumbnail =
         item.pictures?.[0]?.secure_url ||

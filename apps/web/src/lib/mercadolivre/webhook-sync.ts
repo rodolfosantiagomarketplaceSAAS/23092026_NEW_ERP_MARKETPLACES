@@ -19,6 +19,8 @@ import {
   type RawShipmentDetail,
 } from "@/lib/mercadolivre/sales-sync";
 import { isMissingColumnError } from "@/lib/mercadolivre/tenant-scope";
+import { loadErpWorkspaceData } from "@/lib/erp/erp-repository";
+import type { ErpListingLink } from "@/types/erp-products";
 import type { ProductCostTemplate } from "@/types/ml-sales";
 
 const ML_API_BASE = "https://api.mercadolibre.com";
@@ -105,18 +107,20 @@ interface LiveItemStockBody {
  */
 export async function syncListingsStockInCatalog(params: {
   mlbIds: string[];
+  userId: string;
   account: MarketplaceAccountInfo;
   tokenRef: { current: string };
 }): Promise<number> {
   const uniqueIds = Array.from(
     new Set(params.mlbIds.map((id) => id.trim().toUpperCase()).filter(Boolean))
   );
-  if (uniqueIds.length === 0) return 0;
+  if (uniqueIds.length === 0 || !params.userId) return 0;
 
   const admin = createSupabaseAdminClient();
   const { data: localListings } = await admin
     .from("my_listings")
     .select("id, external_id, variations")
+    .eq("user_id", params.userId)
     .eq("platform", "mercadolivre")
     .in("external_id", uniqueIds);
 
@@ -224,51 +228,70 @@ async function upsertDraftsPreservingManualFields(params: {
     ? templatesQuery.eq("organization_id", scope.organizationId)
     : templatesQuery.eq("user_id", scope.userId);
 
-  const [{ data: templateRows }, fullSelectRes] = await Promise.all([
+  const [{ data: templateRows }, snapshotSelectRes, erpWorkspace] = await Promise.all([
     templatesQuery,
     admin
       .from("ml_sales_orders")
       .select(
-        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
+        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, cost_snapshot_locked, cost_snapshot_locked_at, cost_snapshot_source, cost_lot_summary, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
       )
       .in("ml_order_id", draftOrderIds),
+    loadErpWorkspaceData({
+      userId: scope.userId,
+      organizationId: scope.organizationId ?? null,
+    }).catch(() => null),
   ]);
 
   let existingRows: Array<Record<string, unknown>> = [];
   let shippingColumnsAvailable = true;
   let manualShippingColumnsAvailable = true;
+  let costSnapshotColumnsAvailable = true;
 
-  if (fullSelectRes.error && isMissingColumnError(fullSelectRes.error)) {
-    manualShippingColumnsAvailable = false;
-    const midSelectRes = await admin
+  if (snapshotSelectRes.error && isMissingColumnError(snapshotSelectRes.error)) {
+    costSnapshotColumnsAvailable = false;
+    const fullSelectRes = await admin
       .from("ml_sales_orders")
       .select(
-        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
+        "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
       )
       .in("ml_order_id", draftOrderIds);
 
-    if (midSelectRes.error && isMissingColumnError(midSelectRes.error)) {
-      shippingColumnsAvailable = false;
-      const legacySelectRes = await admin
+    if (fullSelectRes.error && isMissingColumnError(fullSelectRes.error)) {
+      manualShippingColumnsAvailable = false;
+      const midSelectRes = await admin
         .from("ml_sales_orders")
         .select(
-          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
         )
         .in("ml_order_id", draftOrderIds);
 
-      if (legacySelectRes.error) {
-        throw new Error(`Erro ao consultar ml_sales_orders: ${legacySelectRes.error.message}`);
+      if (midSelectRes.error && isMissingColumnError(midSelectRes.error)) {
+        shippingColumnsAvailable = false;
+        const legacySelectRes = await admin
+          .from("ml_sales_orders")
+          .select(
+            "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+          )
+          .in("ml_order_id", draftOrderIds);
+
+        if (legacySelectRes.error) {
+          throw new Error(`Erro ao consultar ml_sales_orders: ${legacySelectRes.error.message}`);
+        }
+        existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
+      } else if (midSelectRes.error) {
+        throw new Error(`Erro ao consultar ml_sales_orders: ${midSelectRes.error.message}`);
+      } else {
+        existingRows = (midSelectRes.data ?? []) as Array<Record<string, unknown>>;
       }
-      existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
-    } else if (midSelectRes.error) {
-      throw new Error(`Erro ao consultar ml_sales_orders: ${midSelectRes.error.message}`);
+    } else if (fullSelectRes.error) {
+      throw new Error(`Erro ao consultar ml_sales_orders: ${fullSelectRes.error.message}`);
     } else {
-      existingRows = (midSelectRes.data ?? []) as Array<Record<string, unknown>>;
+      existingRows = (fullSelectRes.data ?? []) as Array<Record<string, unknown>>;
     }
-  } else if (fullSelectRes.error) {
-    throw new Error(`Erro ao consultar ml_sales_orders: ${fullSelectRes.error.message}`);
+  } else if (snapshotSelectRes.error) {
+    throw new Error(`Erro ao consultar ml_sales_orders: ${snapshotSelectRes.error.message}`);
   } else {
-    existingRows = (fullSelectRes.data ?? []) as Array<Record<string, unknown>>;
+    existingRows = (snapshotSelectRes.data ?? []) as Array<Record<string, unknown>>;
   }
 
   const templatesByMlb = new Map<string, ProductCostTemplate>();
@@ -276,55 +299,122 @@ async function upsertDraftsPreservingManualFields(params: {
     templatesByMlb.set(tpl.mlb_id.toUpperCase(), tpl);
   }
 
+  const erpLinkByMlb = new Map<string, ErpListingLink>();
+  const erpRollById = new Map((erpWorkspace?.rolls ?? []).map((r) => [r.id, r]));
+  for (const link of erpWorkspace?.links ?? []) {
+    if (link.platform === "mercadolivre" && link.product) {
+      erpLinkByMlb.set(link.external_listing_id.toUpperCase(), link);
+    }
+  }
+
   const existingMap = new Map<number, Record<string, unknown>>();
   for (const row of existingRows) {
     existingMap.set(Number(row.ml_order_id), row);
   }
 
+  const syncNowIso = new Date().toISOString();
+
   const upsertPayloads = drafts.map((d) => {
     const existing = existingMap.get(d.ml_order_id);
     const tpl = templatesByMlb.get(d.mlb_id);
+    const erpLink = erpLinkByMlb.get(d.mlb_id);
+    const erpProduct = erpLink?.product ?? null;
+    const linkQtyPerSale = Number(erpLink?.quantity_per_sale || 1);
+    const erpUnits = Math.max(1, Number(d.quantity || 1)) * linkQtyPerSale;
+    const erpBreakdown = erpProduct?.computed_cost_breakdown ?? null;
 
     const existingAssignedSeller =
       existing && existing.assigned_seller_id ? String(existing.assigned_seller_id) : null;
     const resolvedSellerId = existingAssignedSeller ?? (tpl?.default_seller_id || null);
     const preserveManualCosts = Boolean(existing?.costs_manually_edited);
 
-    const taxPct = preserveManualCosts
+    // PROTEÇÃO DE CUSTO HISTÓRICO PEPS NO WEBHOOK:
+    // Jamais sobrescreve custos já congelados quando chega evento tardio de envio/entrega!
+    const existingHasLockedSnapshot =
+      Boolean(existing?.cost_snapshot_locked) ||
+      (Boolean(existing) &&
+        (Number(existing?.cost_material ?? 0) > 0 ||
+          Number(existing?.cost_packaging ?? 0) > 0 ||
+          Number(existing?.cost_accessories_kit ?? 0) > 0));
+    const preserveExistingCosts = preserveManualCosts || existingHasLockedSnapshot;
+
+    const taxPct = preserveExistingCosts
       ? Number(existing?.tax_pct ?? 0)
       : tpl
       ? Number(tpl.default_tax_pct)
       : Number(existing?.tax_pct ?? 0);
 
-    const costMaterial = preserveManualCosts
+    const costMaterial = preserveExistingCosts
       ? Number(existing?.cost_material ?? 0)
+      : erpBreakdown
+      ? round2(erpBreakdown.material_cost * erpUnits)
       : tpl
       ? round2(Number(tpl.material_cost) * d.quantity)
       : Number(existing?.cost_material ?? 0);
 
-    const costPackaging = preserveManualCosts
+    const costPackaging = preserveExistingCosts
       ? Number(existing?.cost_packaging ?? 0)
+      : erpBreakdown
+      ? round2(erpBreakdown.packaging_cost * linkQtyPerSale)
       : tpl
       ? round2(Number(tpl.packaging_cost))
       : Number(existing?.cost_packaging ?? 0);
 
-    const costLogistics = preserveManualCosts
+    const costLogistics = preserveExistingCosts
       ? Number(existing?.cost_logistics ?? 0)
+      : erpBreakdown
+      ? round2(erpBreakdown.logistics_cost * linkQtyPerSale)
       : tpl
       ? round2(Number(tpl.logistics_cost))
       : Number(existing?.cost_logistics ?? 0);
 
-    const costPrinting = preserveManualCosts
+    const costPrinting = preserveExistingCosts
       ? Number(existing?.cost_printing ?? 0)
+      : erpBreakdown
+      ? round2(erpBreakdown.printing_cost * linkQtyPerSale)
       : tpl
       ? round2(Number(tpl.printing_cost))
       : Number(existing?.cost_printing ?? 0);
 
-    const costAccessoriesKit = preserveManualCosts
+    const costAccessoriesKit = preserveExistingCosts
       ? Number(existing?.cost_accessories_kit ?? 0)
+      : erpBreakdown
+      ? round2(erpBreakdown.accessories_kit_cost * erpUnits)
       : tpl
       ? round2(Number(tpl.accessories_kit_cost) * d.quantity)
       : Number(existing?.cost_accessories_kit ?? 0);
+
+    const hasAssignedCostNow =
+      costMaterial > 0 ||
+      costPackaging > 0 ||
+      costLogistics > 0 ||
+      costPrinting > 0 ||
+      costAccessoriesKit > 0;
+
+    const initialLotSummary =
+      !preserveExistingCosts && erpProduct && erpProduct.roll_consumptions.length > 0
+        ? erpProduct.roll_consumptions.map((rc) => {
+            const rollRef = erpRollById.get(rc.roll_id);
+            const activeLot = rollRef?.active_lot ?? null;
+            const meters = Number((rc.linear_meters * erpUnits).toFixed(6));
+            const area = Number((rc.area_m2 * erpUnits).toFixed(6));
+            const unitCost = Number(
+              activeLot?.cost_per_linear_meter ?? rc.cost_per_linear_meter ?? 0
+            );
+            return {
+              lot_id: activeLot?.id ?? null,
+              lot_code: activeLot?.lot_code ?? rollRef?.lot_number ?? "VIGENTE",
+              roll_id: rc.roll_id,
+              roll_code: rc.roll_code,
+              supplier_id: activeLot?.supplier_id ?? rollRef?.supplier_id ?? null,
+              supplier_name: activeLot?.supplier_name ?? rollRef?.supplier ?? null,
+              meters,
+              area_m2: area,
+              unit_cost_per_meter: unitCost,
+              total_cost: round2(meters * unitCost),
+            };
+          })
+        : null;
 
     const basePayload: Record<string, unknown> = {
       organization_id: scope.organizationId,
@@ -371,6 +461,30 @@ async function upsertDraftsPreservingManualFields(params: {
       cost_printing: costPrinting,
       cost_accessories_kit: costAccessoriesKit,
     };
+
+    if (costSnapshotColumnsAvailable) {
+      const shouldLock = preserveExistingCosts || hasAssignedCostNow;
+      basePayload.cost_snapshot_locked = shouldLock;
+      basePayload.cost_snapshot_locked_at = existing?.cost_snapshot_locked_at
+        ? String(existing.cost_snapshot_locked_at)
+        : shouldLock
+        ? syncNowIso
+        : null;
+      basePayload.cost_snapshot_source = existing?.cost_snapshot_source
+        ? String(existing.cost_snapshot_source)
+        : preserveManualCosts
+        ? "manual"
+        : erpBreakdown && hasAssignedCostNow
+        ? "webhook_erp_lot_snapshot"
+        : hasAssignedCostNow
+        ? "webhook_template_snapshot"
+        : null;
+      if (existing?.cost_lot_summary !== undefined && preserveExistingCosts) {
+        basePayload.cost_lot_summary = existing.cost_lot_summary;
+      } else if (initialLotSummary) {
+        basePayload.cost_lot_summary = initialLotSummary;
+      }
+    }
 
     if (shippingColumnsAvailable) {
       const isManualShipped =
@@ -487,6 +601,7 @@ export async function syncMercadoLivreSingleOrderBySeller(params: {
     fetchItemThumbnailsMap(distinctMlbs, ctx.account, ctx.tokenRef),
     syncListingsStockInCatalog({
       mlbIds: distinctMlbs,
+      userId: ctx.scope.userId,
       account: ctx.account,
       tokenRef: ctx.tokenRef,
     }),
@@ -587,6 +702,7 @@ export async function syncMercadoLivreItemBySeller(params: {
 
   const listingsUpdated = await syncListingsStockInCatalog({
     mlbIds: [params.mlbId],
+    userId: ctx.scope.userId,
     account: ctx.account,
     tokenRef: ctx.tokenRef,
   });

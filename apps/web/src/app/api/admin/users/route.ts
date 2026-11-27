@@ -13,11 +13,11 @@ export async function GET() {
   try {
     const supabase = createSupabaseServerClient();
     const {
-      data: { session },
-    } = await supabase.auth.getSession();
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    // Apenas o Rodolfo pode acessar
-    if (session?.user?.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
+    // Apenas o Rodolfo pode acessar (validado server-side via getUser)
+    if (user?.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
       return NextResponse.json({ error: "Acesso restrito ao Administrador Geral." }, { status: 403 });
     }
 
@@ -70,11 +70,11 @@ export async function POST(req: Request) {
   try {
     const supabase = createSupabaseServerClient();
     const {
-      data: { session },
-    } = await supabase.auth.getSession();
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    // Apenas o Rodolfo pode executar alterações
-    if (session?.user?.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
+    // Apenas o Rodolfo pode executar alterações (validado server-side via getUser)
+    if (user?.email?.toLowerCase() !== SUPER_ADMIN_EMAIL) {
       return NextResponse.json({ error: "Acesso restrito ao Administrador Geral." }, { status: 403 });
     }
 
@@ -109,8 +109,12 @@ export async function POST(req: Request) {
         .eq("id", profile.organization_id);
     }
 
-    // 3. Atualiza os metadados no Supabase Auth para liberação imediata no middleware
+    // 3. Atualiza `app_metadata` (somente escrita via Service Role — imune a adulteração pelo cliente!)
     await admin.auth.admin.updateUserById(userId, {
+      app_metadata: {
+        status: newStatus,
+        is_approved: action === "approve",
+      },
       user_metadata: {
         status: newStatus,
         is_approved: action === "approve",

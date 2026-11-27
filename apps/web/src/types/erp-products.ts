@@ -58,6 +58,70 @@ export interface ErpProductPhoto {
   alt?: string | null;
 }
 
+export type ErpPpfRollLotStatus = "in_use" | "queued" | "exhausted" | "archived";
+
+export interface ErpPpfRollLot {
+  id: string;
+  organization_id: string | null;
+  user_id: string | null;
+  ppf_roll_id: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  supplier_ref?: ErpSupplier | null;
+  lot_code: string;
+  invoice_number: string | null;
+  purchase_date: string;
+  roll_width_cm: number;
+  initial_meters: number;
+  remaining_meters: number;
+  total_purchase_cost: number;
+  cost_per_linear_meter: number;
+  cost_per_m2: number;
+  status: ErpPpfRollLotStatus;
+  queue_order: number;
+  started_using_at: string | null;
+  exhausted_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ErpOrderCostLotSummaryItem {
+  lot_id: string | null;
+  lot_code: string;
+  roll_id: string;
+  roll_code: string;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  meters: number;
+  area_m2: number;
+  unit_cost_per_meter: number;
+  total_cost: number;
+}
+
+export interface ErpOrderRollConsumption {
+  id: string;
+  organization_id: string | null;
+  user_id: string | null;
+  ml_order_id: number;
+  order_date: string;
+  mlb_id: string;
+  product_id: string | null;
+  ppf_roll_id: string | null;
+  ppf_roll_lot_id: string | null;
+  supplier_id: string | null;
+  supplier_name_snapshot: string | null;
+  lot_code_snapshot: string | null;
+  roll_code_snapshot: string | null;
+  roll_name_snapshot: string | null;
+  meters_consumed: number;
+  area_m2_consumed: number;
+  unit_cost_per_meter_snapshot: number;
+  total_cost_snapshot: number;
+  source_stage: "sync_estimate" | "deduction";
+  created_at: string;
+}
+
 export interface ErpPpfRoll {
   id: string;
   organization_id: string | null;
@@ -82,6 +146,10 @@ export interface ErpPpfRoll {
   active: boolean;
   created_at: string;
   updated_at: string;
+  lots?: ErpPpfRollLot[];
+  active_lot?: ErpPpfRollLot | null;
+  queued_lots_count?: number;
+  total_queued_meters?: number;
 }
 
 export interface ErpProduct {
@@ -202,10 +270,14 @@ export interface ErpStockMovement {
   entity_type: "product" | "ppf_roll";
   product_id: string | null;
   ppf_roll_id: string | null;
+  ppf_roll_lot_id?: string | null;
+  supplier_id?: string | null;
   movement_type: "in" | "out" | "adjustment" | "sale_deduction" | "sale_return";
   quantity_delta: number;
   balance_after: number;
   unit: string;
+  unit_cost?: number | null;
+  total_cost?: number | null;
   reference_order_id: number | null;
   reference_mlb_id: string | null;
   reason: string | null;
@@ -214,6 +286,7 @@ export interface ErpStockMovement {
   product_sku?: string | null;
   roll_name?: string | null;
   roll_code?: string | null;
+  lot_code?: string | null;
 }
 
 export interface ErpSalesConsumptionItem {
@@ -236,8 +309,10 @@ export interface ErpOverviewResponse {
   success: boolean;
   schemaReady: boolean;
   suppliersSchemaReady?: boolean;
+  lotsSchemaReady?: boolean;
   suppliers: ErpSupplier[];
   rolls: ErpPpfRoll[];
+  rollLots?: ErpPpfRollLot[];
   products: ErpProductWithSummary[];
   links: ErpListingLink[];
   movements: ErpStockMovement[];

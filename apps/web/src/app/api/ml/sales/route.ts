@@ -60,6 +60,12 @@ function normalizeOrderRow(row: Record<string, unknown>): MlSaleOrder {
     assigned_seller_id: row.assigned_seller_id ? String(row.assigned_seller_id) : null,
     verified_at: row.verified_at ? String(row.verified_at) : null,
     costs_manually_edited: Boolean(row.costs_manually_edited),
+    cost_snapshot_locked: Boolean(row.cost_snapshot_locked),
+    cost_snapshot_locked_at: row.cost_snapshot_locked_at ? String(row.cost_snapshot_locked_at) : null,
+    cost_snapshot_source: row.cost_snapshot_source ? String(row.cost_snapshot_source) : null,
+    cost_lot_summary: Array.isArray(row.cost_lot_summary)
+      ? (row.cost_lot_summary as MlSaleOrder["cost_lot_summary"])
+      : null,
     gross_sale_amount: Number(row.gross_sale_amount || 0),
     ml_commission_pct: Number(row.ml_commission_pct || 0),
     ml_commission_amount: Number(row.ml_commission_amount || 0),

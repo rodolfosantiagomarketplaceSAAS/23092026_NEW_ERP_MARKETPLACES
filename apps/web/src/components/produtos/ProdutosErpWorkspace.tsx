@@ -10,6 +10,8 @@ import {
   CheckCircle2,
   Database,
   Eye,
+  Flag,
+  History,
   Layers,
   Link2,
   Loader2,
@@ -19,9 +21,11 @@ import {
   PackagePlus,
   Pencil,
   Phone,
+  Play,
   Plus,
   RefreshCw,
   Search,
+  ShoppingCart,
   Trash2,
   TrendingDown,
 } from "lucide-react";
@@ -29,6 +33,7 @@ import type {
   ErpListingLink,
   ErpOverviewResponse,
   ErpPpfRoll,
+  ErpPpfRollLot,
   ErpProductType,
   ErpProductWithSummary,
   ErpRollConsumptionSummary,
@@ -36,6 +41,7 @@ import type {
   ErpSupplier,
 } from "@/types/erp-products";
 import { PpfRollFormModal } from "./PpfRollFormModal";
+import { PpfRollLotPurchaseModal } from "./PpfRollLotPurchaseModal";
 import { ProductFormModal } from "./ProductFormModal";
 import { LinkListingModal } from "./LinkListingModal";
 import { StockMovementModal } from "./StockMovementModal";
@@ -68,6 +74,9 @@ export function ProdutosErpWorkspace() {
   // Modais e Drawers
   const [rollModalOpen, setRollModalOpen] = useState(false);
   const [editingRoll, setEditingRoll] = useState<ErpPpfRoll | null>(null);
+  const [lotPurchaseRoll, setLotPurchaseRoll] = useState<ErpPpfRoll | null>(null);
+  const [expandedLotsRollId, setExpandedLotsRollId] = useState<string | null>(null);
+  const [lotActionBusyId, setLotActionBusyId] = useState<string | null>(null);
 
   const [supplierModalOpen, setSupplierModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<ErpSupplier | null>(null);
@@ -226,6 +235,39 @@ export function ProdutosErpWorkspace() {
     }
   }
 
+  async function handleLotAction(lot: ErpPpfRollLot, action: "exhaust" | "activate") {
+    const confirmMsg =
+      action === "exhaust"
+        ? `Encerrar a bobina/lote "${lot.lot_code}" agora? O próximo lote da fila PEPS assumirá automaticamente o custo vigente para novas vendas (vendas antigas não serão alteradas).`
+        : `Colocar o lote "${lot.lot_code}" (${formatBRL(Number(lot.cost_per_linear_meter))}/m) em uso agora para novas vendas?`;
+    if (!confirm(confirmMsg)) return;
+
+    setLotActionBusyId(lot.id);
+    try {
+      const res = await fetch("/api/erp/ppf-roll-lots", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ lot_id: lot.id, action }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || "Erro ao atualizar status do lote.");
+      }
+      showToast(
+        action === "exhaust"
+          ? data.promotedLot
+            ? `Lote ${lot.lot_code} encerrado! Próximo lote ${data.promotedLot.lot_code} assumiu como vigente.`
+            : `Lote ${lot.lot_code} encerrado.`
+          : `Lote ${lot.lot_code} ativado como custo vigente para novas vendas.`
+      );
+      loadOverview();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Erro ao executar ação no lote.");
+    } finally {
+      setLotActionBusyId(null);
+    }
+  }
+
   async function handleDeleteLink(link: ErpListingLink) {
     if (!confirm(`Remover vínculo do anúncio ${link.external_listing_id}?`)) return;
     const res = await fetch(`/api/erp/listing-links?id=${link.id}`, { method: "DELETE" });
@@ -324,6 +366,20 @@ export function ProdutosErpWorkspace() {
               <strong>Migração SQL de Fornecedores pendente no Supabase:</strong> execute{" "}
               <code>supabase/migrations/20261127140000_create_erp_suppliers.sql</code> no SQL Editor
               do Supabase para ativar o cadastro de Fornecedores/Fabricantes e o vínculo nos produtos e bobinas.
+            </div>
+          </div>
+        )}
+        {overview && overview.schemaReady && overview.lotsSchemaReady === false && (
+          <div className="p-4 rounded-2xl bg-amber-50 border border-amber-300 flex items-start gap-3">
+            <Database className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="text-xs text-amber-900">
+              <strong>Migração SQL de Lotes PEPS &amp; Custo Histórico pendente no Supabase:</strong>{" "}
+              execute{" "}
+              <code>
+                supabase/migrations/20261127180000_create_erp_ppf_roll_lots_and_cost_snapshots.sql
+              </code>{" "}
+              no SQL Editor do Supabase para ativar a fila de compras de bobinas (PEPS/FIFO) e o
+              congelamento histórico de custos nas vendas.
             </div>
           </div>
         )}
@@ -846,7 +902,7 @@ export function ProdutosErpWorkspace() {
                       <div className="space-y-1.5">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-slate-600">
-                            Saldo da Bobina ({roll.roll_width_cm}cm × {roll.roll_length_m}m)
+                            Saldo Total ({roll.roll_width_cm}cm × {roll.roll_length_m}m)
                           </span>
                           <span
                             className={`font-extrabold ${
@@ -865,17 +921,176 @@ export function ProdutosErpWorkspace() {
                           />
                         </div>
                       </div>
+
+                      {/* Bloco PEPS: Lote Vigente em Uso + Fila de Compras */}
+                      {roll.active_lot ? (
+                        <div className="p-3 rounded-xl bg-emerald-50/70 border border-emerald-200/80 space-y-1.5 text-[11px]">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="inline-flex items-center gap-1 font-bold text-emerald-800">
+                              <span className="w-2 h-2 rounded-full bg-emerald-500" />
+                              Em Uso: {roll.active_lot.lot_code}
+                            </span>
+                            <span className="font-extrabold text-emerald-700">
+                              {Number(roll.active_lot.remaining_meters).toFixed(2).replace(".", ",")}m
+                              {" / "}
+                              {Number(roll.active_lot.initial_meters).toFixed(0)}m
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center justify-between gap-1 text-slate-600">
+                            <span>
+                              {roll.active_lot.supplier_name || "Fornecedor não informado"} •{" "}
+                              {new Date(`${roll.active_lot.purchase_date}T12:00:00`).toLocaleDateString("pt-BR")}
+                            </span>
+                            <strong className="text-slate-800">
+                              Pago: {formatBRL(Number(roll.active_lot.total_purchase_cost))}
+                            </strong>
+                          </div>
+                          {(roll.queued_lots_count ?? 0) > 0 && (
+                            <div className="pt-1 border-t border-emerald-200/70 flex items-center justify-between text-sky-800 font-semibold">
+                              <span>
+                                +{roll.queued_lots_count} bobina(s) na fila PEPS
+                              </span>
+                              <span>
+                                {(roll.total_queued_meters ?? 0).toFixed(2).replace(".", ",")} m reservados
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+
+                      {/* Lista expandível do histórico de lotes/compras */}
+                      {(roll.lots?.length ?? 0) > 0 && (
+                        <div className="space-y-2">
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setExpandedLotsRollId(
+                                expandedLotsRollId === roll.id ? null : roll.id
+                              )
+                            }
+                            className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200/80 text-[11px] font-semibold text-slate-700"
+                          >
+                            <span className="inline-flex items-center gap-1.5">
+                              <History className="w-3.5 h-3.5 text-slate-500" />
+                              Histórico &amp; Fila PEPS ({roll.lots?.length} lote(s))
+                            </span>
+                            <span>{expandedLotsRollId === roll.id ? "Ocultar" : "Gerenciar"}</span>
+                          </button>
+
+                          {expandedLotsRollId === roll.id && (
+                            <div className="space-y-1.5 max-h-56 overflow-y-auto pr-0.5">
+                              {(roll.lots ?? []).map((lot) => {
+                                const isBusy = lotActionBusyId === lot.id;
+                                return (
+                                  <div
+                                    key={lot.id}
+                                    className={`p-2.5 rounded-xl border text-[11px] space-y-1 ${
+                                      lot.status === "in_use"
+                                        ? "bg-emerald-50/50 border-emerald-300"
+                                        : lot.status === "queued"
+                                        ? "bg-sky-50/40 border-sky-200"
+                                        : "bg-slate-50 border-slate-200 opacity-75"
+                                    }`}
+                                  >
+                                    <div className="flex items-center justify-between gap-2">
+                                      <div className="flex items-center gap-1.5 min-w-0">
+                                        <span className="font-mono font-bold text-slate-800 truncate">
+                                          {lot.lot_code}
+                                        </span>
+                                        <span
+                                          className={`px-1.5 py-0.5 rounded-full text-[9px] font-extrabold uppercase ${
+                                            lot.status === "in_use"
+                                              ? "bg-emerald-600 text-white"
+                                              : lot.status === "queued"
+                                              ? "bg-sky-600 text-white"
+                                              : "bg-slate-300 text-slate-700"
+                                          }`}
+                                        >
+                                          {lot.status === "in_use"
+                                            ? "Em uso"
+                                            : lot.status === "queued"
+                                            ? "Na fila"
+                                            : "Esgotada"}
+                                        </span>
+                                      </div>
+                                      <span className="font-bold text-emerald-700 shrink-0">
+                                        {formatBRL(Number(lot.cost_per_linear_meter))}/m
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-[10px] text-slate-600">
+                                      <span className="truncate">
+                                        {lot.supplier_name || "Sem fornecedor"} •{" "}
+                                        {new Date(`${lot.purchase_date}T12:00:00`).toLocaleDateString("pt-BR")}
+                                      </span>
+                                      <span className="font-semibold shrink-0">
+                                        {Number(lot.remaining_meters).toFixed(2).replace(".", ",")}m /{" "}
+                                        {Number(lot.initial_meters).toFixed(0)}m (
+                                        {formatBRL(Number(lot.total_purchase_cost))})
+                                      </span>
+                                    </div>
+                                    {lot.status === "in_use" && (
+                                      <div className="pt-1 flex justify-end">
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() => handleLotAction(lot, "exhaust")}
+                                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold bg-amber-100 text-amber-900 hover:bg-amber-200 disabled:opacity-50"
+                                        >
+                                          {isBusy ? (
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                          ) : (
+                                            <Flag className="w-3 h-3" />
+                                          )}
+                                          Encerrar Bobina (Virar Lote)
+                                        </button>
+                                      </div>
+                                    )}
+                                    {lot.status === "queued" && (
+                                      <div className="pt-1 flex justify-end">
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() => handleLotAction(lot, "activate")}
+                                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] font-bold bg-sky-100 text-sky-900 hover:bg-sky-200 disabled:opacity-50"
+                                        >
+                                          {isBusy ? (
+                                            <Loader2 className="w-3 h-3 animate-spin" />
+                                          ) : (
+                                            <Play className="w-3 h-3" />
+                                          )}
+                                          Colocar em Uso Agora
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
 
-                    <div className="flex items-center justify-between pt-3 border-t border-slate-100">
-                      <button
-                        type="button"
-                        onClick={() => setStockTarget({ type: "ppf_roll", roll })}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100"
-                      >
-                        <ArrowDownUp className="w-3.5 h-3.5" />
-                        Repor / Ajustar Metros
-                      </button>
+                    <div className="flex flex-wrap items-center justify-between gap-2 pt-3 border-t border-slate-100">
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setLotPurchaseRoll(roll)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-emerald-600 text-white hover:bg-emerald-700"
+                        >
+                          <ShoppingCart className="w-3.5 h-3.5" />
+                          Nova Compra
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setStockTarget({ type: "ppf_roll", roll })}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-sky-50 text-sky-700 hover:bg-sky-100"
+                          title="Ajuste manual rápido de metros"
+                        >
+                          <ArrowDownUp className="w-3.5 h-3.5" />
+                          Ajustar
+                        </button>
+                      </div>
                       <div className="flex items-center gap-1">
                         <button
                           type="button"
@@ -1336,7 +1551,8 @@ export function ProdutosErpWorkspace() {
                       <th className="py-2.5 px-3">Tipo</th>
                       <th className="py-2.5 px-3 text-right">Movimentação</th>
                       <th className="py-2.5 px-3 text-right">Saldo Após</th>
-                      <th className="py-2.5 px-4">Motivo</th>
+                      <th className="py-2.5 px-3 text-right">Custo Histórico</th>
+                      <th className="py-2.5 px-4">Motivo / Lote</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -1366,7 +1582,30 @@ export function ProdutosErpWorkspace() {
                         <td className="py-2 px-3 text-right font-semibold text-slate-700">
                           {Number(mov.balance_after).toFixed(mov.unit === "M" ? 2 : 0)} {mov.unit}
                         </td>
-                        <td className="py-2 px-4 text-slate-500">{mov.reason || "—"}</td>
+                        <td className="py-2 px-3 text-right whitespace-nowrap">
+                          {mov.total_cost != null ? (
+                            <div>
+                              <strong className="text-emerald-700">
+                                {formatBRL(Number(mov.total_cost))}
+                              </strong>
+                              {mov.unit_cost != null && (
+                                <span className="block text-[10px] text-slate-400">
+                                  {formatBRL(Number(mov.unit_cost))}/{mov.unit}
+                                </span>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="text-slate-300">—</span>
+                          )}
+                        </td>
+                        <td className="py-2 px-4 text-slate-500">
+                          {mov.lot_code && (
+                            <span className="inline-block mr-1.5 px-1.5 py-0.5 rounded bg-sky-100 text-sky-800 font-mono text-[10px] font-bold">
+                              {mov.lot_code}
+                            </span>
+                          )}
+                          {mov.reason || "—"}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -1395,6 +1634,18 @@ export function ProdutosErpWorkspace() {
         onClose={() => setRollModalOpen(false)}
         onSaved={() => {
           showToast("Bobina PPF salva com sucesso!");
+          loadOverview();
+        }}
+        onSupplierCreated={() => loadOverview()}
+      />
+
+      <PpfRollLotPurchaseModal
+        open={Boolean(lotPurchaseRoll)}
+        roll={lotPurchaseRoll}
+        suppliers={overview?.suppliers ?? []}
+        onClose={() => setLotPurchaseRoll(null)}
+        onSaved={() => {
+          showToast("Nova compra de bobina registrada na fila PEPS!");
           loadOverview();
         }}
         onSupplierCreated={() => loadOverview()}

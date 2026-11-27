@@ -150,6 +150,21 @@ export interface MlSaleOrder {
   assigned_seller_id: string | null;
   verified_at: string | null;
   costs_manually_edited: boolean;
+  cost_snapshot_locked?: boolean;
+  cost_snapshot_locked_at?: string | null;
+  cost_snapshot_source?: string | null;
+  cost_lot_summary?: Array<{
+    lot_id: string | null;
+    lot_code: string;
+    roll_id: string;
+    roll_code: string;
+    supplier_id: string | null;
+    supplier_name: string | null;
+    meters: number;
+    area_m2: number;
+    unit_cost_per_meter: number;
+    total_cost: number;
+  }> | null;
 
   gross_sale_amount: number;
   ml_commission_pct: number;

@@ -1,10 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { removeCompetitorMatch, removeMyListing } from "@/lib/data/comparativeStore";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 
 export async function POST(req: NextRequest) {
   try {
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+
     const body = await req.json();
     const { my_listing_id, competitor_listing_id } = body;
 
@@ -17,21 +23,34 @@ export async function POST(req: NextRequest) {
 
     const supabase = createSupabaseAdminClient();
 
-    // 1. Obtém o usuário associado ao anúncio próprio
-    const { data: myListing } = await supabase
-      .from("my_listings")
-      .select("user_id")
-      .eq("id", my_listing_id)
-      .single();
+    // Confere propriedade tanto do anúncio próprio quanto do concorrente (bloqueia IDOR!)
+    const [{ data: myListing }, { data: compListing }] = await Promise.all([
+      supabase
+        .from("my_listings")
+        .select("id")
+        .eq("id", my_listing_id)
+        .eq("user_id", ctx.userId)
+        .maybeSingle(),
+      supabase
+        .from("competitor_listings")
+        .select("id")
+        .eq("id", competitor_listing_id)
+        .eq("user_id", ctx.userId)
+        .maybeSingle(),
+    ]);
 
-    const userId = myListing?.user_id || "69ee4850-318b-4d9e-83ab-6743f264b6aa";
+    if (!myListing || !compListing) {
+      return NextResponse.json(
+        { error: "Anúncio próprio ou concorrente não encontrado na sua conta." },
+        { status: 404 }
+      );
+    }
 
-    // 2. Cria ou atualiza o vínculo no listing_matches
     const { error: matchError } = await supabase
       .from("listing_matches")
       .upsert(
         {
-          user_id: userId,
+          user_id: ctx.userId,
           my_listing_id,
           competitor_listing_id,
           is_active: true,
@@ -47,12 +66,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Atualiza imediatamente o preço e status promocional do anúncio próprio direto do ML
-    try {
-      await syncSingleMyListingPrice(my_listing_id);
-    } catch (syncErr) {
-      console.warn("[POST /api/competitors/matches] Aviso ao sincronizar preço próprio:", syncErr);
-    }
+    await syncSingleMyListingPrice(my_listing_id, {
+      userId: ctx.userId,
+      organizationId: ctx.organizationId,
+    }).catch((syncErr) =>
+      console.warn("[POST /api/competitors/matches] Aviso ao sincronizar preço próprio:", syncErr)
+    );
 
     return NextResponse.json({
       success: true,
@@ -61,12 +80,20 @@ export async function POST(req: NextRequest) {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Erro desconhecido";
     console.error("[POST /api/competitors/matches] Erro:", message);
-    return NextResponse.json({ error: "Erro interno ao parear concorrente.", details: message }, { status: 500 });
+    return NextResponse.json(
+      { error: "Erro interno ao parear concorrente.", details: message },
+      { status: 500 }
+    );
   }
 }
 
 export async function DELETE(req: NextRequest) {
   try {
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(req.url);
     const purgeUnlinked = searchParams.get("purge_unlinked") === "true";
     const competitorId = searchParams.get("competitor_id");
@@ -75,20 +102,25 @@ export async function DELETE(req: NextRequest) {
     const supabase = createSupabaseAdminClient();
 
     if (purgeUnlinked) {
-      // Busca todos os IDs vinculados em listing_matches
+      // SEGURANÇA MULTI-TENANT: Limpa APENAS os concorrentes avulsos do `user_id` autenticado!
       const { data: matches } = await supabase
         .from("listing_matches")
-        .select("competitor_listing_id");
+        .select("competitor_listing_id")
+        .eq("user_id", ctx.userId);
 
       const linkedIds = (matches || [])
-        .map((m: any) => m.competitor_listing_id)
-        .filter(Boolean);
+        .map((m: { competitor_listing_id?: string | null }) => m.competitor_listing_id)
+        .filter((id): id is string => Boolean(id) && /^[0-9a-f-]{36}$/i.test(String(id)));
 
-      // Exclui todos os competitor_listings não vinculados
-      let query = supabase.from("competitor_listings").delete();
+      let query = supabase
+        .from("competitor_listings")
+        .delete()
+        .eq("user_id", ctx.userId);
+
       if (linkedIds.length > 0) {
         query = query.not("id", "in", `(${linkedIds.join(",")})`);
       }
+
       const { error: purgeError } = await query;
       if (purgeError) {
         console.error("[DELETE /api/competitors/matches purge] Erro:", purgeError);
@@ -100,7 +132,7 @@ export async function DELETE(req: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: "Anúncios avulsos e testes do radar foram limpos com sucesso!",
+        message: "Anúncios avulsos do seu radar foram limpos com sucesso!",
       });
     }
 
@@ -111,30 +143,18 @@ export async function DELETE(req: NextRequest) {
       );
     }
 
-    // Identifica usuário pelo Authorization header se houver
-    const authHeader = req.headers.get("authorization");
-    let userId: string | null = null;
-    if (authHeader && authHeader.startsWith("Bearer ")) {
-      const token = authHeader.replace("Bearer ", "").trim();
-      const supabase = createSupabaseAdminClient();
-      const { data: authData } = await supabase.auth.getUser(token);
-      if (authData?.user) {
-        userId = authData.user.id;
-      }
-    }
-
     if (competitorId) {
-      // Exclui o anúncio concorrente pareado
-      await removeCompetitorMatch(myListingId || "", competitorId, userId);
+      await removeCompetitorMatch(myListingId || "", competitorId, ctx.userId);
       return NextResponse.json({
         success: true,
         message: "Concorrente removido do monitoramento com sucesso.",
         competitor_id: competitorId,
         my_listing_id: myListingId || null,
       });
-    } else if (myListingId) {
-      // Exclui o anúncio próprio do monitoramento
-      await removeMyListing(myListingId, userId);
+    }
+
+    if (myListingId) {
+      await removeMyListing(myListingId, ctx.userId);
       return NextResponse.json({
         success: true,
         message: "Anúncio próprio removido do catálogo de monitoramento com sucesso.",
