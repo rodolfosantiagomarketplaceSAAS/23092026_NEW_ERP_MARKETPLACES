@@ -34,6 +34,7 @@ import {
 } from "./financial-reconciliation";
 
 import {
+  clampSyncDateRangeToToday,
   extractShipmentDatesAndLogistics,
   isDispatchedShipmentSubstatus,
   isLegacyManualNoonTimestamp,
@@ -50,6 +51,7 @@ import {
 
 export {
   applyPackShippingProration,
+  clampSyncDateRangeToToday,
   extractShipmentDatesAndLogistics,
   isLegacyManualNoonTimestamp,
   normalizeManualShippedAtInput,

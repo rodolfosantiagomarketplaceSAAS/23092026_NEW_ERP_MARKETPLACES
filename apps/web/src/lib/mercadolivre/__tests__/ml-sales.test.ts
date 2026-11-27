@@ -9,6 +9,7 @@ import {
   matchesSalesStatusFilter,
 } from "../sales-analytics";
 import {
+  clampSyncDateRangeToToday,
   extractShipmentDatesAndLogistics,
   isLegacyManualNoonTimestamp,
   normalizeManualShippedAtInput,
@@ -480,10 +481,51 @@ test("data de envio definida manualmente entra na métrica e informa valor obtid
   assert.equal(analytics.dailyClosing[0].effective_transfer_total, 290);
 });
 
-test("filtros pré-definidos por Mês, Ano e Todas as Vendas e upgrade de miniatura HD funcionam corretamente", () => {
-  const allRange = computeDatePresetRange("all");
+test("filtros pré-definidos por Mês, Ano e Todas as Vendas cobrem o período calendário completo e mantêm envios manuais agendados até o fim do mês visíveis", () => {
+  const allRange = computeDatePresetRange("all", "2026-11-27");
   assert.equal(allRange.isAll, true);
   assert.equal(allRange.from, "");
+
+  // Cenário real reportado: hoje é 27/11/2026 e a venda #2000016279093509 teve envio manual definido para 30/11/2026.
+  // "Este Mês" e "Este Ano" / "Ano 2026" DEVEM fechar o mês/ano calendário completo (30/11 e 31/12).
+  const thisMonthMidNov = computeDatePresetRange("thisMonth", "2026-11-27");
+  assert.deepEqual(thisMonthMidNov, { from: "2026-11-01", to: "2026-11-30" });
+
+  const thisYearMidNov = computeDatePresetRange("thisYear", "2026-11-27");
+  assert.deepEqual(thisYearMidNov, { from: "2026-01-01", to: "2026-12-31" });
+
+  const currentYearSpecific = computeSpecificYearRange(2026);
+  assert.deepEqual(currentYearSpecific, { from: "2026-01-01", to: "2026-12-31" });
+
+  const scheduledManualOrder = makeOrder({
+    id: "ffffffff-ffff-4fff-8fff-fffffffffff1",
+    ml_order_id: 2000016279093509,
+    status: "paid",
+    order_date: "2026-11-26T19:09:00.000Z", // 26/11/2026 16:09 BRT
+    shipped_at: normalizeManualShippedAtInput("2026-11-30"), // 30/11/2026 12:00 BRT
+    shipped_at_manual: true,
+    gross_sale_amount: 120,
+  });
+
+  const visibleInThisMonthByShipping = filterOrdersByAnalysisMode({
+    orders: [scheduledManualOrder],
+    fromDate: thisMonthMidNov.from,
+    toDate: thisMonthMidNov.to,
+    analysisMode: "shipping_date",
+    includePendingShipments: true,
+  });
+  assert.equal(visibleInThisMonthByShipping.length, 1);
+  assert.equal(visibleInThisMonthByShipping[0].ml_order_id, 2000016279093509);
+
+  // Na sincronização com a API do ML (order.date_created), o limite superior é travado em hoje (27/11) sem afetar o banco
+  assert.deepEqual(
+    clampSyncDateRangeToToday(thisMonthMidNov.from, thisMonthMidNov.to, "2026-11-27"),
+    { from: "2026-11-01", to: "2026-11-27" }
+  );
+  assert.deepEqual(
+    clampSyncDateRangeToToday(thisYearMidNov.from, thisYearMidNov.to, "2026-11-27"),
+    { from: "2026-01-01", to: "2026-11-27" }
+  );
 
   const febRange = computeSpecificMonthRange(2026, 2);
   assert.deepEqual(febRange, { from: "2026-02-01", to: "2026-02-28" });
