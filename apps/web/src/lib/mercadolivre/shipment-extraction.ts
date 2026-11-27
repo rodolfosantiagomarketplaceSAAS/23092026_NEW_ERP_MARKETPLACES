@@ -23,13 +23,17 @@ export interface RawShipmentDetail {
   id: number;
   order_id?: number | null;
   status?: string;
-  substatus?: string;
+  substatus?: string | null;
   date_created?: string | null;
   last_updated?: string | null;
+  shipped_date?: string | null;
+  date_shipped?: string | null;
+  tracking_number?: string | null;
   logistic_type?: string | null;
   logistic?: {
     type?: string | null;
     mode?: string | null;
+    direction?: string | null;
   } | null;
   status_history?: RawShipmentStatusHistory | null;
   substatus_history?: RawShipmentSubstatusHistoryEntry[] | null;
@@ -57,8 +61,11 @@ export interface RawShipmentDetail {
 
 export interface RawShipmentTimelineEvent {
   event_date?: string | null;
+  date?: string | null;
   code?: string | null;
   event_name?: string | null;
+  status?: string | null;
+  substatus?: string | null;
 }
 
 export interface RawShipmentHistoryEntry {
@@ -66,25 +73,35 @@ export interface RawShipmentHistoryEntry {
   substatus?: string | null;
   date?: string | null;
   date_created?: string | null;
+  event_date?: string | null;
 }
 
 /**
  * Substatus do Mercado Envios que comprovam a postagem/coleta física do pacote pelo vendedor.
  * Na modalidade Agência ML (`xd_drop_off`) e Coleta (`cross_docking`), o shipment permanece em
  * `status: "ready_to_ship"` com `substatus: "dropped_off"` / `"picked_up"` / `"in_hub"` até o ML
- * expedir do centro de distribuição (quando só então preenche `status_history.date_shipped`, 1–3 dias depois).
+ * expedir do centro de distribuição (quando só então muda para `status: "shipped"`, 1–3 dias depois).
  */
 export const DISPATCHED_SHIPMENT_SUBSTATUSES: ReadonlySet<string> = new Set([
   "dropped_off",
   "picked_up",
+  "picked_up_by_carrier",
   "in_hub",
+  "hub_in",
+  "hub_out",
+  "on_route_to_hub",
+  "in_cross_docking",
+  "sorting",
   "in_packing_list",
+  "waiting_for_handover",
   "out_for_delivery",
   "at_customs",
   "soon_deliver",
   "waiting_for_withdrawal",
   "arrived_at_agency",
   "in_warehouse",
+  "forwarded_to_third",
+  "delivered",
   "returned",
   "returning_to_sender",
 ]);
@@ -99,6 +116,21 @@ export function isValidIsoTimestamp(val?: string | null): val is string {
   return !Number.isNaN(Date.parse(val));
 }
 
+/**
+ * Detecta se um timestamp salvo anteriormente corresponde exatamente ao meio-dia de Brasília (`15:00:00.000Z`)
+ * gerado por `normalizeManualShippedAtInput("YYYY-MM-DD")`, protegendo marcações manuais legadas.
+ */
+export function isLegacyManualNoonTimestamp(val?: string | null): boolean {
+  if (!isValidIsoTimestamp(val)) return false;
+  const d = new Date(val);
+  return (
+    d.getUTCHours() === 15 &&
+    d.getUTCMinutes() === 0 &&
+    d.getUTCSeconds() === 0 &&
+    d.getUTCMilliseconds() === 0
+  );
+}
+
 function pickEarliestIso(candidates: Array<string | null | undefined>): string | null {
   const valid = candidates.filter(isValidIsoTimestamp);
   if (valid.length === 0) return null;
@@ -109,12 +141,14 @@ function pickEarliestIso(candidates: Array<string | null | undefined>): string |
 /**
  * Resolve de forma determinística a data real de postagem/coleta (`shippedAt`),
  * a data de entrega (`deliveredAt`) e a modalidade logística (`logisticType`)
- * combinando `/shipments/{id}` (`x-format-new` + schema padrão `status_history`),
- * `/shipments/{id}/history` e `/shipments/{id}/tracking/timeline`.
+ * combinando `/shipments/{id}` (`x-format-new` + schema clássico `status_history`),
+ * `/shipments/{id}/history` (e `/marketplace/shipments/{id}/history`) e `/shipments/{id}/tracking/timeline`.
  *
  * Regra estrita de negócio:
- * - Pedidos ainda em `pending`, `handling` ou `ready_to_ship` retornam `shippedAt: null`
- *   (etiqueta gerada NÃO conta como enviado — apenas a entrada real em trânsito/despacho).
+ * - Prioriza sempre o primeiro marco físico de postagem/bipagem (`dropped_off` / `picked_up` / `in_hub`),
+ *   com fallback para a transição `shipped` / `date_shipped`.
+ * - Pedidos ainda em `pending`, `handling` ou `ready_to_ship` sem substatus de postagem retornam `shippedAt: null`
+ *   (etiqueta impressa/pronta NÃO conta como enviado).
  */
 export function extractShipmentDatesAndLogistics(params: {
   modernDetail?: RawShipmentDetail | null;
@@ -139,6 +173,10 @@ export function extractShipmentDatesAndLogistics(params: {
   const directShipped =
     modernDetail?.status_history?.date_shipped ||
     classicDetail?.status_history?.date_shipped ||
+    modernDetail?.shipped_date ||
+    classicDetail?.shipped_date ||
+    modernDetail?.date_shipped ||
+    classicDetail?.date_shipped ||
     null;
 
   const substatusHistoryEntries: RawShipmentSubstatusHistoryEntry[] = [
@@ -167,22 +205,34 @@ export function extractShipmentDatesAndLogistics(params: {
     classicDetail?.status_history?.date_delivered ||
     null;
 
-  const historyShipped = Array.isArray(historyEntries)
+  const historySubstatusDispatched = Array.isArray(historyEntries)
+    ? pickEarliestIso(
+        historyEntries
+          .filter((h) => isDispatchedShipmentSubstatus(h?.substatus))
+          .map((h) => h.date || h.date_created || h.event_date)
+      )
+    : null;
+
+  const historyStatusShipped = Array.isArray(historyEntries)
     ? pickEarliestIso(
         historyEntries
           .filter((h) => {
             const st = (h?.status || "").toLowerCase();
             return st === "shipped" || st === "in_transit";
           })
-          .map((h) => h.date || h.date_created)
+          .map((h) => h.date || h.date_created || h.event_date)
       )
     : null;
 
   const historyDelivered = Array.isArray(historyEntries)
     ? pickEarliestIso(
         historyEntries
-          .filter((h) => (h?.status || "").toLowerCase() === "delivered")
-          .map((h) => h.date || h.date_created)
+          .filter(
+            (h) =>
+              (h?.status || "").toLowerCase() === "delivered" ||
+              (h?.substatus || "").toLowerCase() === "delivered"
+          )
+          .map((h) => h.date || h.date_created || h.event_date)
       )
     : null;
 
@@ -190,24 +240,30 @@ export function extractShipmentDatesAndLogistics(params: {
     ? pickEarliestIso(
         timelineEvents
           .filter((ev) => {
-            const name = (ev?.event_name || "").toLowerCase();
+            const name = (ev?.event_name || ev?.code || "").toLowerCase();
+            const st = (ev?.status || "").toLowerCase();
             return (
+              isDispatchedShipmentSubstatus(name) ||
+              isDispatchedShipmentSubstatus(ev?.substatus) ||
               name === "shipped" ||
               name === "in_transit" ||
-              name === "picked_up" ||
-              name === "dropped_off" ||
-              name === "hub_in"
+              st === "shipped" ||
+              st === "in_transit"
             );
           })
-          .map((ev) => ev.event_date)
+          .map((ev) => ev.event_date || ev.date)
       )
     : null;
 
   const timelineDelivered = Array.isArray(timelineEvents)
     ? pickEarliestIso(
         timelineEvents
-          .filter((ev) => (ev?.event_name || "").toLowerCase() === "delivered")
-          .map((ev) => ev.event_date)
+          .filter((ev) => {
+            const name = (ev?.event_name || ev?.code || "").toLowerCase();
+            const st = (ev?.status || "").toLowerCase();
+            return name === "delivered" || st === "delivered";
+          })
+          .map((ev) => ev.event_date || ev.date)
       )
     : null;
 
@@ -215,25 +271,51 @@ export function extractShipmentDatesAndLogistics(params: {
     ? directDelivered
     : historyDelivered || timelineDelivered || null;
 
+  // Prioridade máxima para o primeiro evento de postagem/coleta física (dropped_off / picked_up / in_hub),
+  // seguido da transição formal `shipped` / `date_shipped`.
   let shippedAt =
-    pickEarliestIso([substatusShipped, directShipped]) ||
-    historyShipped ||
-    timelineShipped ||
+    pickEarliestIso([substatusShipped, historySubstatusDispatched]) ||
+    pickEarliestIso([directShipped, historyStatusShipped, timelineShipped]) ||
     null;
 
-  // Fallback exclusivo para envios comprovadamente já entregues (ex: Flex/ME1 direto para delivered sem checkpoint intermediário)
+  // Fallback seguro EXCLUSIVO para envios comprovadamente já despachados/em trânsito/entregues
+  // quando a API do ML omitir os sub-recursos de histórico (ex.: Flex, Full, ME1 ou escopo restrito).
   const effectiveStatus = (modernDetail?.status || classicDetail?.status || "").toLowerCase();
-  if (!shippedAt && effectiveStatus === "delivered") {
-    const firstVisit =
-      classicDetail?.status_history?.date_first_visit ||
-      modernDetail?.status_history?.date_first_visit ||
-      null;
-    shippedAt = isValidIsoTimestamp(firstVisit) ? firstVisit : deliveredAt;
+  const effectiveSubstatus = modernDetail?.substatus || classicDetail?.substatus || null;
+  const firstVisit =
+    classicDetail?.status_history?.date_first_visit ||
+    modernDetail?.status_history?.date_first_visit ||
+    null;
+  const lastUpdated =
+    modernDetail?.last_updated ||
+    classicDetail?.last_updated ||
+    null;
+
+  if (!shippedAt) {
+    if (effectiveStatus === "delivered") {
+      shippedAt = isValidIsoTimestamp(firstVisit)
+        ? firstVisit
+        : deliveredAt || (isValidIsoTimestamp(lastUpdated) ? lastUpdated : null);
+    } else if (
+      effectiveStatus === "shipped" ||
+      effectiveStatus === "not_delivered" ||
+      isDispatchedShipmentSubstatus(effectiveSubstatus)
+    ) {
+      shippedAt = isValidIsoTimestamp(firstVisit)
+        ? firstVisit
+        : isValidIsoTimestamp(lastUpdated)
+        ? lastUpdated
+        : null;
+    }
   }
+
+  const normalizedDeliveredAt =
+    deliveredAt ||
+    (effectiveStatus === "delivered" && isValidIsoTimestamp(lastUpdated) ? lastUpdated : null);
 
   return {
     shippedAt,
-    deliveredAt,
+    deliveredAt: normalizedDeliveredAt,
     logisticType: logisticType ? String(logisticType).toLowerCase() : null,
   };
 }

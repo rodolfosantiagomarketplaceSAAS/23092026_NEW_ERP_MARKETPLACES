@@ -65,7 +65,7 @@ export function AnalysisModeToggle({
       {isShippingMode && pendingShipmentCount > 0 && (
         <span
           className="inline-flex items-center gap-1 px-2 py-1 rounded-xs bg-amber-50 border border-amber-300 text-amber-900 text-[10px] font-bold font-mono"
-          title="Pedidos pagos que ainda não foram postados/coletados na transportadora não entram no fechamento por envio até serem bipados."
+          title="Estes pedidos aparecem sinalizados na tabela abaixo como 'Aguardando Envio' e passam a somar nos cards financeiros de envio assim que bipados no ML ou marcados manualmente."
         >
           <Clock className="w-3 h-3 text-amber-700 shrink-0" />
           <span>

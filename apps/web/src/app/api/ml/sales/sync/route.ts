@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
       to: effectiveTo,
       sellerAccountId: parsed.data.sellerAccountId,
       analysisMode: parsed.data.analysisMode,
+      reconcileShippingDates: parsed.data.reconcileShippingDates,
     });
 
     if (!result.success && result.accountsSynced === 0) {

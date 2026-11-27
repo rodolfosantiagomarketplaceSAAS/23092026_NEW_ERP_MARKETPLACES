@@ -35,6 +35,7 @@ import {
   computeReturnsAndCancellationsAnalytics,
   computeSalesDashboardAnalytics,
   computeSalesStatusCounts,
+  computeShippingBreakdownCounts,
   filterOrdersByAnalysisMode,
 } from "@/lib/mercadolivre/sales-analytics";
 import {
@@ -355,6 +356,7 @@ export default function GestaoDiariaVendasPage() {
           to: isAllSales ? undefined : toDate || todayBr,
           allSales: isAllSales,
           analysisMode,
+          reconcileShippingDates: true,
         }),
       });
       const json = await res.json();
@@ -393,12 +395,67 @@ export default function GestaoDiariaVendasPage() {
     }
   }
 
+  // Auto-backfill silencioso: se houver pedidos já enviados/entregues sem `shipped_at` salvo,
+  // reconcilia automaticamente na API do Mercado Livre (preservando 100% os marcados manualmente).
+  const autoBackfillDoneRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (
+      autoBackfillDoneRef.current ||
+      loading ||
+      syncing ||
+      autoSyncing ||
+      !hasOnlineMlAccount ||
+      (data.backfillMissingShippedAtCount ?? 0) <= 0
+    ) {
+      return;
+    }
+    autoBackfillDoneRef.current = true;
+
+    (async () => {
+      setSyncing(true);
+      try {
+        const res = await fetch("/api/ml/sales/sync", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            from: isAllSales ? undefined : fromDate || todayBr,
+            to: isAllSales ? undefined : toDate || todayBr,
+            allSales: isAllSales,
+            analysisMode: "shipping_date",
+            reconcileShippingDates: true,
+          }),
+        });
+        const json = await res.json().catch(() => null);
+        if (res.ok && json?.success) {
+          markSalesSyncedNow();
+          await loadDashboard({ silent: true });
+        }
+      } catch {
+        // Silencioso para não bloquear operação
+      } finally {
+        setSyncing(false);
+      }
+    })();
+  }, [
+    loading,
+    syncing,
+    autoSyncing,
+    hasOnlineMlAccount,
+    data.backfillMissingShippedAtCount,
+    isAllSales,
+    fromDate,
+    toDate,
+    todayBr,
+    loadDashboard,
+  ]);
+
   const availableYears =
     data.availableYears && data.availableYears.length > 0
       ? data.availableYears
       : [currentYear, currentYear - 1, currentYear - 2];
 
   // Quando um dia específico está selecionado, filtra instantaneamente os produtos exibidos abaixo
+  // mantendo visíveis também as vendas daquele dia que ainda estão aguardando postagem
   const displayedOrders = useMemo(() => {
     if (!spotlightDayKey) return data.orders;
     return filterOrdersByAnalysisMode({
@@ -406,8 +463,14 @@ export default function GestaoDiariaVendasPage() {
       fromDate: spotlightDayKey,
       toDate: spotlightDayKey,
       analysisMode,
+      includePendingShipments: true,
     });
   }, [data.orders, spotlightDayKey, analysisMode]);
+
+  const shippingBreakdown = useMemo(
+    () => computeShippingBreakdownCounts(displayedOrders),
+    [displayedOrders]
+  );
 
   const activeDayLabel = useMemo(() => {
     if (!spotlightDayKey || spotlightDayKey.length < 10) return null;
@@ -682,12 +745,19 @@ export default function GestaoDiariaVendasPage() {
                       Todas as Vendas (Histórico Completo)
                     </strong>{" "}
                     {analysisMode === "shipping_date"
-                      ? "com data de envio registrada"
+                      ? `(enviadas + aguardando envio)`
                       : "sincronizadas"}
                   </>
                 ) : analysisMode === "shipping_date" ? (
                   <>
-                    Exibindo vendas <strong>enviadas</strong> entre{" "}
+                    Exibindo vendas <strong>enviadas</strong>{" "}
+                    {shippingBreakdown.pendingShipmentCount > 0 && (
+                      <>
+                        (+ <strong>{shippingBreakdown.pendingShipmentCount}</strong> aguardando
+                        envio){" "}
+                      </>
+                    )}
+                    entre{" "}
                     <span className="font-mono font-semibold text-slate-700">{fromDate}</span>{" "}
                     e <span className="font-mono font-semibold text-slate-700">{toDate}</span>
                   </>
@@ -782,6 +852,12 @@ export default function GestaoDiariaVendasPage() {
                   <option value="all">Status: Todos ({activeStatusCounts.all})</option>
                   <option value="valid">
                     Válidos — Pagos/Enviados ({activeStatusCounts.valid})
+                  </option>
+                  <option value="shipped_only">
+                    Só Já Enviados ({shippingBreakdown.shippedValidCount})
+                  </option>
+                  <option value="pending_shipment">
+                    Aguardando Envio ({shippingBreakdown.pendingShipmentCount})
                   </option>
                   <option value="returned">
                     Só Devoluções ({activeStatusCounts.returned})

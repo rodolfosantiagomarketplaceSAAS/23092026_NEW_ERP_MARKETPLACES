@@ -23,12 +23,16 @@ export function isCancelledOrReturned(status: string): boolean {
 }
 
 export function matchesSalesStatusFilter(
-  order: Pick<MlSaleOrder, "status" | "verified_at">,
+  order: Pick<MlSaleOrder, "status" | "verified_at"> & { shipped_at?: string | null },
   statusFilter: SalesStatusFilter | string
 ): boolean {
   switch (statusFilter) {
     case "valid":
       return !isCancelledOrReturned(order.status);
+    case "shipped_only":
+      return !isCancelledOrReturned(order.status) && Boolean(order.shipped_at);
+    case "pending_shipment":
+      return !isCancelledOrReturned(order.status) && !order.shipped_at;
     case "returned":
       return order.status === "returned";
     case "cancelled_only":
@@ -41,6 +45,21 @@ export function matchesSalesStatusFilter(
     default:
       return true;
   }
+}
+
+export function computeShippingBreakdownCounts(
+  orders: Array<Pick<MlSaleOrder, "status" | "shipped_at">>
+): { shippedValidCount: number; pendingShipmentCount: number } {
+  let shippedValidCount = 0;
+  let pendingShipmentCount = 0;
+
+  for (const order of orders) {
+    if (isCancelledOrReturned(order.status)) continue;
+    if (order.shipped_at) shippedValidCount += 1;
+    else pendingShipmentCount += 1;
+  }
+
+  return { shippedValidCount, pendingShipmentCount };
 }
 
 export function computeSalesStatusCounts(orders: MlSaleOrder[]): MlSalesStatusCounts {
@@ -130,26 +149,71 @@ export function getOrderAnalysisDateIso(
   return order.order_date;
 }
 
+export function getOrderDisplaySortTimestampMs(
+  order: Pick<MlSaleOrder, "order_date" | "shipped_at" | "shipping_deadline" | "status">,
+  analysisMode: SalesAnalysisMode = "order_date"
+): number {
+  if (analysisMode === "shipping_date") {
+    const ref =
+      order.shipped_at ||
+      (order.status === "paid" && order.shipping_deadline
+        ? order.shipping_deadline
+        : order.order_date);
+    const parsed = Date.parse(ref);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  const parsed = Date.parse(order.order_date);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
 /**
  * Filtra e ordena uma coleção de pedidos pelo intervalo `[fromDate, toDate]` (YYYY-MM-DD no fuso `America/Sao_Paulo`)
- * respeitando estritamente o modo `order_date` (data da venda) ou `shipping_date` (dia real do envio).
+ * respeitando o modo `order_date` (data da venda) ou `shipping_date` (dia real do envio).
+ * Quando `includePendingShipments = true`, mantém visíveis na tabela de `shipping_date` as vendas do período
+ * que ainda estão aguardando postagem/sincronização (`shipped_at === null`).
  */
 export function filterOrdersByAnalysisMode(params: {
   orders: MlSaleOrder[];
   fromDate: string;
   toDate: string;
   analysisMode: SalesAnalysisMode;
+  includePendingShipments?: boolean;
 }): MlSaleOrder[] {
-  const { orders, fromDate, toDate, analysisMode } = params;
+  const {
+    orders,
+    fromDate,
+    toDate,
+    analysisMode,
+    includePendingShipments = false,
+  } = params;
 
   return orders
     .filter((order) => {
       const refIso = getOrderAnalysisDateIso(order, analysisMode);
-      if (!refIso) return false;
-      const { dateKey } = toBrazilDateKeyAndLabel(refIso);
-      return dateKey >= fromDate && dateKey <= toDate;
+      if (refIso) {
+        const { dateKey } = toBrazilDateKeyAndLabel(refIso);
+        return dateKey >= fromDate && dateKey <= toDate;
+      }
+
+      if (analysisMode === "shipping_date" && includePendingShipments) {
+        const orderKey = toBrazilDateKeyAndLabel(order.order_date).dateKey;
+        if (orderKey >= fromDate && orderKey <= toDate) return true;
+
+        if (order.status === "paid" && order.shipping_deadline) {
+          const deadlineKey = toBrazilDateKeyAndLabel(order.shipping_deadline).dateKey;
+          if (deadlineKey >= fromDate && deadlineKey <= toDate) return true;
+        }
+      }
+
+      return false;
     })
     .sort((a, b) => {
+      if (analysisMode === "shipping_date" && includePendingShipments) {
+        return (
+          getOrderDisplaySortTimestampMs(b, analysisMode) -
+          getOrderDisplaySortTimestampMs(a, analysisMode)
+        );
+      }
       const isoA = getOrderAnalysisDateIso(a, analysisMode) || "";
       const isoB = getOrderAnalysisDateIso(b, analysisMode) || "";
       return Date.parse(isoB) - Date.parse(isoA);
