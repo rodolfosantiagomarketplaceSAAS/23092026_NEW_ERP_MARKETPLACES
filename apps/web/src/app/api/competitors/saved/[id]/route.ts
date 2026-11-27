@@ -1,4 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
+import { parseSafeMarketplaceUrl } from "@/lib/security/url-validator";
 import {
   deleteSavedOpportunityListing,
   getSavedOpportunityByIdOrExt,
@@ -19,19 +21,23 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function PATCH(
-  request: Request,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await resolveUnifiedAuth(request);
+    if (!ctx) {
+      return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
+    }
+
     const { id } = await context.params;
     const body = await request.json();
 
-    // Se o usuário pediu para re-escanear via Webscraping ("refresh")
     if (body.action === "refresh") {
-      const current = await getSavedOpportunityByIdOrExt(id);
+      const current = await getSavedOpportunityByIdOrExt(id, ctx.userId);
       if (!current) {
         return NextResponse.json(
-          { success: false, error: "Anúncio não encontrado." },
+          { success: false, error: "Anúncio não encontrado na sua conta." },
           { status: 404 }
         );
       }
@@ -42,7 +48,7 @@ export async function PATCH(
         extractMlbuId(current.external_id) || extractMlbuId(current.permalink);
       const token =
         current.platform === "mercadolivre"
-          ? await resolveAnyActiveMlToken()
+          ? await resolveAnyActiveMlToken(ctx.userId, ctx.organizationId)
           : null;
 
       let scraped: any = {};
@@ -58,9 +64,10 @@ export async function PATCH(
         if (apiData) scraped = { ...scraped, ...apiData };
       }
 
-      if (!scraped.current_price) {
+      const safePermalink = parseSafeMarketplaceUrl(current.permalink)?.toString() || "";
+      if (!scraped.current_price && safePermalink) {
         const htmlData = await scrapeCompetitorFromUrl(
-          current.permalink,
+          safePermalink,
           current.external_id
         ).catch(() => null);
         if (htmlData) {
@@ -114,24 +121,28 @@ export async function PATCH(
           scraped.thumbnail_url || current.thumbnail_url
         ).catch(() => null));
 
-      const refreshed = await updateSavedOpportunityListing(id, {
-        current_price: newPrice,
-        original_price: newOrig,
-        discount_pct: discountPct,
-        promo_badge: promoBadge,
-        sales_count_approx:
-          scraped.sales_count_approx !== undefined
-            ? Number(scraped.sales_count_approx)
-            : current.sales_count_approx,
-        listing_created_at: createdDate,
-        estimated_sale_fee: fee,
-        estimated_shipping: ship,
-        estimated_net: net,
-        seller_name: scraped.seller_name
-          ? cleanSellerName(scraped.seller_name)
-          : current.seller_name,
-        thumbnail_url: scraped.thumbnail_url || current.thumbnail_url,
-      });
+      const refreshed = await updateSavedOpportunityListing(
+        id,
+        {
+          current_price: newPrice,
+          original_price: newOrig,
+          discount_pct: discountPct,
+          promo_badge: promoBadge,
+          sales_count_approx:
+            scraped.sales_count_approx !== undefined
+              ? Number(scraped.sales_count_approx)
+              : current.sales_count_approx,
+          listing_created_at: createdDate,
+          estimated_sale_fee: fee,
+          estimated_shipping: ship,
+          estimated_net: net,
+          seller_name: scraped.seller_name
+            ? cleanSellerName(scraped.seller_name)
+            : current.seller_name,
+          thumbnail_url: scraped.thumbnail_url || current.thumbnail_url,
+        },
+        ctx.userId
+      );
 
       return NextResponse.json({
         success: true,
@@ -140,15 +151,19 @@ export async function PATCH(
       });
     }
 
-    const updated = await updateSavedOpportunityListing(id, {
-      status:
-        body.status === "created" || body.status === "pending"
-          ? body.status
-          : undefined,
-      notes: body.notes !== undefined ? body.notes : undefined,
-      my_created_sku:
-        body.my_created_sku !== undefined ? body.my_created_sku : undefined,
-    });
+    const updated = await updateSavedOpportunityListing(
+      id,
+      {
+        status:
+          body.status === "created" || body.status === "pending"
+            ? body.status
+            : undefined,
+        notes: body.notes !== undefined ? body.notes : undefined,
+        my_created_sku:
+          body.my_created_sku !== undefined ? body.my_created_sku : undefined,
+      },
+      ctx.userId
+    );
 
     if (!updated) {
       return NextResponse.json(
@@ -178,12 +193,17 @@ export async function PATCH(
 }
 
 export async function DELETE(
-  _request: Request,
+  request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await resolveUnifiedAuth(request);
+    if (!ctx) {
+      return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
+    }
+
     const { id } = await context.params;
-    await deleteSavedOpportunityListing(id);
+    await deleteSavedOpportunityListing(id, ctx.userId);
 
     return NextResponse.json({
       success: true,

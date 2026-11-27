@@ -202,11 +202,28 @@ export async function refreshMercadoLivreIntegration(integrationId: string): Pro
     .maybeSingle();
 
   if (!locked) {
-    // Another instance is refreshing: wait and reuse its result.
-    await sleep(1500);
-    const { data: row } = await admin.from(TABLE).select(TOKEN_COLUMNS).eq("id", integrationId).maybeSingle();
-    if (row?.status === "active" && row.token_expires_at && Date.parse(row.token_expires_at) > Date.now()) {
-      return decryptSecret(row.access_token);
+    // Outra instância serverless está renovando o refresh_token single-use:
+    // aguarda em polling curto (até ~6s) até o lock liberar ou o novo token ser gravado.
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await sleep(750);
+      const { data: row } = await admin
+        .from(TABLE)
+        .select(`${TOKEN_COLUMNS}, refresh_lock_until`)
+        .eq("id", integrationId)
+        .maybeSingle();
+
+      if (!row || row.status !== "active") return null;
+
+      const expMs = row.token_expires_at ? Date.parse(row.token_expires_at) : 0;
+      const lockReleased =
+        !row.refresh_lock_until || Date.parse(String(row.refresh_lock_until)) < Date.now();
+
+      if (expMs > Date.now() + 10_000) {
+        return decryptSecret(row.access_token);
+      }
+      if (lockReleased && attempt >= 2) {
+        break;
+      }
     }
     return null;
   }

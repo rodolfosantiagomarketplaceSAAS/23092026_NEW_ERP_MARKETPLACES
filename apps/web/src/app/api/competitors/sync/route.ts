@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { competitorSyncSchema } from "@/lib/validators/competitor";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
-import { addOrUpdateMockCompetitor } from "@/lib/data/comparativeStore";
-import { resolveRequestUser } from "@/lib/extension/auth";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import {
   encodeCompetitorMetaInPermalink,
   estimateCompetitorFeesAndShipping,
@@ -27,26 +26,15 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient();
 
-    // 1. Autenticação: token da extensão (preferencial) ou JWT Supabase legado
-    const authUser = await resolveRequestUser(req);
-    let userId: string | null = authUser?.id ?? null;
-
-    // Fallback apenas em desenvolvimento local (sem login na extensão)
-    if (!userId && process.env.NODE_ENV !== "production") {
-      try {
-        const { data: users } = await supabase.auth.admin.listUsers();
-        userId = users?.users?.[0]?.id ?? null;
-      } catch {
-        userId = null;
-      }
-    }
-
-    if (!userId) {
+    // 1. Autenticação obrigatória unificada (sem fallback anônimo!)
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
       return NextResponse.json(
         { error: "Extensão não conectada. Abra o ERP logado para conectar automaticamente." },
         { status: 401, headers: CORS_HEADERS }
       );
     }
+    const userId = ctx.userId;
 
     // 2. Parse e Validação do Body via Zod
     const body = await req.json();
@@ -64,9 +52,6 @@ export async function POST(req: NextRequest) {
     }
 
     const item = parseResult.data;
-
-    // Atualiza cache em memória para resposta instantânea
-    addOrUpdateMockCompetitor(item.platform, item.my_listing_id || null, item);
 
     let compData: any = null;
     let matched = false;
@@ -153,34 +138,42 @@ export async function POST(req: NextRequest) {
           recorded_at: new Date().toISOString(),
         });
 
-        // Vinculação em listing_matches (se my_listing_id foi enviado e for UUID)
+        // Vinculação em listing_matches validando propriedade do anúncio próprio (previne IDOR!)
         if (item.my_listing_id) {
-          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.my_listing_id);
+          const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+            item.my_listing_id
+          );
           if (isUuid) {
-            const { error: matchError } = await supabase
-              .from("listing_matches")
-              .upsert(
-                {
-                  user_id: userId,
-                  my_listing_id: item.my_listing_id,
-                  competitor_listing_id: compData.id,
-                  is_active: true,
-                },
-                { onConflict: "my_listing_id,competitor_listing_id" }
-              );
+            const { data: ownedListing } = await supabase
+              .from("my_listings")
+              .select("id")
+              .eq("id", item.my_listing_id)
+              .eq("user_id", userId)
+              .maybeSingle();
 
-            if (matchError) {
-              console.error("[API Sync] Falha ao vincular concorrente ao anúncio próprio:", matchError);
-            } else {
-              matched = true;
-              try {
-                await syncSingleMyListingPrice(item.my_listing_id);
-              } catch (sErr) {
-                console.warn("[API Sync] Aviso ao sincronizar preço próprio:", sErr);
+            if (ownedListing) {
+              const { error: matchError } = await supabase
+                .from("listing_matches")
+                .upsert(
+                  {
+                    user_id: userId,
+                    my_listing_id: item.my_listing_id,
+                    competitor_listing_id: compData.id,
+                    is_active: true,
+                  },
+                  { onConflict: "my_listing_id,competitor_listing_id" }
+                );
+
+              if (matchError) {
+                console.error("[API Sync] Falha ao vincular concorrente ao anúncio próprio:", matchError);
+              } else {
+                matched = true;
+                await syncSingleMyListingPrice(item.my_listing_id, {
+                  userId,
+                  organizationId: ctx.organizationId,
+                }).catch((sErr) => console.warn("[API Sync] Aviso ao sincronizar preço próprio:", sErr));
               }
             }
-          } else {
-            matched = true; // Pareamento mantido no cache
           }
         }
       }

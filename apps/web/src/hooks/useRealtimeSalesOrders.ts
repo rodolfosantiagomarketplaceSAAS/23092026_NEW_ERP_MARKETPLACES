@@ -70,31 +70,60 @@ export function useRealtimeSalesOrders({
     }, 450);
   }, []);
 
-  // 1. Canal Supabase Realtime em `public.ml_sales_orders`
+  // 1. Canal Supabase Realtime em `public.ml_sales_orders` filtrado pelo tenant autenticado
   useEffect(() => {
     const supabase = getSupabaseBrowserClient();
-    const channelName = `realtime-ml-sales-${Math.random().toString(36).slice(2, 8)}`;
+    let activeChannel: ReturnType<typeof supabase.channel> | null = null;
+    let unmounted = false;
 
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "ml_sales_orders",
-        },
-        () => {
-          scheduleRefresh();
-        }
-      )
-      .subscribe((status) => {
-        setRealtimeConnected(status === "SUBSCRIBED");
-      });
+    async function subscribeScoped() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
+      if (unmounted || !user) return;
+
+      const { data: profile } = await supabase
+        .from("user_profiles")
+        .select("organization_id")
+        .eq("id", user.id)
+        .maybeSingle();
+
+      if (unmounted) return;
+
+      const filter = profile?.organization_id
+        ? `organization_id=eq.${profile.organization_id}`
+        : `user_id=eq.${user.id}`;
+
+      const channelName = `realtime-ml-sales-${Math.random().toString(36).slice(2, 8)}`;
+      activeChannel = supabase
+        .channel(channelName)
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "ml_sales_orders",
+            filter,
+          },
+          () => {
+            scheduleRefresh();
+          }
+        )
+        .subscribe((status) => {
+          if (!unmounted) {
+            setRealtimeConnected(status === "SUBSCRIBED");
+          }
+        });
+    }
+
+    subscribeScoped();
 
     return () => {
+      unmounted = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
-      supabase.removeChannel(channel);
+      if (activeChannel) {
+        supabase.removeChannel(activeChannel);
+      }
     };
   }, [scheduleRefresh]);
 

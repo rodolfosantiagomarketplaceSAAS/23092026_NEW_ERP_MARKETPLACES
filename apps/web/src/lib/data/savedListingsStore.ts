@@ -94,32 +94,38 @@ export async function listSavedOpportunityListings(
 
   try {
     const supabase = createSupabaseAdminClient();
-    const { data, error } = await supabase
+    let query = supabase
       .from("competitor_saved_listings")
       .select("*")
       .order("created_at", { ascending: false });
 
+    if (userId) {
+      query = query.eq("user_id", userId);
+    }
+
+    const { data, error } = await query;
+
     if (!error && Array.isArray(data)) {
       const dbItems = data.map(mapRowToSavedListing);
-      // Merge disk items not yet in DB
-      const dbExtSet = new Set(dbItems.map((i) => i.external_id));
+      if (process.env.NODE_ENV === "production") {
+        return dbItems;
+      }
+      const dbExtSet = new Set(dbItems.map((i) => `${i.user_id}:${i.external_id}`));
       const merged = [...dbItems];
       for (const localItem of memorySavedListings) {
-        if (!dbExtSet.has(localItem.external_id)) {
+        if ((!userId || localItem.user_id === userId) && !dbExtSet.has(`${localItem.user_id}:${localItem.external_id}`)) {
           merged.push(localItem);
         }
       }
-      memorySavedListings = merged;
-      saveToDisk();
       return merged;
     }
   } catch {
-    // Fallback para cache em disco se a tabela ainda não foi criada no Supabase
+    // Fallback para cache em disco apenas se a tabela ainda não foi criada no Supabase
   }
 
-  return [...memorySavedListings].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
+  return memorySavedListings
+    .filter((i) => !userId || i.user_id === userId)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 }
 
 export async function upsertSavedOpportunityListing(
@@ -295,13 +301,16 @@ export async function updateSavedOpportunityListing(
     estimated_net?: number;
     seller_name?: string;
     thumbnail_url?: string | null;
-  }
+  },
+  userId?: string
 ): Promise<SavedOpportunityListing | null> {
   loadFromDisk();
   const now = new Date().toISOString();
 
   const idx = memorySavedListings.findIndex(
-    (item) => item.id === idOrExternalId || item.external_id === idOrExternalId
+    (item) =>
+      (!userId || item.user_id === userId) &&
+      (item.id === idOrExternalId || item.external_id === idOrExternalId)
   );
 
   let updatedRecord: SavedOpportunityListing | null = null;
@@ -342,9 +351,13 @@ export async function updateSavedOpportunityListing(
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       idOrExternalId
     );
-    const query = supabase
+    let query = supabase
       .from("competitor_saved_listings")
       .update(dbPatch);
+
+    if (userId) {
+      query = query.eq("user_id", userId);
+    }
 
     const { data, error } = await (isUuid
       ? query.eq("id", idOrExternalId)
@@ -374,9 +387,10 @@ export async function updateSavedOpportunityListing(
 }
 
 export async function getSavedOpportunityByIdOrExt(
-  idOrExternalId: string
+  idOrExternalId: string,
+  userId?: string
 ): Promise<SavedOpportunityListing | null> {
-  const list = await listSavedOpportunityListings();
+  const list = await listSavedOpportunityListings(userId);
   return (
     list.find(
       (i) => i.id === idOrExternalId || i.external_id === idOrExternalId
@@ -385,15 +399,20 @@ export async function getSavedOpportunityByIdOrExt(
 }
 
 export async function deleteSavedOpportunityListing(
-  idOrExternalId: string
+  idOrExternalId: string,
+  userId?: string
 ): Promise<boolean> {
   loadFromDisk();
   const target = memorySavedListings.find(
-    (item) => item.id === idOrExternalId || item.external_id === idOrExternalId
+    (item) =>
+      (!userId || item.user_id === userId) &&
+      (item.id === idOrExternalId || item.external_id === idOrExternalId)
   );
 
   memorySavedListings = memorySavedListings.filter(
-    (item) => item.id !== idOrExternalId && item.external_id !== idOrExternalId
+    (item) =>
+      (userId && item.user_id !== userId) ||
+      (item.id !== idOrExternalId && item.external_id !== idOrExternalId)
   );
   saveToDisk();
 
@@ -403,16 +422,17 @@ export async function deleteSavedOpportunityListing(
       idOrExternalId
     );
     if (isUuid) {
-      await supabase
-        .from("competitor_saved_listings")
-        .delete()
-        .eq("id", idOrExternalId);
+      let delQ = supabase.from("competitor_saved_listings").delete().eq("id", idOrExternalId);
+      if (userId) delQ = delQ.eq("user_id", userId);
+      await delQ;
     }
     if (target?.external_id || !isUuid) {
-      await supabase
+      let delExtQ = supabase
         .from("competitor_saved_listings")
         .delete()
         .eq("external_id", target?.external_id || idOrExternalId);
+      if (userId) delExtQ = delExtQ.eq("user_id", userId);
+      await delExtQ;
     }
   } catch {
     // Ignora erro se tabela ainda não existir no Supabase

@@ -2,14 +2,17 @@ import type { AuthContext } from "@/lib/auth/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import {
   applyTenantFilter,
+  isMissingColumnError,
   isMissingTableError,
   upsertTenantCostTemplate,
 } from "@/lib/mercadolivre/tenant-scope";
 import { buildEnrichedErpProducts, round2 } from "@/lib/erp/ppf-calculator";
+import { getCurrentActiveLot, sortRollLotsFifo } from "@/lib/erp/ppf-fifo-engine";
 import type {
   ErpListingLink,
   ErpOverviewResponse,
   ErpPpfRoll,
+  ErpPpfRollLot,
   ErpProduct,
   ErpProductWithSummary,
   ErpStockMovement,
@@ -21,7 +24,7 @@ export async function loadErpWorkspaceData(
 ): Promise<ErpOverviewResponse> {
   const admin = createSupabaseAdminClient();
 
-  const [rollsRes, productsRes, kitItemsRes, linksRes, movementsRes, suppliersRes] =
+  const [rollsRes, productsRes, kitItemsRes, linksRes, movementsRes, suppliersRes, rollLotsRes] =
     await Promise.all([
       applyTenantFilter(
         admin.from("erp_ppf_rolls").select("*").order("created_at", { ascending: false }),
@@ -51,6 +54,10 @@ export async function loadErpWorkspaceData(
         admin.from("erp_suppliers").select("*").order("trade_name", { ascending: true }),
         ctx
       ),
+      applyTenantFilter(
+        admin.from("erp_ppf_roll_lots").select("*").order("purchase_date", { ascending: true }),
+        ctx
+      ),
     ]);
 
   if (
@@ -63,8 +70,10 @@ export async function loadErpWorkspaceData(
       success: true,
       schemaReady: false,
       suppliersSchemaReady: false,
+      lotsSchemaReady: false,
       suppliers: [],
       rolls: [],
+      rollLots: [],
       products: [],
       links: [],
       movements: [],
@@ -85,11 +94,25 @@ export async function loadErpWorkspaceData(
   }
 
   const suppliersSchemaReady = !isMissingTableError(suppliersRes.error);
+  const lotsSchemaReady = !isMissingTableError(rollLotsRes.error);
   const rawSuppliers = suppliersSchemaReady ? ((suppliersRes.data ?? []) as ErpSupplier[]) : [];
   const rawRolls = (rollsRes.data ?? []) as ErpPpfRoll[];
+  const rawRollLots = lotsSchemaReady ? ((rollLotsRes.data ?? []) as ErpPpfRollLot[]) : [];
   const rawProducts = (productsRes.data ?? []) as ErpProduct[];
 
   const supplierById = new Map(rawSuppliers.map((s) => [s.id, s]));
+
+  const enrichedLots: ErpPpfRollLot[] = rawRollLots.map((l) => ({
+    ...l,
+    supplier_ref: l.supplier_id ? supplierById.get(l.supplier_id) ?? null : null,
+  }));
+  const lotById = new Map(enrichedLots.map((l) => [l.id, l]));
+  const lotsByRollId = new Map<string, ErpPpfRollLot[]>();
+  for (const lot of enrichedLots) {
+    const list = lotsByRollId.get(lot.ppf_roll_id) ?? [];
+    list.push(lot);
+    lotsByRollId.set(lot.ppf_roll_id, list);
+  }
 
   const productsCountBySupplier = new Map<string, number>();
   for (const p of rawProducts) {
@@ -117,10 +140,35 @@ export async function loadErpWorkspaceData(
     linked_rolls_count: rollsCountBySupplier.get(s.id) ?? 0,
   }));
 
-  const rolls: ErpPpfRoll[] = rawRolls.map((r) => ({
-    ...r,
-    supplier_ref: r.supplier_id ? supplierById.get(r.supplier_id) ?? null : null,
-  }));
+  const rolls: ErpPpfRoll[] = rawRolls.map((r) => {
+    const rollLots = sortRollLotsFifo(lotsByRollId.get(r.id) ?? []);
+    const activeLot = getCurrentActiveLot(rollLots);
+    const queuedLots = rollLots.filter((l) => l.status === "queued" && Number(l.remaining_meters) > 0);
+    const totalQueuedMeters = round2(
+      queuedLots.reduce((acc, l) => acc + Math.max(0, Number(l.remaining_meters || 0)), 0)
+    );
+    const totalLotsRemaining =
+      rollLots.length > 0
+        ? round2(
+            rollLots
+              .filter((l) => l.status === "in_use" || l.status === "queued")
+              .reduce((acc, l) => acc + Math.max(0, Number(l.remaining_meters || 0)), 0)
+          )
+        : Number(r.remaining_meters || 0);
+
+    return {
+      ...r,
+      cost_per_linear_meter: activeLot
+        ? round2(Number(activeLot.cost_per_linear_meter))
+        : Number(r.cost_per_linear_meter),
+      remaining_meters: totalLotsRemaining,
+      supplier_ref: r.supplier_id ? supplierById.get(r.supplier_id) ?? null : null,
+      lots: rollLots,
+      active_lot: activeLot,
+      queued_lots_count: queuedLots.length,
+      total_queued_meters: totalQueuedMeters,
+    };
+  });
   const rawKitItems = (kitItemsRes.data ?? []) as Array<{
     id: string;
     kit_product_id: string;
@@ -157,36 +205,54 @@ export async function loadErpWorkspaceData(
   const movements: ErpStockMovement[] = rawMovements.map((m) => {
     const prod = m.product_id ? productById.get(m.product_id) : null;
     const roll = m.ppf_roll_id ? rollById.get(m.ppf_roll_id) : null;
+    const lot = m.ppf_roll_lot_id ? lotById.get(m.ppf_roll_lot_id) : null;
     return {
       ...m,
       product_name: prod?.name ?? null,
       product_sku: prod?.sku ?? null,
       roll_name: roll?.name ?? null,
       roll_code: roll?.code ?? null,
+      lot_code: lot?.lot_code ?? null,
     };
   });
 
   const activeProducts = enrichedProducts.filter((p) => p.status !== "inactive");
   const activeRolls = rolls.filter((r) => r.active);
 
+  // Valorização contábil real por lote PEPS em estoque (cada bobina pelo preço que foi paga!)
+  const rollsInventoryValue = activeRolls.reduce((acc, r) => {
+    if (r.lots && r.lots.length > 0) {
+      return (
+        acc +
+        r.lots
+          .filter((l) => l.status === "in_use" || l.status === "queued")
+          .reduce(
+            (sum, l) =>
+              sum + Math.max(0, Number(l.remaining_meters || 0)) * Number(l.cost_per_linear_meter || 0),
+            0
+          )
+      );
+    }
+    const rem = Math.max(0, Number(r.remaining_meters || 0));
+    return acc + rem * Number(r.cost_per_linear_meter || 0);
+  }, 0);
+
   const inventoryValue = round2(
     activeProducts.reduce((acc, p) => {
       if (p.product_type === "kit") return acc;
       const qty = Math.max(0, Number(p.stock_quantity || 0));
       return acc + qty * p.computed_total_cost;
-    }, 0) +
-      activeRolls.reduce((acc, r) => {
-        const rem = Math.max(0, Number(r.remaining_meters || 0));
-        return acc + rem * Number(r.cost_per_linear_meter || 0);
-      }, 0)
+    }, 0) + rollsInventoryValue
   );
 
   return {
     success: true,
     schemaReady: true,
     suppliersSchemaReady,
+    lotsSchemaReady,
     suppliers,
     rolls,
+    rollLots: enrichedLots,
     products: enrichedProducts,
     links,
     movements,
@@ -252,16 +318,30 @@ export async function syncLinkCostsToSalesTemplate(
 
   if (params.applyToUneditedOrders) {
     const admin = createSupabaseAdminClient();
-    const { data: uneditedOrders } = await applyTenantFilter(
+    // Proteção Histórica: aplica SOMENTE em pedidos sem custo congelado (`cost_snapshot_locked = false`)
+    let ordersRes = await applyTenantFilter(
       admin
         .from("ml_sales_orders")
         .select("id, quantity")
         .eq("mlb_id", template.mlb_id)
-        .eq("costs_manually_edited", false),
+        .eq("costs_manually_edited", false)
+        .eq("cost_snapshot_locked", false),
       ctx
     );
 
-    for (const ord of uneditedOrders ?? []) {
+    if (ordersRes.error && isMissingColumnError(ordersRes.error, "cost_snapshot_locked")) {
+      ordersRes = await applyTenantFilter(
+        admin
+          .from("ml_sales_orders")
+          .select("id, quantity")
+          .eq("mlb_id", template.mlb_id)
+          .eq("costs_manually_edited", false)
+          .eq("cost_material", 0),
+        ctx
+      );
+    }
+
+    for (const ord of ordersRes.data ?? []) {
       const ordQty = Math.max(1, Number(ord.quantity || 1));
       const { error } = await admin
         .from("ml_sales_orders")

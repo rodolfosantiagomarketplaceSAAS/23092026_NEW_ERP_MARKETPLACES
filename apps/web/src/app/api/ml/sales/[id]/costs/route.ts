@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { updateOrderCostsSchema } from "@/lib/validators/ml-sales";
-import { applyTenantFilter, upsertTenantCostTemplate } from "@/lib/mercadolivre/tenant-scope";
+import {
+  applyTenantFilter,
+  isMissingColumnError,
+  upsertTenantCostTemplate,
+} from "@/lib/mercadolivre/tenant-scope";
 import { roundCurrency } from "@/lib/mercadolivre/sales-analytics";
 
 export const dynamic = "force-dynamic";
@@ -53,24 +57,39 @@ export async function PATCH(
   try {
     const admin = createSupabaseAdminClient();
 
-    const updateQuery = applyTenantFilter(
+    const nowIso = new Date().toISOString();
+    const baseCosts = {
+      tax_pct: roundCurrency(tax_pct),
+      cost_material: roundCurrency(cost_material),
+      cost_packaging: roundCurrency(cost_packaging),
+      cost_logistics: roundCurrency(cost_logistics),
+      cost_printing: roundCurrency(cost_printing),
+      cost_accessories_kit: roundCurrency(cost_accessories_kit),
+      costs_manually_edited: true,
+    };
+
+    let updateRes = await applyTenantFilter(
       admin
         .from("ml_sales_orders")
         .update({
-          tax_pct: roundCurrency(tax_pct),
-          cost_material: roundCurrency(cost_material),
-          cost_packaging: roundCurrency(cost_packaging),
-          cost_logistics: roundCurrency(cost_logistics),
-          cost_printing: roundCurrency(cost_printing),
-          cost_accessories_kit: roundCurrency(cost_accessories_kit),
-          costs_manually_edited: true,
+          ...baseCosts,
+          cost_snapshot_locked: true,
+          cost_snapshot_locked_at: nowIso,
+          cost_snapshot_source: "manual",
         })
         .eq("id", orderId)
         .select("*"),
       ctx
-    );
+    ).single();
 
-    const { data: updated, error } = await updateQuery.single();
+    if (updateRes.error && isMissingColumnError(updateRes.error, "cost_snapshot_locked")) {
+      updateRes = await applyTenantFilter(
+        admin.from("ml_sales_orders").update(baseCosts).eq("id", orderId).select("*"),
+        ctx
+      ).single();
+    }
+
+    const { data: updated, error } = updateRes;
     if (error || !updated) {
       throw new Error(error?.message || "Pedido não encontrado para atualizar custos.");
     }

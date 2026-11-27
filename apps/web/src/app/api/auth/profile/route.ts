@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createSupabaseServerClient, createSupabaseAdminClient } from "@/lib/supabase/server";
+import { SUPER_ADMIN_EMAIL } from "@/lib/auth/context";
 
 export const dynamic = "force-dynamic";
 
@@ -7,10 +8,10 @@ export async function GET() {
   try {
     const supabase = createSupabaseServerClient();
     const {
-      data: { session },
-    } = await supabase.auth.getSession();
+      data: { user },
+    } = await supabase.auth.getUser();
 
-    if (!session?.user) {
+    if (!user) {
       return NextResponse.json({
         isAuthenticated: false,
         user: null,
@@ -18,10 +19,10 @@ export async function GET() {
       });
     }
 
-    const userId = session.user.id;
+    const userId = user.id;
+    const isSuperAdmin = user.email?.toLowerCase() === SUPER_ADMIN_EMAIL;
     const admin = createSupabaseAdminClient();
 
-    // Busca o perfil do usuário
     const { data: profile } = await admin
       .from("user_profiles")
       .select("*")
@@ -29,50 +30,44 @@ export async function GET() {
       .maybeSingle();
 
     if (!profile) {
-      // Retorna dados mínimos do auth se o perfil ainda não estiver sincronizado
+      const appStatus = (user.app_metadata as Record<string, unknown> | undefined)?.status;
+      const effectiveStatus = isSuperAdmin
+        ? "active"
+        : appStatus === "active"
+        ? "active"
+        : "pending_confirmation";
+
       return NextResponse.json({
         isAuthenticated: true,
         user: {
           id: userId,
-          email: session.user.email || "",
-          full_name: session.user.user_metadata?.full_name || "Usuário Master",
-          role: "master_admin",
-          is_master: true,
-          status: "active",
+          email: user.email || "",
+          full_name: user.user_metadata?.full_name || "Usuário",
+          role: isSuperAdmin ? "master_admin" : "viewer",
+          is_master: isSuperAdmin,
+          status: effectiveStatus,
         },
-        organization: {
-          id: "default-org",
-          code: "EMP-MASTER",
-          trade_name: session.user.user_metadata?.trade_name || "Empresa Principal",
-          plan_tier: "trial",
-          plan_status: "active",
-          trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-        },
+        organization: null,
       });
     }
 
-    // Busca dados da organização
-    const { data: organization } = await admin
-      .from("organizations")
-      .select("*")
-      .eq("id", profile.organization_id)
-      .maybeSingle();
+    const { data: organization } = profile.organization_id
+      ? await admin
+          .from("organizations")
+          .select("*")
+          .eq("id", profile.organization_id)
+          .maybeSingle()
+      : { data: null };
 
     return NextResponse.json({
       isAuthenticated: true,
       user: profile,
-      organization: organization || {
-        id: profile.organization_id,
-        code: "EMP-MASTER",
-        trade_name: "Empresa Cadastrada",
-        plan_tier: "trial",
-        plan_status: "active",
-        trial_ends_at: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      },
+      organization: organization ?? null,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : "Erro ao consultar perfil.";
     return NextResponse.json(
-      { isAuthenticated: false, error: error.message },
+      { isAuthenticated: false, error: message },
       { status: 500 }
     );
   }

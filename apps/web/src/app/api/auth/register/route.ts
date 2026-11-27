@@ -43,18 +43,21 @@ export async function POST(req: Request) {
     }
 
     // 3. Criação segura do Usuário no Supabase Auth
-    // Por padrão o status é 'pending_confirmation' (aguardando liberação do ADM Rodolfo)
+    // Status gravado em `app_metadata` (somente Service Role pode alterar — impede auto-aprovação via cliente)
     const { data: authData, error: authError } = await supabaseAdmin.auth.admin.createUser({
       email: data.email,
       password: data.password,
       email_confirm: true,
+      app_metadata: {
+        role: "master_admin",
+        status: "pending_confirmation",
+        is_approved: false,
+      },
       user_metadata: {
         full_name: data.full_name,
         phone: data.phone,
         trade_name: data.trade_name,
         is_master: true,
-        status: "pending_confirmation",
-        is_approved: false,
       },
     });
 
@@ -103,6 +106,7 @@ export async function POST(req: Request) {
 
     if (insertOrgErr) {
       console.error("Erro ao criar organização:", insertOrgErr);
+      await supabaseAdmin.auth.admin.deleteUser(userId).catch(() => null);
       return NextResponse.json(
         { success: false, error: `Erro ao criar empresa: ${insertOrgErr.message}` },
         { status: 500 }
@@ -126,6 +130,12 @@ export async function POST(req: Request) {
 
     if (insertProfErr) {
       console.error("Erro ao criar perfil:", insertProfErr);
+      await supabaseAdmin.from("organizations").delete().eq("id", insertedOrg.id);
+      await supabaseAdmin.auth.admin.deleteUser(userId).catch(() => null);
+      return NextResponse.json(
+        { success: false, error: `Erro ao registrar perfil do usuário: ${insertProfErr.message}` },
+        { status: 500 }
+      );
     }
 
     // Registra log de auditoria

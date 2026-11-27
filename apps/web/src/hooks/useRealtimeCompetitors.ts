@@ -50,53 +50,62 @@ export function useRealtimeCompetitors({
     }
 
     const supabase = getSupabaseBrowserClient();
+    let activeChannel: ReturnType<typeof supabase.channel> | null = null;
+    let unmounted = false;
 
-    // Cria o canal Realtime para escutar inserções e atualizações em competitor_listings
-    const channel = supabase
-      .channel("realtime-competitors-channel")
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "competitor_listings",
-        },
-        (payload) => {
-          const newRecord = payload.new as CompetitorListing;
-          const oldRecord = payload.old as Partial<CompetitorListing>;
+    async function subscribeScoped() {
+      const {
+        data: { user },
+      } = await supabase.auth.getUser().catch(() => ({ data: { user: null } }));
+      if (unmounted || !user) return;
 
-          const eventType = payload.eventType; // 'INSERT', 'UPDATE', 'DELETE'
+      activeChannel = supabase
+        .channel("realtime-competitors-channel")
+        .on(
+          "postgres_changes",
+          {
+            event: "*",
+            schema: "public",
+            table: "competitor_listings",
+            filter: `user_id=eq.${user.id}`,
+          },
+          (payload) => {
+            const newRecord = payload.new as CompetitorListing;
+            const oldRecord = payload.old as Partial<CompetitorListing>;
 
-          if (eventType === "INSERT" || eventType === "DELETE") {
-            if (onCompetitorChange) {
-              onCompetitorChange();
+            const eventType = payload.eventType;
+
+            if (eventType === "INSERT" || eventType === "DELETE") {
+              if (onCompetitorChange) {
+                onCompetitorChange();
+              }
+            }
+
+            if (newRecord && newRecord.id) {
+              triggerHighlight(newRecord.id);
+              setLastEventTime(new Date().toLocaleTimeString("pt-BR"));
+
+              if (onPriceUpdate) {
+                onPriceUpdate({
+                  competitorId: newRecord.id,
+                  newPrice: Number(newRecord.current_price),
+                  externalId: newRecord.external_id,
+                  oldPrice: oldRecord?.current_price ? Number(oldRecord.current_price) : undefined,
+                });
+              }
             }
           }
+        )
+        .subscribe();
+    }
 
-          if (newRecord && newRecord.id) {
-            triggerHighlight(newRecord.id);
-            setLastEventTime(new Date().toLocaleTimeString("pt-BR"));
-
-            if (onPriceUpdate) {
-              onPriceUpdate({
-                competitorId: newRecord.id,
-                newPrice: Number(newRecord.current_price),
-                externalId: newRecord.external_id,
-                oldPrice: oldRecord?.current_price ? Number(oldRecord.current_price) : undefined,
-              });
-            }
-          }
-        }
-      )
-      .subscribe((status) => {
-        if (status === "SUBSCRIBED") {
-          console.log("[Supabase Realtime] Canal de concorrentes inscrito com sucesso.");
-        }
-      });
+    subscribeScoped();
 
     return () => {
-      // Limpeza de canal e timers
-      supabase.removeChannel(channel);
+      unmounted = true;
+      if (activeChannel) {
+        supabase.removeChannel(activeChannel);
+      }
       Object.values(timeoutRefs.current).forEach((t) => clearTimeout(t));
     };
   }, [enabled, triggerHighlight, onPriceUpdate, onCompetitorChange]);

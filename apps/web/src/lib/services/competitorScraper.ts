@@ -1231,22 +1231,25 @@ export async function scrapeCompetitorFromUrl(
 }
 
 /**
- * Obtém qualquer Access Token válido do Mercado Livre salvo no banco
+ * Obtém Access Token válido do Mercado Livre ESTRITAMENTE dentro do escopo do tenant autenticado
+ * (`organizationId` / `userId`), ou variável de sistema dedicada (`ML_ACCESS_TOKEN`).
+ *
+ * SEGURANÇA MULTI-TENANT: Jamais lê ou descriptografa tokens OAuth de outros lojistas do banco.
  */
 export async function resolveAnyActiveMlToken(
   userId?: string | null,
   organizationId?: string | null
 ): Promise<string | null> {
-  try {
-    if (userId) {
+  if (userId || organizationId) {
+    try {
       const scopedToken = await getActiveMarketplaceToken("mercadolivre", {
-        userId,
+        userId: userId || "",
         organizationId: organizationId || null,
       });
       if (scopedToken) return scopedToken;
+    } catch {
+      // continua apenas para token de ambiente dedicado (se configurado)
     }
-  } catch {
-    // continua para fallback
   }
 
   if (process.env.ML_ACCESS_TOKEN || process.env.MERCADOLIVRE_ACCESS_TOKEN) {
@@ -1255,29 +1258,6 @@ export async function resolveAnyActiveMlToken(
       process.env.MERCADOLIVRE_ACCESS_TOKEN ||
       null
     );
-  }
-
-  try {
-    const supabase = createSupabaseAdminClient();
-    const { data: row } = await supabase
-      .from("marketplace_integrations")
-      .select("id, access_token, token_expires_at")
-      .eq("platform", "mercadolivre")
-      .eq("is_active", true)
-      .order("updated_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (row?.access_token) {
-      const expiresAt = row.token_expires_at ? Date.parse(row.token_expires_at) : 0;
-      if (expiresAt && expiresAt - Date.now() <= 5 * 60 * 1000) {
-        const refreshed = await refreshMercadoLivreIntegration(row.id).catch(() => null);
-        if (refreshed) return refreshed;
-      }
-      return decryptSecret(row.access_token);
-    }
-  } catch {
-    // sem chave ou token
   }
 
   return null;

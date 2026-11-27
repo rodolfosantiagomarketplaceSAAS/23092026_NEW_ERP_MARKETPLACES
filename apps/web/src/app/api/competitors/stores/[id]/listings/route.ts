@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createSupabaseAdminClient, createSupabaseServerClient } from "@/lib/supabase/server";
+import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import { getMemoryStoreListings, getMemoryStores } from "@/lib/data/competitorStoresStore";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +10,11 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+
     const { id } = await params;
     const { searchParams } = new URL(req.url);
 
@@ -26,7 +32,10 @@ export async function GET(
 
     try {
       const supabase = createSupabaseAdminClient();
-      let query = supabase.from("competitor_store_listings").select("*");
+      let query = supabase
+        .from("competitor_store_listings")
+        .select("*")
+        .eq("user_id", ctx.userId);
 
       if (id !== "all") {
         query = query.eq("store_id", id);
@@ -34,23 +43,24 @@ export async function GET(
 
       const [{ data, error }, { data: storesData }] = await Promise.all([
         query,
-        supabase.from("competitor_stores").select("id, store_name, segment"),
+        supabase
+          .from("competitor_stores")
+          .select("id, store_name, segment")
+          .eq("user_id", ctx.userId),
       ]);
       if (Array.isArray(storesData)) {
         dbStores = storesData;
       }
       if (!error && Array.isArray(data)) {
-        // Se a consulta no banco funcionou, respeita fielmente os dados (inclusive lista vazia)
         listings = data;
       } else {
-        listings = getMemoryStoreListings(id);
+        listings = getMemoryStoreListings(id, ctx.userId);
       }
     } catch {
-      listings = getMemoryStoreListings(id);
+      listings = getMemoryStoreListings(id, ctx.userId);
     }
 
-    // Attach store name and segment from both Supabase and memory cache
-    const allStores = [...getMemoryStores(), ...dbStores];
+    const allStores = [...getMemoryStores(ctx.userId), ...dbStores];
     const storeMap = new Map(allStores.map((s) => [s.id, s]));
 
     listings = listings.map((l: any) => {

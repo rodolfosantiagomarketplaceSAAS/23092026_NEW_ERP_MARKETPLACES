@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { competitorStoreSyncSchema } from "@crm/types";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { upsertMemoryStoreScrape } from "@/lib/data/competitorStoresStore";
-import { resolveRequestUser } from "@/lib/extension/auth";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import {
   estimateCompetitorFeesAndShipping,
   resolveMercadoLivreStoreName,
@@ -25,22 +25,15 @@ export async function POST(req: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient();
 
-    // 1. Resolve User (Extension Token or Auth Header or Default)
-    const authUser = await resolveRequestUser(req);
-    let userId: string | null = authUser?.id ?? null;
-
-    if (!userId && process.env.NODE_ENV !== "production") {
-      try {
-        const { data: users } = await supabase.auth.admin.listUsers();
-        userId = users?.users?.[0]?.id ?? "demo-user-id";
-      } catch {
-        userId = "demo-user-id";
-      }
+    // 1. Autenticação obrigatória unificada (sem fallback anônimo `"demo-user-id"`)
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json(
+        { error: "Extensão ou sessão não autenticada." },
+        { status: 401, headers: CORS_HEADERS }
+      );
     }
-
-    if (!userId) {
-      userId = "demo-user-id";
-    }
+    const userId = ctx.userId;
 
     // 2. Parse & Validate Payload defensively
     const rawBody = await req.json();

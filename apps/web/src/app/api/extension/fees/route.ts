@@ -4,7 +4,8 @@ import {
   resolveAnyActiveMlToken,
 } from "@/lib/services/competitorScraper";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { resolveRequestUser } from "@/lib/extension/auth";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
+import { parseSafeMarketplaceUrl } from "@/lib/security/url-validator";
 
 export const dynamic = "force-dynamic";
 
@@ -224,10 +225,14 @@ export async function GET(req: NextRequest) {
         ? refineMlCreationDateFromImage(normalizedItemId, thumbnailUrl).catch(() => null)
         : Promise.resolve(null);
 
-    const authUser = await resolveRequestUser(req).catch(() => null);
-    const accessToken = await resolveAnyActiveMlToken(authUser?.id || null, null);
+    // SEGURANÇA MULTI-TENANT: Resolve autenticação unificada (Bearer da extensão ou Cookie SSR)
+    // Se não autenticado, calcula exclusivamente via tabela oficial sem consumir tokens OAuth de outros tenants!
+    const ctx = await resolveUnifiedAuth(req).catch(() => null);
+    const accessToken = ctx
+      ? await resolveAnyActiveMlToken(ctx.userId, ctx.organizationId)
+      : null;
 
-    if (!accessToken) {
+    if (!ctx || !accessToken) {
       const fallback = calculateFallbackFees(
         "mercadolivre",
         price,
@@ -252,20 +257,28 @@ export async function GET(req: NextRequest) {
       Accept: "application/json",
     };
 
-    // 1. Resolve seller_id da conta integrada para consulta de frete oficial (shipping_options/free)
+    // 1. Resolve seller_id EXCLUSIVAMENTE da conta integrada do próprio tenant autenticado
     let mySellerId: string | null = null;
     try {
       const supabase = createSupabaseAdminClient();
-      const { data: row } = await supabase
+      let sellerQuery = supabase
         .from("marketplace_integrations")
         .select("seller_id")
         .eq("platform", "mercadolivre")
-        .eq("is_active", true)
+        .eq("is_active", true);
+
+      sellerQuery = ctx.organizationId
+        ? sellerQuery.eq("organization_id", ctx.organizationId)
+        : sellerQuery.eq("user_id", ctx.userId);
+
+      const { data: row } = await sellerQuery
         .order("updated_at", { ascending: false })
         .limit(1)
         .maybeSingle();
       mySellerId = row?.seller_id ? String(row.seller_id) : null;
-    } catch {}
+    } catch (sellerErr) {
+      console.warn("[extension/fees] Aviso ao consultar seller_id do tenant:", sellerErr);
+    }
 
     // 2. Consulta dados do item (/items/MLB...) e/ou vendedor concorrente (/users/...) para obter:
     //    - category_id real
@@ -331,11 +344,15 @@ export async function GET(req: NextRequest) {
       } catch {}
     }
 
-    // Se ainda não temos o seller_id do concorrente, tenta descobri-lo pela URL da loja (/pagina/...) ou pelo nome da loja
+    // Se ainda não temos o seller_id do concorrente, tenta descobri-lo pela URL validada contra SSRF
     if (!competitorSellerId && (sellerStoreUrl || sellerName)) {
       const candidateStoreUrls: string[] = [];
-      if (sellerStoreUrl && sellerStoreUrl.includes("mercadolivre.com.br")) {
-        candidateStoreUrls.push(sellerStoreUrl.split("?")[0]);
+      const safeStoreUrl = parseSafeMarketplaceUrl(sellerStoreUrl, {
+        platform: "mercadolivre",
+      });
+      if (safeStoreUrl) {
+        safeStoreUrl.search = "";
+        candidateStoreUrls.push(safeStoreUrl.toString());
       }
       if (sellerName) {
         const cleanSlug = sellerName
@@ -361,6 +378,7 @@ export async function GET(req: NextRequest) {
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
               "Accept-Language": "pt-BR,pt;q=0.9",
             },
+            redirect: "manual",
             signal: ctrl.signal,
             cache: "no-store",
           }).catch(() => null);

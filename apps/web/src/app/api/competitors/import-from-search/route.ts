@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import { importFromSearchSchema } from "@crm/types";
 import { syncSingleMyListingPrice } from "@/lib/services/listingPriceSync";
 
@@ -7,6 +8,12 @@ export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest) {
   try {
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+    const userId = ctx.userId;
+
     const body = await req.json();
     const parsed = importFromSearchSchema.safeParse(body);
 
@@ -36,11 +43,7 @@ export async function POST(req: NextRequest) {
 
     const supabase = createSupabaseAdminClient();
 
-    // 1. Obtém o usuário mestre/ativo para o tenant
-    const { data: users } = await supabase.from("products").select("user_id").limit(1);
-    const userId = users && users.length > 0 ? users[0].user_id : "00000000-0000-0000-0000-000000000000";
-
-    // 2. Faz o Upsert na tabela competitor_listings
+    // 2. Faz o Upsert na tabela competitor_listings isolado por `user_id` autenticado
     const { data: compListing, error: compError } = await supabase
       .from("competitor_listings")
       .upsert(
@@ -84,30 +87,38 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 4. Se o usuário escolheu parear com um anúncio próprio, cria o listing_matches
+    // 4. Se o usuário escolheu parear com um anúncio próprio, confere propriedade antes de criar `listing_matches`
     let matched = false;
     if (my_listing_id && compListing) {
-      const { error: matchError } = await supabase
-        .from("listing_matches")
-        .upsert(
-          {
-            user_id: userId,
-            my_listing_id: my_listing_id,
-            competitor_listing_id: compListing.id,
-            is_active: true,
-          },
-          { onConflict: "my_listing_id,competitor_listing_id" }
-        );
+      const { data: ownedListing } = await supabase
+        .from("my_listings")
+        .select("id")
+        .eq("id", my_listing_id)
+        .eq("user_id", userId)
+        .maybeSingle();
 
-      if (!matchError) {
-        matched = true;
-        try {
-          await syncSingleMyListingPrice(my_listing_id);
-        } catch (sErr) {
-          console.warn("Aviso ao atualizar preço próprio:", sErr);
+      if (ownedListing) {
+        const { error: matchError } = await supabase
+          .from("listing_matches")
+          .upsert(
+            {
+              user_id: userId,
+              my_listing_id: my_listing_id,
+              competitor_listing_id: compListing.id,
+              is_active: true,
+            },
+            { onConflict: "my_listing_id,competitor_listing_id" }
+          );
+
+        if (!matchError) {
+          matched = true;
+          await syncSingleMyListingPrice(my_listing_id, {
+            userId,
+            organizationId: ctx.organizationId,
+          }).catch((sErr) => console.warn("Aviso ao atualizar preço próprio:", sErr));
+        } else {
+          console.warn("Aviso ao criar pareamento listing_matches:", matchError);
         }
-      } else {
-        console.warn("Aviso ao criar pareamento listing_matches:", matchError);
       }
     }
 

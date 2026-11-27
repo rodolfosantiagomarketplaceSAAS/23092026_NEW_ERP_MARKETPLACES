@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { getAuthContext } from "@/lib/auth/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { upsertCostTemplateSchema } from "@/lib/validators/ml-sales";
-import { applyTenantFilter, upsertTenantCostTemplate } from "@/lib/mercadolivre/tenant-scope";
+import {
+  applyTenantFilter,
+  isMissingColumnError,
+  upsertTenantCostTemplate,
+} from "@/lib/mercadolivre/tenant-scope";
 
 export const dynamic = "force-dynamic";
 
@@ -71,29 +75,57 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Atualiza custos apenas em pedidos que não foram editados manualmente (quantity = 1 direto; >1 proporcional)
-      const { data: uneditedOrders } = await applyTenantFilter(
+      // Proteção Histórica ERP: atualiza SOMENTE pedidos que não foram editados manualmente
+      // E que NÃO possuem snapshot histórico congelado (`cost_snapshot_locked = false`)!
+      let ordersRes = await applyTenantFilter(
         admin
           .from("ml_sales_orders")
           .select("id, quantity")
           .eq("mlb_id", template.mlb_id)
-          .eq("costs_manually_edited", false),
+          .eq("costs_manually_edited", false)
+          .eq("cost_snapshot_locked", false),
         ctx
       );
 
-      for (const ord of uneditedOrders ?? []) {
-        const qty = Math.max(1, Number(ord.quantity || 1));
-        await admin
-          .from("ml_sales_orders")
-          .update({
-            tax_pct: template.default_tax_pct,
-            cost_material: Number((template.material_cost * qty).toFixed(2)),
-            cost_packaging: template.packaging_cost,
-            cost_logistics: template.logistics_cost,
-            cost_printing: template.printing_cost,
-            cost_accessories_kit: Number((template.accessories_kit_cost * qty).toFixed(2)),
+      let snapshotColsReady = true;
+      if (ordersRes.error && isMissingColumnError(ordersRes.error, "cost_snapshot_locked")) {
+        snapshotColsReady = false;
+        ordersRes = await applyTenantFilter(
+          admin
+            .from("ml_sales_orders")
+            .select("id, quantity")
+            .eq("mlb_id", template.mlb_id)
+            .eq("costs_manually_edited", false)
+            .eq("cost_material", 0),
+          ctx
+        );
+      }
+
+      const targetOrders = (ordersRes.data ?? []) as Array<{ id: string; quantity: number }>;
+      const nowIso = new Date().toISOString();
+      const BATCH_SIZE = 20;
+
+      for (let i = 0; i < targetOrders.length; i += BATCH_SIZE) {
+        const batch = targetOrders.slice(i, i + BATCH_SIZE);
+        await Promise.all(
+          batch.map((ord) => {
+            const qty = Math.max(1, Number(ord.quantity || 1));
+            const payload: Record<string, unknown> = {
+              tax_pct: template.default_tax_pct,
+              cost_material: Number((template.material_cost * qty).toFixed(2)),
+              cost_packaging: template.packaging_cost,
+              cost_logistics: template.logistics_cost,
+              cost_printing: template.printing_cost,
+              cost_accessories_kit: Number((template.accessories_kit_cost * qty).toFixed(2)),
+            };
+            if (snapshotColsReady) {
+              payload.cost_snapshot_locked = true;
+              payload.cost_snapshot_locked_at = nowIso;
+              payload.cost_snapshot_source = "template_snapshot";
+            }
+            return admin.from("ml_sales_orders").update(payload).eq("id", ord.id);
           })
-          .eq("id", ord.id);
+        );
       }
     }
 

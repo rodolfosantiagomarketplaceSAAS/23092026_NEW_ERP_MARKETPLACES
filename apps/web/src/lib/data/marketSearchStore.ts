@@ -1,11 +1,11 @@
 import type { MarketSearchItem } from "@crm/types";
 
-// Cache em memória de pesquisas sincronizadas pela Extensão Chrome
-// Anexado ao globalThis para persistir durante Hot-Reloading (HMR) no desenvolvimento Next.js
 interface SearchStoreEntry {
   timestamp: number;
   items: MarketSearchItem[];
 }
+
+const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 horas
 
 const globalForStore = globalThis as unknown as {
   __crmMarketSearchStore?: Map<string, SearchStoreEntry>;
@@ -28,37 +28,56 @@ function normalizeKey(str: string): string {
     .replace(/\s+/g, " ");
 }
 
-export function saveSyncedSearch(query: string, platform: string, items: MarketSearchItem[]) {
+/**
+ * Armazena pesquisa em memória particionada por `tenantKey` (`organizationId || userId`),
+ * impedindo vazamento de cache entre lojas diferentes na mesma instância Node.js.
+ */
+export function saveSyncedSearch(
+  query: string,
+  platform: string,
+  items: MarketSearchItem[],
+  tenantKey = "isolated"
+) {
   const normQ = normalizeKey(query);
   const platKey = platform ? platform.toLowerCase() : "all";
+  const scopePrefix = normalizeKey(tenantKey) || "isolated";
 
-  globalSearchStore.set(`${platKey}:${normQ}`, {
+  globalSearchStore.set(`${scopePrefix}|${platKey}:${normQ}`, {
     timestamp: Date.now(),
     items,
   });
-  // Guarda com chave 'all' para busca cross-marketplace
-  globalSearchStore.set(`all:${normQ}`, {
+  globalSearchStore.set(`${scopePrefix}|all:${normQ}`, {
     timestamp: Date.now(),
     items,
   });
 }
 
-export function getSyncedSearch(query: string, platform: string): MarketSearchItem[] | null {
+export function getSyncedSearch(
+  query: string,
+  platform: string,
+  tenantKey = "isolated"
+): MarketSearchItem[] | null {
   const normQ = normalizeKey(query);
   const platKey = platform ? platform.toLowerCase() : "all";
+  const scopePrefix = normalizeKey(tenantKey) || "isolated";
+  const now = Date.now();
 
-  // 1. Busca exata pela plataforma especificada
-  const exact = globalSearchStore.get(`${platKey}:${normQ}`);
-  if (exact && exact.items.length > 0) return exact.items;
+  const exact = globalSearchStore.get(`${scopePrefix}|${platKey}:${normQ}`);
+  if (exact && now - exact.timestamp <= CACHE_TTL_MS && exact.items.length > 0) {
+    return exact.items;
+  }
 
-  // 2. Busca exata na chave 'all'
-  const allEntry = globalSearchStore.get(`all:${normQ}`);
-  if (allEntry && allEntry.items.length > 0) return allEntry.items;
+  const allEntry = globalSearchStore.get(`${scopePrefix}|all:${normQ}`);
+  if (allEntry && now - allEntry.timestamp <= CACHE_TTL_MS && allEntry.items.length > 0) {
+    return allEntry.items;
+  }
 
-  // 3. Busca aproximada (ex: se pesquisou "bateria automotiva" e busca "bateria")
   let approximateMatch: MarketSearchItem[] | null = null;
   globalSearchStore.forEach((entry, key) => {
     if (approximateMatch) return;
+    if (!key.startsWith(`${scopePrefix}|`)) return;
+    if (now - entry.timestamp > CACHE_TTL_MS) return;
+
     const keyTerm = key.split(":")[1] || "";
     if (keyTerm && (keyTerm.includes(normQ) || normQ.includes(keyTerm))) {
       if (entry.items && entry.items.length > 0) {
@@ -69,4 +88,3 @@ export function getSyncedSearch(query: string, platform: string): MarketSearchIt
 
   return approximateMatch;
 }
-

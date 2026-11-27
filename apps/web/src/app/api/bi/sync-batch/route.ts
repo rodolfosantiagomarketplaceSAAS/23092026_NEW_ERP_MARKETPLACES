@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
-import { getAuthContext } from "@/lib/auth/context";
-import { resolveRequestUser } from "@/lib/extension/auth";
+import { resolveUnifiedAuth } from "@/lib/auth/context";
 import { runSmartRadarSync } from "@/lib/mercadolivre/radar-sync-engine";
 
 export const dynamic = "force-dynamic";
@@ -18,10 +17,12 @@ const SyncBatchSchema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const authUser = await resolveRequestUser(req);
-    const webCtx = !authUser ? await getAuthContext().catch(() => null) : null;
-    const userId = authUser?.id ?? webCtx?.userId ?? null;
-    const organizationId = webCtx?.organizationId ?? null;
+    const ctx = await resolveUnifiedAuth(req);
+    if (!ctx) {
+      return NextResponse.json({ error: "Não autenticado." }, { status: 401 });
+    }
+    const userId = ctx.userId;
+    const organizationId = ctx.organizationId;
 
     let payload: unknown = {};
     try {

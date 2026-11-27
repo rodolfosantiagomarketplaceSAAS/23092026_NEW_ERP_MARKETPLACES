@@ -1,4 +1,6 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { resolveUnifiedAuth, type AuthContext } from "@/lib/auth/context";
+import { parseSafeMarketplaceUrl } from "@/lib/security/url-validator";
 import {
   listSavedOpportunityListings,
   upsertSavedOpportunityListing,
@@ -20,6 +22,7 @@ import {
 export const dynamic = "force-dynamic";
 
 async function resolveMlSellerRealLocation(
+  ctx: AuthContext,
   sellerIdRaw?: string | number | null,
   sellerStoreUrlRaw?: string | null,
   sellerNameRaw?: string | null
@@ -31,16 +34,18 @@ async function resolveMlSellerRealLocation(
     }
 
     if (!sellerId && (sellerStoreUrlRaw || sellerNameRaw)) {
-      const storeUrl =
-        sellerStoreUrlRaw && sellerStoreUrlRaw.includes("mercadolivre.com.br")
-          ? sellerStoreUrlRaw
-          : sellerNameRaw
-          ? `https://www.mercadolivre.com.br/pagina/${String(sellerNameRaw)
-              .toLowerCase()
-              .normalize("NFD")
-              .replace(/[\u0300-\u036f]/g, "")
-              .replace(/[^a-z0-9]/g, "")}`
-          : "";
+      const safeStoreUrl = parseSafeMarketplaceUrl(sellerStoreUrlRaw, {
+        platform: "mercadolivre",
+      });
+      const storeUrl = safeStoreUrl
+        ? safeStoreUrl.toString()
+        : sellerNameRaw
+        ? `https://www.mercadolivre.com.br/pagina/${String(sellerNameRaw)
+            .toLowerCase()
+            .normalize("NFD")
+            .replace(/[\u0300-\u036f]/g, "")
+            .replace(/[^a-z0-9]/g, "")}`
+        : "";
       if (storeUrl) {
         const res = await fetch(storeUrl, {
           headers: {
@@ -48,6 +53,7 @@ async function resolveMlSellerRealLocation(
               "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
             Accept: "text/html,application/xhtml+xml",
           },
+          redirect: "manual",
           cache: "no-store",
         }).catch(() => null);
         if (res && res.ok) {
@@ -62,7 +68,7 @@ async function resolveMlSellerRealLocation(
     }
 
     if (!sellerId) return null;
-    const token = await resolveAnyActiveMlToken();
+    const token = await resolveAnyActiveMlToken(ctx.userId, ctx.organizationId);
     const headers: Record<string, string> = { Accept: "application/json" };
     if (token) headers.Authorization = `Bearer ${token}`;
 
@@ -82,53 +88,67 @@ async function resolveMlSellerRealLocation(
   return null;
 }
 
-export async function GET(request: Request) {
+export async function GET(request: NextRequest) {
   try {
+    const ctx = await resolveUnifiedAuth(request);
+    if (!ctx) {
+      return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
+    }
+
     const { searchParams } = new URL(request.url);
     const statusFilter = searchParams.get("status"); // "all" | "pending" | "created"
     const search = (searchParams.get("search") || "").trim().toLowerCase();
 
-    const allItems = await listSavedOpportunityListings();
+    const allItems = await listSavedOpportunityListings(ctx.userId);
 
-    // Auto-heal: se algum anúncio salvo anteriormente ficou com "Passo Fundo - RS" (endereço do comprador)
-    // ou com data de criação da imagem em vez da data oficial do anúncio, corrige consultando a API do ML
+    // Performance: limita auto-heal a no máximo 3 itens pendentes por chamada GET (elimina gargalo N+1!)
+    const candidatesForHeal = allItems
+      .filter(
+        (item) =>
+          item.platform === "mercadolivre" &&
+          (!item.seller_location ||
+            item.seller_location.toLowerCase().includes("passo fundo") ||
+            !item.listing_created_at)
+      )
+      .slice(0, 3);
+
     await Promise.all(
-      allItems.map(async (item) => {
-        if (item.platform === "mercadolivre") {
-          let changed = false;
-          if (
-            !item.seller_location ||
-            item.seller_location.toLowerCase().includes("passo fundo")
-          ) {
-            const realLoc = await resolveMlSellerRealLocation(
-              null,
-              null,
-              item.seller_name
-            );
-            if (realLoc && realLoc !== item.seller_location) {
-              item.seller_location = realLoc;
-              changed = true;
-            }
+      candidatesForHeal.map(async (item) => {
+        let changed = false;
+        if (
+          !item.seller_location ||
+          item.seller_location.toLowerCase().includes("passo fundo")
+        ) {
+          const realLoc = await resolveMlSellerRealLocation(
+            ctx,
+            null,
+            null,
+            item.seller_name
+          );
+          if (realLoc && realLoc !== item.seller_location) {
+            item.seller_location = realLoc;
+            changed = true;
           }
+        }
 
-          if (/^MLB\d{9,12}$/i.test(item.external_id)) {
-            const officialDate = await refineMlCreationDateFromImage(
-              item.external_id,
-              item.thumbnail_url
-            ).catch(() => null);
-            if (officialDate && officialDate !== item.listing_created_at) {
-              item.listing_created_at = officialDate;
-              changed = true;
-            }
+        if (!item.listing_created_at && /^MLB\d{9,12}$/i.test(item.external_id)) {
+          const officialDate = await refineMlCreationDateFromImage(
+            item.external_id,
+            item.thumbnail_url
+          ).catch(() => null);
+          if (officialDate && officialDate !== item.listing_created_at) {
+            item.listing_created_at = officialDate;
+            changed = true;
           }
+        }
 
-          if (changed) {
-            await upsertSavedOpportunityListing({
-              ...item,
-              seller_location: item.seller_location,
-              listing_created_at: item.listing_created_at,
-            }).catch(() => null);
-          }
+        if (changed) {
+          await upsertSavedOpportunityListing({
+            ...item,
+            user_id: ctx.userId,
+            seller_location: item.seller_location,
+            listing_created_at: item.listing_created_at,
+          }).catch(() => null);
         }
       })
     );
@@ -173,11 +193,18 @@ export async function GET(request: Request) {
   }
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
+    const ctx = await resolveUnifiedAuth(request);
+    if (!ctx) {
+      return NextResponse.json({ success: false, error: "Não autenticado." }, { status: 401 });
+    }
+
     const body = await request.json();
 
-    const rawUrl = String(body.url || body.permalink || "").trim();
+    const rawUrlInput = String(body.url || body.permalink || "").trim();
+    const safeParsedUrl = rawUrlInput ? parseSafeMarketplaceUrl(rawUrlInput) : null;
+    const rawUrl = safeParsedUrl ? safeParsedUrl.toString() : "";
     const rawExtId = String(body.external_id || "").trim();
 
     const platform: "mercadolivre" | "shopee" =
@@ -206,7 +233,9 @@ export async function POST(request: Request) {
       const mlbId = extractMlbId(externalId) || extractMlbId(rawUrl);
       const mlbuId = extractMlbuId(externalId) || extractMlbuId(rawUrl);
       const token =
-        platform === "mercadolivre" ? await resolveAnyActiveMlToken() : null;
+        platform === "mercadolivre"
+          ? await resolveAnyActiveMlToken(ctx.userId, ctx.organizationId)
+          : null;
 
       if (platform === "mercadolivre" && (mlbId || mlbuId)) {
         const apiData = await fetchCompetitorViaMlApi({
@@ -383,6 +412,7 @@ export async function POST(request: Request) {
       (!sellerLocation || sellerLocation.toLowerCase().includes("passo fundo"))
     ) {
       const resolvedLoc = await resolveMlSellerRealLocation(
+        ctx,
         body.seller_id,
         body.seller_store_url,
         sellerName
@@ -401,7 +431,7 @@ export async function POST(request: Request) {
     );
 
     const saved = await upsertSavedOpportunityListing({
-      user_id: "00000000-0000-0000-0000-000000000000",
+      user_id: ctx.userId,
       platform,
       external_id: externalId,
       title,
