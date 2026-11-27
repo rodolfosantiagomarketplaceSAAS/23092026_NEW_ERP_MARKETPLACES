@@ -1,8 +1,14 @@
 import type {
   DailyClosingRow,
+  MlProductReturnRankingRow,
+  MlReturnReasonSummaryRow,
+  MlReturnsAnalyticsSummary,
   MlSaleOrder,
+  MlSalesStatusCounts,
   MlSalesSummaryKpis,
+  MlSellerLossSummaryRow,
   SalesAnalysisMode,
+  SalesStatusFilter,
   Seller,
   SellerTransferSummary,
 } from "../../types/ml-sales";
@@ -14,6 +20,54 @@ export function roundCurrency(value: number): number {
 
 export function isCancelledOrReturned(status: string): boolean {
   return status === "cancelled" || status === "returned";
+}
+
+export function matchesSalesStatusFilter(
+  order: Pick<MlSaleOrder, "status" | "verified_at">,
+  statusFilter: SalesStatusFilter | string
+): boolean {
+  switch (statusFilter) {
+    case "valid":
+      return !isCancelledOrReturned(order.status);
+    case "returned":
+      return order.status === "returned";
+    case "cancelled_only":
+      return order.status === "cancelled";
+    case "cancelled":
+      return isCancelledOrReturned(order.status);
+    case "unverified":
+      return !order.verified_at;
+    case "all":
+    default:
+      return true;
+  }
+}
+
+export function computeSalesStatusCounts(orders: MlSaleOrder[]): MlSalesStatusCounts {
+  let valid = 0;
+  let returned = 0;
+  let cancelledOnly = 0;
+  let unverified = 0;
+
+  for (const order of orders) {
+    if (!order.verified_at) unverified += 1;
+    if (order.status === "returned") {
+      returned += 1;
+    } else if (order.status === "cancelled") {
+      cancelledOnly += 1;
+    } else {
+      valid += 1;
+    }
+  }
+
+  return {
+    all: orders.length,
+    valid,
+    returned,
+    cancelled_only: cancelledOnly,
+    cancelled_or_returned: returned + cancelledOnly,
+    unverified,
+  };
 }
 
 export function isMpMoneyReleased(
@@ -336,4 +390,292 @@ export function computeSalesDashboardAnalytics(params: {
   );
 
   return { kpis, sellerSummaries, dailyClosing };
+}
+
+function normalizeReasonLabel(order: Pick<MlSaleOrder, "status" | "cancellation_reason">): string {
+  const raw = (order.cancellation_reason || "").trim();
+  if (raw) return raw;
+  return order.status === "returned"
+    ? "Devolução pós-envio (sem motivo detalhado na API ML)"
+    : "Cancelamento registrado no Mercado Livre";
+}
+
+export function computeReturnsAndCancellationsAnalytics(params: {
+  scopeOrders: MlSaleOrder[];
+  sellers: Seller[];
+  analysisMode?: SalesAnalysisMode;
+}): MlReturnsAnalyticsSummary {
+  const { scopeOrders, sellers, analysisMode = "order_date" } = params;
+  const sellerMap = new Map<string, Seller>(sellers.map((s) => [s.id, s]));
+
+  const effectiveOrders =
+    analysisMode === "shipping_date"
+      ? scopeOrders.filter((o) => Boolean(o.shipped_at))
+      : scopeOrders;
+
+  let validOrdersCount = 0;
+  let returnedOrdersCount = 0;
+  let cancelledOrdersCount = 0;
+  let grossReturnedAmount = 0;
+  let grossCancelledAmount = 0;
+  let retainedOperationalCostTotal = 0;
+
+  const affectedOrders: MlSaleOrder[] = [];
+
+  interface ProductAcc {
+    mlb_id: string;
+    sku: string | null;
+    product_title: string;
+    product_thumbnail: string | null;
+    permalink: string | null;
+    total_orders_count: number;
+    total_units: number;
+    valid_orders_count: number;
+    returned_orders_count: number;
+    cancelled_orders_count: number;
+    affected_units: number;
+    gross_valid_amount: number;
+    gross_returned_amount: number;
+    gross_cancelled_amount: number;
+    retained_operational_cost: number;
+    reasonCounts: Map<string, number>;
+  }
+
+  const productMap = new Map<string, ProductAcc>();
+  const reasonMap = new Map<
+    string,
+    {
+      reason: string;
+      count: number;
+      returned_count: number;
+      cancelled_count: number;
+      gross_amount: number;
+    }
+  >();
+
+  const sellerLossMap = new Map<
+    string,
+    {
+      seller_id: string;
+      seller_name: string;
+      color_hex: string;
+      total_orders_count: number;
+      returned_count: number;
+      cancelled_count: number;
+      gross_affected_amount: number;
+    }
+  >();
+
+  for (const order of effectiveOrders) {
+    const mlbKey = (order.mlb_id || "SEM-MLB").toUpperCase();
+    const qty = Math.max(1, Number(order.quantity || 1));
+    const gross = Number(order.gross_sale_amount || 0);
+    const opCost = getOrderOperationalCostsOnly(order);
+
+    let prod = productMap.get(mlbKey);
+    if (!prod) {
+      prod = {
+        mlb_id: mlbKey,
+        sku: order.sku || null,
+        product_title: order.product_title || mlbKey,
+        product_thumbnail: order.product_thumbnail || null,
+        permalink: order.permalink || null,
+        total_orders_count: 0,
+        total_units: 0,
+        valid_orders_count: 0,
+        returned_orders_count: 0,
+        cancelled_orders_count: 0,
+        affected_units: 0,
+        gross_valid_amount: 0,
+        gross_returned_amount: 0,
+        gross_cancelled_amount: 0,
+        retained_operational_cost: 0,
+        reasonCounts: new Map<string, number>(),
+      };
+      productMap.set(mlbKey, prod);
+    } else {
+      if (!prod.sku && order.sku) prod.sku = order.sku;
+      if (!prod.product_thumbnail && order.product_thumbnail) {
+        prod.product_thumbnail = order.product_thumbnail;
+      }
+      if (!prod.permalink && order.permalink) prod.permalink = order.permalink;
+    }
+
+    prod.total_orders_count += 1;
+    prod.total_units += qty;
+
+    const sellerKey = order.assigned_seller_id || "__UNASSIGNED__";
+    let sellerAcc = sellerLossMap.get(sellerKey);
+    if (!sellerAcc) {
+      const sellerObj = order.assigned_seller_id
+        ? sellerMap.get(order.assigned_seller_id)
+        : undefined;
+      sellerAcc = {
+        seller_id: sellerKey,
+        seller_name: sellerObj ? sellerObj.name : "Sem Vendedor",
+        color_hex: sellerObj ? sellerObj.color_hex : "#64748B",
+        total_orders_count: 0,
+        returned_count: 0,
+        cancelled_count: 0,
+        gross_affected_amount: 0,
+      };
+      sellerLossMap.set(sellerKey, sellerAcc);
+    }
+    sellerAcc.total_orders_count += 1;
+
+    if (order.status === "returned") {
+      returnedOrdersCount += 1;
+      grossReturnedAmount = roundCurrency(grossReturnedAmount + gross);
+      retainedOperationalCostTotal = roundCurrency(retainedOperationalCostTotal + opCost);
+
+      prod.returned_orders_count += 1;
+      prod.affected_units += qty;
+      prod.gross_returned_amount = roundCurrency(prod.gross_returned_amount + gross);
+      prod.retained_operational_cost = roundCurrency(prod.retained_operational_cost + opCost);
+
+      sellerAcc.returned_count += 1;
+      sellerAcc.gross_affected_amount = roundCurrency(sellerAcc.gross_affected_amount + gross);
+
+      const reason = normalizeReasonLabel(order);
+      prod.reasonCounts.set(reason, (prod.reasonCounts.get(reason) ?? 0) + 1);
+      const rEntry = reasonMap.get(reason) ?? {
+        reason,
+        count: 0,
+        returned_count: 0,
+        cancelled_count: 0,
+        gross_amount: 0,
+      };
+      rEntry.count += 1;
+      rEntry.returned_count += 1;
+      rEntry.gross_amount = roundCurrency(rEntry.gross_amount + gross);
+      reasonMap.set(reason, rEntry);
+
+      affectedOrders.push(order);
+    } else if (order.status === "cancelled") {
+      cancelledOrdersCount += 1;
+      grossCancelledAmount = roundCurrency(grossCancelledAmount + gross);
+
+      prod.cancelled_orders_count += 1;
+      prod.affected_units += qty;
+      prod.gross_cancelled_amount = roundCurrency(prod.gross_cancelled_amount + gross);
+
+      sellerAcc.cancelled_count += 1;
+      sellerAcc.gross_affected_amount = roundCurrency(sellerAcc.gross_affected_amount + gross);
+
+      const reason = normalizeReasonLabel(order);
+      prod.reasonCounts.set(reason, (prod.reasonCounts.get(reason) ?? 0) + 1);
+      const rEntry = reasonMap.get(reason) ?? {
+        reason,
+        count: 0,
+        returned_count: 0,
+        cancelled_count: 0,
+        gross_amount: 0,
+      };
+      rEntry.count += 1;
+      rEntry.cancelled_count += 1;
+      rEntry.gross_amount = roundCurrency(rEntry.gross_amount + gross);
+      reasonMap.set(reason, rEntry);
+
+      affectedOrders.push(order);
+    } else {
+      validOrdersCount += 1;
+      prod.valid_orders_count += 1;
+      prod.gross_valid_amount = roundCurrency(prod.gross_valid_amount + gross);
+    }
+  }
+
+  const totalPeriodOrders = effectiveOrders.length;
+  const totalAffectedCount = returnedOrdersCount + cancelledOrdersCount;
+  const grossTotalAffectedAmount = roundCurrency(grossReturnedAmount + grossCancelledAmount);
+
+  const pct = (num: number, den: number) =>
+    den > 0 ? roundCurrency((num / den) * 100) : 0;
+
+  const productRanking: MlProductReturnRankingRow[] = Array.from(productMap.values())
+    .filter((p) => p.returned_orders_count + p.cancelled_orders_count > 0)
+    .map((p) => {
+      const affectedCount = p.returned_orders_count + p.cancelled_orders_count;
+      const grossAffected = roundCurrency(p.gross_returned_amount + p.gross_cancelled_amount);
+      const sortedReasons = Array.from(p.reasonCounts.entries())
+        .map(([reason, count]) => ({ reason, count }))
+        .sort((a, b) => b.count - a.count);
+
+      return {
+        mlb_id: p.mlb_id,
+        sku: p.sku,
+        product_title: p.product_title,
+        product_thumbnail: p.product_thumbnail,
+        permalink: p.permalink,
+        total_orders_count: p.total_orders_count,
+        total_units: p.total_units,
+        valid_orders_count: p.valid_orders_count,
+        returned_orders_count: p.returned_orders_count,
+        cancelled_orders_count: p.cancelled_orders_count,
+        affected_orders_count: affectedCount,
+        affected_units: p.affected_units,
+        return_rate_pct: pct(p.returned_orders_count, p.total_orders_count),
+        cancel_rate_pct: pct(p.cancelled_orders_count, p.total_orders_count),
+        loss_rate_pct: pct(affectedCount, p.total_orders_count),
+        gross_valid_amount: p.gross_valid_amount,
+        gross_returned_amount: p.gross_returned_amount,
+        gross_cancelled_amount: p.gross_cancelled_amount,
+        gross_affected_amount: grossAffected,
+        retained_operational_cost: p.retained_operational_cost,
+        top_reason: sortedReasons[0]?.reason ?? null,
+        reasons: sortedReasons,
+      };
+    })
+    .sort((a, b) => {
+      if (b.affected_orders_count !== a.affected_orders_count) {
+        return b.affected_orders_count - a.affected_orders_count;
+      }
+      if (b.returned_orders_count !== a.returned_orders_count) {
+        return b.returned_orders_count - a.returned_orders_count;
+      }
+      return b.gross_affected_amount - a.gross_affected_amount;
+    });
+
+  const reasonsBreakdown: MlReturnReasonSummaryRow[] = Array.from(reasonMap.values())
+    .map((r) => ({
+      ...r,
+      share_pct: pct(r.count, totalAffectedCount),
+    }))
+    .sort((a, b) => b.count - a.count || b.gross_amount - a.gross_amount);
+
+  const sellerLosses: MlSellerLossSummaryRow[] = Array.from(sellerLossMap.values())
+    .filter((s) => s.returned_count + s.cancelled_count > 0)
+    .map((s) => {
+      const affected = s.returned_count + s.cancelled_count;
+      return {
+        seller_id: s.seller_id,
+        seller_name: s.seller_name,
+        color_hex: s.color_hex,
+        total_orders_count: s.total_orders_count,
+        returned_count: s.returned_count,
+        cancelled_count: s.cancelled_count,
+        affected_count: affected,
+        loss_rate_pct: pct(affected, s.total_orders_count),
+        gross_affected_amount: s.gross_affected_amount,
+      };
+    })
+    .sort((a, b) => b.affected_count - a.affected_count || b.gross_affected_amount - a.gross_affected_amount);
+
+  return {
+    total_period_orders: totalPeriodOrders,
+    valid_orders_count: validOrdersCount,
+    returned_orders_count: returnedOrdersCount,
+    cancelled_orders_count: cancelledOrdersCount,
+    total_affected_count: totalAffectedCount,
+    return_rate_pct: pct(returnedOrdersCount, totalPeriodOrders),
+    cancel_rate_pct: pct(cancelledOrdersCount, totalPeriodOrders),
+    combined_loss_rate_pct: pct(totalAffectedCount, totalPeriodOrders),
+    gross_returned_amount: grossReturnedAmount,
+    gross_cancelled_amount: grossCancelledAmount,
+    gross_total_affected_amount: grossTotalAffectedAmount,
+    retained_operational_cost_total: retainedOperationalCostTotal,
+    reasons_breakdown: reasonsBreakdown,
+    seller_losses: sellerLosses,
+    product_ranking: productRanking,
+    affected_orders: affectedOrders,
+  };
 }

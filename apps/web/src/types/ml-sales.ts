@@ -7,6 +7,88 @@ export type MlSaleOrderStatus =
 
 export type SalesAnalysisMode = "order_date" | "shipping_date";
 
+export type SalesStatusFilter =
+  | "all"
+  | "valid"
+  | "returned"
+  | "cancelled_only"
+  | "cancelled"
+  | "unverified";
+
+export interface MlSalesStatusCounts {
+  all: number;
+  valid: number;
+  returned: number;
+  cancelled_only: number;
+  cancelled_or_returned: number;
+  unverified: number;
+}
+
+export interface MlProductReturnRankingRow {
+  mlb_id: string;
+  sku: string | null;
+  product_title: string;
+  product_thumbnail: string | null;
+  permalink: string | null;
+  total_orders_count: number;
+  total_units: number;
+  valid_orders_count: number;
+  returned_orders_count: number;
+  cancelled_orders_count: number;
+  affected_orders_count: number;
+  affected_units: number;
+  return_rate_pct: number;
+  cancel_rate_pct: number;
+  loss_rate_pct: number;
+  gross_valid_amount: number;
+  gross_returned_amount: number;
+  gross_cancelled_amount: number;
+  gross_affected_amount: number;
+  retained_operational_cost: number;
+  top_reason: string | null;
+  reasons: Array<{ reason: string; count: number }>;
+}
+
+export interface MlReturnReasonSummaryRow {
+  reason: string;
+  count: number;
+  returned_count: number;
+  cancelled_count: number;
+  gross_amount: number;
+  share_pct: number;
+}
+
+export interface MlSellerLossSummaryRow {
+  seller_id: string;
+  seller_name: string;
+  color_hex: string;
+  total_orders_count: number;
+  returned_count: number;
+  cancelled_count: number;
+  affected_count: number;
+  loss_rate_pct: number;
+  gross_affected_amount: number;
+}
+
+export interface MlReturnsAnalyticsSummary {
+  total_period_orders: number;
+  valid_orders_count: number;
+  returned_orders_count: number;
+  cancelled_orders_count: number;
+  total_affected_count: number;
+  return_rate_pct: number;
+  cancel_rate_pct: number;
+  combined_loss_rate_pct: number;
+  gross_returned_amount: number;
+  gross_cancelled_amount: number;
+  gross_total_affected_amount: number;
+  retained_operational_cost_total: number;
+  reasons_breakdown: MlReturnReasonSummaryRow[];
+  seller_losses: MlSellerLossSummaryRow[];
+  product_ranking: MlProductReturnRankingRow[];
+  affected_orders: MlSaleOrder[];
+}
+
 export interface Seller {
   id: string;
   organization_id: string | null;
@@ -164,6 +246,8 @@ export interface MlSalesDashboardResponse {
   stores: string[];
   sellerOrderCounts: Record<string, number>;
   unassignedCount: number;
+  statusCounts?: MlSalesStatusCounts;
+  returnsAnalytics?: MlReturnsAnalyticsSummary;
   kpis: MlSalesSummaryKpis;
   sellerSummaries: SellerTransferSummary[];
   dailyClosing: DailyClosingRow[];

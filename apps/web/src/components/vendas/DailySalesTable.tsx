@@ -11,7 +11,6 @@ import {
   CheckCircle2,
   Clock,
   ExternalLink,
-  Info,
   Loader2,
   Package,
   PencilLine,
@@ -45,6 +44,7 @@ import {
   toBrazilInputDate,
 } from "./formatters";
 import { OrderCostsPopover } from "./OrderCostsPopover";
+import { PlatformFeeBreakdownTooltip } from "./PlatformFeeBreakdownTooltip";
 import { ProductThumbnailPreview } from "./ProductThumbnailPreview";
 import { SellerQuickColorPopover } from "./SellerQuickColorPopover";
 
@@ -53,6 +53,8 @@ interface DailySalesTableProps {
   sellers: Seller[];
   templates: ProductCostTemplate[];
   analysisMode?: SalesAnalysisMode;
+  emptyTitle?: string;
+  emptyDescription?: string;
   onRefresh: () => void;
 }
 
@@ -61,6 +63,8 @@ export function DailySalesTable({
   sellers,
   templates,
   analysisMode = "order_date",
+  emptyTitle,
+  emptyDescription,
   onRefresh,
 }: DailySalesTableProps) {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -340,12 +344,15 @@ export function DailySalesTable({
           <Package className="w-8 h-8 text-slate-300 mx-auto" />
         )}
         <div className="text-sm font-bold text-slate-800">
-          {isShippingMode
-            ? "Nenhum pedido enviado (bipado/coletado ou com data manual) encontrado neste período"
-            : "Nenhuma venda encontrada para os filtros selecionados"}
+          {emptyTitle ||
+            (isShippingMode
+              ? "Nenhum pedido enviado (bipado/coletado ou com data manual) encontrado neste período"
+              : "Nenhuma venda encontrada para os filtros selecionados")}
         </div>
         <p className="text-xs text-slate-500 max-w-lg mx-auto">
-          {isShippingMode ? (
+          {emptyDescription ? (
+            emptyDescription
+          ) : isShippingMode ? (
             <>
               No modo <strong>Por Dia do Envio</strong> aparecem as vendas despachadas na
               transportadora/agência ou com <strong>Data de Envio definida manualmente</strong>{" "}
@@ -410,9 +417,6 @@ export function DailySalesTable({
 
               const deadline = formatDeadlineBR(order.shipping_deadline);
               const logisticLabel = formatLogisticTypeLabel(order.logistic_type);
-              const netMlDiscount = roundCurrency(
-                order.ml_commission_amount + order.ml_shipping_cost - order.ml_promo_rebate
-              );
               const opCostsOnly = getOrderOperationalCostsOnly(order);
               const totalInternalCostsAndTax = roundCurrency(order.tax_amount + opCostsOnly);
               const marginPct =
@@ -867,44 +871,9 @@ export function DailySalesTable({
                     </div>
                   </td>
 
-                  {/* 7. Taxas ML & Frete */}
+                  {/* 7. Taxas ML & Frete (Tooltip via Portal — sem corte na tabela) */}
                   <td className="py-2.5 px-2.5 text-right align-top font-mono tabular-nums whitespace-nowrap">
-                    <div className="relative inline-block group">
-                      <div className="inline-flex items-center gap-1 cursor-help text-rose-600 font-semibold text-[11px]">
-                        <span>-{formatBRL(cancelled ? 0 : netMlDiscount)}</span>
-                        <Info className="w-3 h-3 text-slate-400 group-hover:text-slate-700" />
-                      </div>
-
-                      {order.ml_promo_rebate > 0 && !cancelled && (
-                        <div className="text-[9px] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1 py-0.2 rounded-xs mt-0.5">
-                          +{formatBRL(order.ml_promo_rebate)} estorno ML
-                        </div>
-                      )}
-
-                      <div className="invisible opacity-0 group-hover:visible group-hover:opacity-100 transition-opacity z-40 absolute right-0 top-full mt-1.5 w-60 p-2.5 rounded bg-slate-900 text-white text-[10px] shadow-xl pointer-events-none text-left space-y-1">
-                        <div className="font-sans font-bold text-slate-300 border-b border-slate-700 pb-1 mb-1">
-                          Composição Plataforma ML
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-300">
-                            Comissão ML ({order.ml_commission_pct.toFixed(1)}%):
-                          </span>
-                          <span className="text-rose-300 font-semibold">
-                            -{formatBRL(order.ml_commission_amount)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between">
-                          <span className="text-slate-300">Frete Vendedor:</span>
-                          <span className="text-rose-300 font-semibold">
-                            -{formatBRL(order.ml_shipping_cost)}
-                          </span>
-                        </div>
-                        <div className="flex justify-between text-emerald-300 font-bold pt-1 border-t border-slate-800">
-                          <span>Estorno / Promo ML:</span>
-                          <span>+{formatBRL(order.ml_promo_rebate)}</span>
-                        </div>
-                      </div>
-                    </div>
+                    <PlatformFeeBreakdownTooltip order={order} />
                   </td>
 
                   {/* 8. Valor Repasse Vendedor */}

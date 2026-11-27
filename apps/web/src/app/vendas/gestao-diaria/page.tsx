@@ -1,9 +1,10 @@
 "use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Header } from "@/components/layout/Header";
 import {
   AlertTriangle,
+  Ban,
   Calendar,
   CalendarDays,
   CheckCircle2,
@@ -12,6 +13,7 @@ import {
   Infinity as InfinityIcon,
   ListChecks,
   Loader2,
+  PackageX,
   Radio,
   RefreshCw,
   RotateCcw,
@@ -20,13 +22,19 @@ import {
   ShieldAlert,
   Store,
   Table2,
+  X,
 } from "lucide-react";
 import type {
+  MlReturnsAnalyticsSummary,
   MlSalesDashboardResponse,
+  MlSalesStatusCounts,
   SalesAnalysisMode,
+  SalesStatusFilter,
 } from "@/types/ml-sales";
 import {
+  computeReturnsAndCancellationsAnalytics,
   computeSalesDashboardAnalytics,
+  computeSalesStatusCounts,
   filterOrdersByAnalysisMode,
 } from "@/lib/mercadolivre/sales-analytics";
 import {
@@ -43,6 +51,7 @@ import { SalesKpiSection } from "@/components/vendas/SalesKpiSection";
 import { ShippingDaySpotlightBar } from "@/components/vendas/ShippingDaySpotlightBar";
 import { DailySalesTable } from "@/components/vendas/DailySalesTable";
 import { DailyClosingTable } from "@/components/vendas/DailyClosingTable";
+import { ReturnsAndCancellationsPanel } from "@/components/vendas/ReturnsAndCancellationsPanel";
 import { ManageSellersAndTemplatesDrawer } from "@/components/vendas/ManageSellersAndTemplatesDrawer";
 import { SellerQuickColorPopover } from "@/components/vendas/SellerQuickColorPopover";
 import {
@@ -57,8 +66,36 @@ type DatePreset =
   | "specificDay"
   | "custom";
 
-type StatusFilter = "all" | "valid" | "cancelled" | "unverified";
-type SubTab = "operational" | "closing";
+type StatusFilter = SalesStatusFilter;
+type SubTab = "operational" | "closing" | "returns";
+
+const EMPTY_STATUS_COUNTS: MlSalesStatusCounts = {
+  all: 0,
+  valid: 0,
+  returned: 0,
+  cancelled_only: 0,
+  cancelled_or_returned: 0,
+  unverified: 0,
+};
+
+const EMPTY_RETURNS_ANALYTICS: MlReturnsAnalyticsSummary = {
+  total_period_orders: 0,
+  valid_orders_count: 0,
+  returned_orders_count: 0,
+  cancelled_orders_count: 0,
+  total_affected_count: 0,
+  return_rate_pct: 0,
+  cancel_rate_pct: 0,
+  combined_loss_rate_pct: 0,
+  gross_returned_amount: 0,
+  gross_cancelled_amount: 0,
+  gross_total_affected_amount: 0,
+  retained_operational_cost_total: 0,
+  reasons_breakdown: [],
+  seller_losses: [],
+  product_ranking: [],
+  affected_orders: [],
+};
 
 const EMPTY_DASHBOARD: MlSalesDashboardResponse = {
   success: true,
@@ -77,6 +114,8 @@ const EMPTY_DASHBOARD: MlSalesDashboardResponse = {
   stores: [],
   sellerOrderCounts: {},
   unassignedCount: 0,
+  statusCounts: EMPTY_STATUS_COUNTS,
+  returnsAnalytics: EMPTY_RETURNS_ANALYTICS,
   kpis: {
     valid_orders_count: 0,
     cancelled_orders_count: 0,
@@ -124,6 +163,7 @@ export default function GestaoDiariaVendasPage() {
   const [storeFilter, setStoreFilter] = useState<string>("all");
   const [searchInput, setSearchInput] = useState<string>("");
   const [debouncedQuery, setDebouncedQuery] = useState<string>("");
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
 
   const [activeSubTab, setActiveSubTab] = useState<SubTab>("operational");
   const [drawerOpen, setDrawerOpen] = useState<boolean>(false);
@@ -414,6 +454,50 @@ export default function GestaoDiariaVendasPage() {
     activeSellerCounts.unassignedCount +
     Object.values(activeSellerCounts.sellerOrderCounts).reduce((a, b) => a + b, 0);
 
+  const activeStatusCounts = useMemo<MlSalesStatusCounts>(() => {
+    if (spotlightDayKey && statusFilter === "all") {
+      return computeSalesStatusCounts(displayedOrders);
+    }
+    return data.statusCounts ?? EMPTY_STATUS_COUNTS;
+  }, [spotlightDayKey, statusFilter, displayedOrders, data.statusCounts]);
+
+  const displayedReturnsAnalytics = useMemo<MlReturnsAnalyticsSummary>(() => {
+    const serverReturns = data.returnsAnalytics ?? EMPTY_RETURNS_ANALYTICS;
+    if (!spotlightDayKey) return serverReturns;
+
+    if (statusFilter === "all") {
+      return computeReturnsAndCancellationsAnalytics({
+        scopeOrders: displayedOrders,
+        sellers: data.sellers,
+        analysisMode,
+      });
+    }
+
+    const dayAffected = filterOrdersByAnalysisMode({
+      orders: serverReturns.affected_orders,
+      fromDate: spotlightDayKey,
+      toDate: spotlightDayKey,
+      analysisMode,
+    });
+    return computeReturnsAndCancellationsAnalytics({
+      scopeOrders: dayAffected,
+      sellers: data.sellers,
+      analysisMode,
+    });
+  }, [
+    spotlightDayKey,
+    statusFilter,
+    displayedOrders,
+    data.returnsAnalytics,
+    data.sellers,
+    analysisMode,
+  ]);
+
+  const isLossFilterActive =
+    statusFilter === "returned" ||
+    statusFilter === "cancelled_only" ||
+    statusFilter === "cancelled";
+
   const csvFromLabel = spotlightDayKey || (isAllSales ? "historico-completo" : fromDate);
   const csvToLabel = spotlightDayKey || (isAllSales ? todayBr : toDate);
 
@@ -689,23 +773,55 @@ export default function GestaoDiariaVendasPage() {
                   aria-label="Filtrar por status do pedido"
                   value={statusFilter}
                   onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-                  className="px-2.5 py-1 border border-slate-300 rounded-xs text-[11px] font-semibold text-slate-700 bg-white focus:outline-none focus:border-sky-600"
+                  className={`px-2.5 py-1 border rounded-xs text-[11px] font-semibold focus:outline-none ${
+                    isLossFilterActive
+                      ? "bg-rose-50 border-rose-300 text-rose-900 focus:border-rose-600"
+                      : "bg-white border-slate-300 text-slate-700 focus:border-sky-600"
+                  }`}
                 >
-                  <option value="all">Status: Todos</option>
-                  <option value="valid">Válidos (Pagos/Enviados)</option>
-                  <option value="cancelled">Cancelados / Devolvidos</option>
-                  <option value="unverified">Não Verificados</option>
+                  <option value="all">Status: Todos ({activeStatusCounts.all})</option>
+                  <option value="valid">
+                    Válidos — Pagos/Enviados ({activeStatusCounts.valid})
+                  </option>
+                  <option value="returned">
+                    Só Devoluções ({activeStatusCounts.returned})
+                  </option>
+                  <option value="cancelled_only">
+                    Só Cancelamentos ({activeStatusCounts.cancelled_only})
+                  </option>
+                  <option value="cancelled">
+                    Cancelados + Devolvidos ({activeStatusCounts.cancelled_or_returned})
+                  </option>
+                  <option value="unverified">
+                    Não Verificados ({activeStatusCounts.unverified})
+                  </option>
                 </select>
 
                 <div className="relative">
-                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1.5" />
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
                   <input
+                    ref={searchInputRef}
                     type="text"
                     placeholder="Pedido, MLB, SKU ou cliente..."
                     value={searchInput}
                     onChange={(e) => setSearchInput(e.target.value)}
-                    className="pl-7 pr-2.5 py-1 w-52 border border-slate-300 rounded-xs text-[11px] focus:outline-none focus:border-sky-600"
+                    className="pl-7 pr-7 py-1 w-56 border border-slate-300 rounded-xs text-[11px] text-slate-800 focus:outline-none focus:border-sky-600"
                   />
+                  {searchInput.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchInput("");
+                        setDebouncedQuery("");
+                        searchInputRef.current?.focus();
+                      }}
+                      title="Limpar código / busca"
+                      aria-label="Limpar campo de busca"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded-xs text-slate-400 hover:text-rose-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -923,6 +1039,138 @@ export default function GestaoDiariaVendasPage() {
                   );
                 })}
             </div>
+
+            {/* Linha 4: Filtros Rápidos de Devoluções & Cancelamentos + Atalho p/ Análise por MLB */}
+            <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] font-bold text-slate-500 mr-1 inline-flex items-center gap-1">
+                  <PackageX className="w-3.5 h-3.5 text-rose-500" />
+                  Ocorrências:
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter("all");
+                    if (activeSubTab === "returns") setActiveSubTab("operational");
+                  }}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] font-bold border transition-colors cursor-pointer ${
+                    statusFilter === "all" && activeSubTab !== "returns"
+                      ? "bg-slate-900 text-white border-slate-900"
+                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  <span>Todos</span>
+                  <span className="font-mono text-[10px] opacity-80">
+                    ({activeStatusCounts.all})
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter("valid");
+                    if (activeSubTab === "returns") setActiveSubTab("operational");
+                  }}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] font-bold border transition-colors cursor-pointer ${
+                    statusFilter === "valid"
+                      ? "bg-emerald-700 text-white border-emerald-800"
+                      : "bg-emerald-50/60 text-emerald-900 border-emerald-200 hover:bg-emerald-100/70"
+                  }`}
+                >
+                  <span>Só Válidos</span>
+                  <span className="font-mono text-[10px]">({activeStatusCounts.valid})</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter(statusFilter === "returned" ? "all" : "returned");
+                    if (activeSubTab === "closing") setActiveSubTab("operational");
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xs text-[11px] font-bold border transition-colors cursor-pointer ${
+                    statusFilter === "returned"
+                      ? "bg-rose-700 text-white border-rose-800 shadow-2xs"
+                      : "bg-rose-50/70 text-rose-900 border-rose-200 hover:bg-rose-100/80"
+                  }`}
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Devoluções</span>
+                  <span
+                    className={`px-1 py-0.1 rounded-xs font-mono text-[10px] ${
+                      statusFilter === "returned"
+                        ? "bg-black/25 text-white"
+                        : "bg-rose-200/80 text-rose-950"
+                    }`}
+                  >
+                    {activeStatusCounts.returned}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter(
+                      statusFilter === "cancelled_only" ? "all" : "cancelled_only"
+                    );
+                    if (activeSubTab === "closing") setActiveSubTab("operational");
+                  }}
+                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-xs text-[11px] font-bold border transition-colors cursor-pointer ${
+                    statusFilter === "cancelled_only"
+                      ? "bg-amber-700 text-white border-amber-800 shadow-2xs"
+                      : "bg-amber-50/70 text-amber-950 border-amber-200 hover:bg-amber-100/80"
+                  }`}
+                >
+                  <Ban className="w-3 h-3" />
+                  <span>Cancelamentos</span>
+                  <span
+                    className={`px-1 py-0.1 rounded-xs font-mono text-[10px] ${
+                      statusFilter === "cancelled_only"
+                        ? "bg-black/25 text-white"
+                        : "bg-amber-200/80 text-amber-950"
+                    }`}
+                  >
+                    {activeStatusCounts.cancelled_only}
+                  </span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusFilter(statusFilter === "cancelled" ? "all" : "cancelled");
+                    if (activeSubTab === "closing") setActiveSubTab("operational");
+                  }}
+                  className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-xs text-[11px] font-bold border transition-colors cursor-pointer ${
+                    statusFilter === "cancelled"
+                      ? "bg-slate-800 text-white border-slate-900"
+                      : "bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100"
+                  }`}
+                >
+                  <span>Ambos</span>
+                  <span className="font-mono text-[10px]">
+                    ({activeStatusCounts.cancelled_or_returned})
+                  </span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveSubTab("returns");
+                  document
+                    .getElementById("vendas-tabela-produtos")
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
+                }}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-xs text-[11px] font-bold border transition-colors cursor-pointer ${
+                  activeSubTab === "returns"
+                    ? "bg-rose-800 text-white border-rose-900"
+                    : "bg-white hover:bg-rose-50 text-rose-800 border-rose-300"
+                }`}
+              >
+                <PackageX className="w-3.5 h-3.5" />
+                <span>Ranking & Análise de Devoluções / Cancelamentos</span>
+              </button>
+            </div>
           </div>
 
           {/* Painel Interativo de Resultado Obtido por Dia Específico (Filtra os produtos abaixo em 1 clique) */}
@@ -993,6 +1241,28 @@ export default function GestaoDiariaVendasPage() {
                     ? `Consolidado por Dia do Envio (${data.dailyClosing.length})`
                     : `Consolidado Dia a Dia (Fechamento) (${data.dailyClosing.length})`}
                 </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveSubTab("returns")}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-colors ${
+                    activeSubTab === "returns"
+                      ? "border-rose-700 text-rose-900 bg-rose-50/50 rounded-t"
+                      : "border-transparent text-slate-500 hover:text-rose-800"
+                  }`}
+                >
+                  <PackageX className="w-3.5 h-3.5 text-rose-600" />
+                  <span>Devoluções & Cancelamentos</span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-xs font-mono text-[10px] ${
+                      displayedReturnsAnalytics.total_affected_count > 0
+                        ? "bg-rose-100 text-rose-800 border border-rose-200"
+                        : "bg-slate-100 text-slate-600"
+                    }`}
+                  >
+                    {displayedReturnsAnalytics.total_affected_count}
+                  </span>
+                </button>
               </div>
 
               {activeDayLabel && (
@@ -1048,14 +1318,67 @@ export default function GestaoDiariaVendasPage() {
               </span>
             </div>
           ) : activeSubTab === "operational" ? (
-            <DailySalesTable
-              orders={displayedOrders}
-              sellers={data.sellers}
-              templates={data.templates}
-              analysisMode={analysisMode}
-              onRefresh={() => loadDashboard({ silent: true })}
-            />
-          ) : (
+            <div className="space-y-3">
+              {isLossFilterActive && (
+                <div className="p-3 rounded-xs bg-rose-50/80 border border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs text-rose-950">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <PackageX className="w-4 h-4 text-rose-700 shrink-0" />
+                    <span>
+                      Exibindo filtro{" "}
+                      <strong>
+                        {statusFilter === "returned"
+                          ? "Somente Devoluções (Pós-Envio)"
+                          : statusFilter === "cancelled_only"
+                          ? "Somente Cancelamentos"
+                          : "Cancelados + Devolvidos"}
+                      </strong>
+                      : <strong>{displayedOrders.length}</strong> ocorrência(s) na tabela.
+                      Os cards superiores de repasse permanecem zerados pois o ML estorna
+                      automaticamente vendas canceladas/devolvidas.
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setActiveSubTab("returns")}
+                      className="px-2.5 py-1 rounded-xs bg-rose-700 hover:bg-rose-800 text-white text-[11px] font-bold transition-colors cursor-pointer"
+                    >
+                      Ver Ranking de Produtos (MLB) & % de Perda →
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setStatusFilter("all")}
+                      className="px-2 py-1 rounded-xs bg-white hover:bg-rose-100 border border-rose-300 text-rose-900 text-[11px] font-semibold cursor-pointer"
+                    >
+                      Limpar filtro
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <DailySalesTable
+                orders={displayedOrders}
+                sellers={data.sellers}
+                templates={data.templates}
+                analysisMode={analysisMode}
+                emptyTitle={
+                  statusFilter === "returned"
+                    ? "Nenhuma devolução encontrada neste período"
+                    : statusFilter === "cancelled_only"
+                    ? "Nenhum cancelamento encontrado neste período"
+                    : statusFilter === "cancelled"
+                    ? "Nenhuma devolução ou cancelamento encontrado neste período"
+                    : undefined
+                }
+                emptyDescription={
+                  isLossFilterActive
+                    ? "Excelente sinal operacional! Selecione um período maior (Este Mês, Este Ano ou Todas as Vendas) para consultar o histórico completo ou clique em 'Limpar filtro'."
+                    : undefined
+                }
+                onRefresh={() => loadDashboard({ silent: true })}
+              />
+            </div>
+          ) : activeSubTab === "closing" ? (
             <DailyClosingTable
               rows={data.dailyClosing}
               sellers={data.sellers}
@@ -1066,6 +1389,17 @@ export default function GestaoDiariaVendasPage() {
               onSelectDay={(dayKey) =>
                 handleSelectSpotlightDay(spotlightDayKey === dayKey ? null : dayKey)
               }
+            />
+          ) : (
+            <ReturnsAndCancellationsPanel
+              analytics={displayedReturnsAnalytics}
+              sellers={data.sellers}
+              templates={data.templates}
+              analysisMode={analysisMode}
+              from={csvFromLabel}
+              to={csvToLabel}
+              onSwitchToOrderDateMode={() => setAnalysisMode("order_date")}
+              onRefresh={() => loadDashboard({ silent: true })}
             />
           )}
         </div>

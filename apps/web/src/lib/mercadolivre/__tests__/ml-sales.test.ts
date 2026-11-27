@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  computeReturnsAndCancellationsAnalytics,
   computeSalesDashboardAnalytics,
+  computeSalesStatusCounts,
   filterOrdersByAnalysisMode,
+  matchesSalesStatusFilter,
 } from "../sales-analytics";
 import {
   extractShipmentDatesAndLogistics,
@@ -490,4 +493,135 @@ test("filtros pré-definidos por Mês, Ano e Todas as Vendas e upgrade de miniat
     upgradeMlThumbnailUrl("http://http2.mlstatic.com/D_12345-MLB999_102026-I.jpg"),
     "https://http2.mlstatic.com/D_12345-MLB999_102026-O.jpg"
   );
+});
+
+test("filtros separados de devoluções/cancelamentos e ranking por MLB calculam % exata sobre vendas do item", () => {
+  // Arrange
+  const sellerA = makeSeller({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Sociedade Películas",
+  });
+
+  // MLB-A: 4 pedidos totais -> 2 válidos, 1 devolvido (pós-envio), 1 cancelado -> 50% perda total (25% dev, 25% canc)
+  const mlbAValid1 = makeOrder({
+    id: "d1",
+    ml_order_id: 3001,
+    mlb_id: "MLB5021742533",
+    sku: "SKU-PPF-01",
+    status: "delivered",
+    gross_sale_amount: 100,
+    shipped_at: "2026-11-24T15:00:00.000Z",
+    assigned_seller_id: sellerA.id,
+  });
+  const mlbAValid2 = makeOrder({
+    id: "d2",
+    ml_order_id: 3002,
+    mlb_id: "MLB5021742533",
+    sku: "SKU-PPF-01",
+    status: "shipped",
+    gross_sale_amount: 100,
+    shipped_at: "2026-11-25T15:00:00.000Z",
+    assigned_seller_id: sellerA.id,
+  });
+  const mlbAReturned = makeOrder({
+    id: "d3",
+    ml_order_id: 3003,
+    mlb_id: "MLB5021742533",
+    sku: "SKU-PPF-01",
+    status: "returned",
+    cancellation_reason: "Arrependimento da compra após entrega",
+    gross_sale_amount: 120,
+    cost_material: 25,
+    cost_packaging: 5,
+    cost_logistics: 0,
+    cost_printing: 0,
+    cost_accessories_kit: 0,
+    shipped_at: "2026-11-25T16:00:00.000Z",
+    assigned_seller_id: sellerA.id,
+  });
+  const mlbACancelled = makeOrder({
+    id: "d4",
+    ml_order_id: 3004,
+    mlb_id: "MLB5021742533",
+    sku: "SKU-PPF-01",
+    status: "cancelled",
+    cancellation_reason: "Cancelado pelo comprador antes do envio",
+    gross_sale_amount: 80,
+    shipped_at: null,
+    assigned_seller_id: sellerA.id,
+  });
+
+  // MLB-B: 1 pedido válido sem ocorrências (não deve poluir ranking de perdas)
+  const mlbBValid = makeOrder({
+    id: "d5",
+    ml_order_id: 3005,
+    mlb_id: "MLB9999999999",
+    sku: "SKU-OK-02",
+    status: "paid",
+    gross_sale_amount: 63,
+    assigned_seller_id: sellerA.id,
+  });
+
+  const orders = [mlbAValid1, mlbAValid2, mlbAReturned, mlbACancelled, mlbBValid];
+
+  // Act
+  const counts = computeSalesStatusCounts(orders);
+  const returnedOnly = orders.filter((o) => matchesSalesStatusFilter(o, "returned"));
+  const cancelledOnly = orders.filter((o) => matchesSalesStatusFilter(o, "cancelled_only"));
+  const bothLosses = orders.filter((o) => matchesSalesStatusFilter(o, "cancelled"));
+
+  const reportOrderDate = computeReturnsAndCancellationsAnalytics({
+    scopeOrders: orders,
+    sellers: [sellerA],
+    analysisMode: "order_date",
+  });
+
+  const reportShippingDate = computeReturnsAndCancellationsAnalytics({
+    scopeOrders: orders,
+    sellers: [sellerA],
+    analysisMode: "shipping_date",
+  });
+
+  // Assert
+  assert.deepEqual(counts, {
+    all: 5,
+    valid: 3,
+    returned: 1,
+    cancelled_only: 1,
+    cancelled_or_returned: 2,
+    unverified: 5,
+  });
+  assert.equal(returnedOnly.length, 1);
+  assert.equal(returnedOnly[0].ml_order_id, 3003);
+  assert.equal(cancelledOnly.length, 1);
+  assert.equal(cancelledOnly[0].ml_order_id, 3004);
+  assert.equal(bothLosses.length, 2);
+
+  assert.equal(reportOrderDate.total_period_orders, 5);
+  assert.equal(reportOrderDate.returned_orders_count, 1);
+  assert.equal(reportOrderDate.cancelled_orders_count, 1);
+  assert.equal(reportOrderDate.total_affected_count, 2);
+  assert.equal(reportOrderDate.return_rate_pct, 20);
+  assert.equal(reportOrderDate.cancel_rate_pct, 20);
+  assert.equal(reportOrderDate.combined_loss_rate_pct, 40);
+  assert.equal(reportOrderDate.gross_returned_amount, 120);
+  assert.equal(reportOrderDate.gross_cancelled_amount, 80);
+  assert.equal(reportOrderDate.gross_total_affected_amount, 200);
+  assert.equal(reportOrderDate.retained_operational_cost_total, 30);
+
+  assert.equal(reportOrderDate.product_ranking.length, 1);
+  const top = reportOrderDate.product_ranking[0];
+  assert.equal(top.mlb_id, "MLB5021742533");
+  assert.equal(top.total_orders_count, 4);
+  assert.equal(top.returned_orders_count, 1);
+  assert.equal(top.cancelled_orders_count, 1);
+  assert.equal(top.return_rate_pct, 25);
+  assert.equal(top.cancel_rate_pct, 25);
+  assert.equal(top.loss_rate_pct, 50);
+
+  // No modo shipping_date: 3 pedidos enviados (2 válidos + 1 devolvido), exclui o cancelado não enviado
+  assert.equal(reportShippingDate.total_period_orders, 3);
+  assert.equal(reportShippingDate.returned_orders_count, 1);
+  assert.equal(reportShippingDate.cancelled_orders_count, 0);
+  assert.equal(reportShippingDate.return_rate_pct, 33.33);
 });

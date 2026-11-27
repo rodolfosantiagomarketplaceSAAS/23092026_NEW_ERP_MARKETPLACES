@@ -3,8 +3,10 @@ import { getAuthContext } from "@/lib/auth/context";
 import { createSupabaseAdminClient } from "@/lib/supabase/server";
 import { getMarketplaceIntegrations } from "@/lib/services/marketplaceIntegrations";
 import {
+  computeReturnsAndCancellationsAnalytics,
   computeSalesDashboardAnalytics,
-  isCancelledOrReturned,
+  computeSalesStatusCounts,
+  matchesSalesStatusFilter,
   toBrazilDateKeyAndLabel,
 } from "@/lib/mercadolivre/sales-analytics";
 import {
@@ -254,6 +256,11 @@ export async function GET(request: NextRequest) {
       sellers: [],
       analysisMode,
     });
+    const emptyReturns = computeReturnsAndCancellationsAnalytics({
+      scopeOrders: [],
+      sellers: [],
+      analysisMode,
+    });
     const emptyResponse: MlSalesDashboardResponse = {
       success: true,
       schemaReady: false,
@@ -271,6 +278,8 @@ export async function GET(request: NextRequest) {
       stores: accounts.map((a) => a.account_name),
       sellerOrderCounts: {},
       unassignedCount: 0,
+      statusCounts: computeSalesStatusCounts([]),
+      returnsAnalytics: emptyReturns,
       ...emptyAnalytics,
     };
     return NextResponse.json(emptyResponse);
@@ -326,6 +335,11 @@ export async function GET(request: NextRequest) {
       sellers,
       analysisMode,
     });
+    const emptyReturns = computeReturnsAndCancellationsAnalytics({
+      scopeOrders: [],
+      sellers,
+      analysisMode,
+    });
     const missingColPayload: MlSalesDashboardResponse = {
       success: true,
       schemaReady: true,
@@ -343,6 +357,8 @@ export async function GET(request: NextRequest) {
       stores: accounts.map((a) => a.account_name),
       sellerOrderCounts: {},
       unassignedCount: 0,
+      statusCounts: computeSalesStatusCounts([]),
+      returnsAnalytics: emptyReturns,
       ...emptyAnalytics,
     };
     return NextResponse.json(missingColPayload);
@@ -376,20 +392,33 @@ export async function GET(request: NextRequest) {
     if (o.store_name) storeSet.add(o.store_name);
   }
 
-  const baseFilteredForPills = allPeriodOrders.filter((o) => {
+  const storeAndSearchFiltered = allPeriodOrders.filter((o) => {
     if (storeFilter !== "all" && o.store_name !== storeFilter) return false;
 
-    if (statusFilter === "valid" && isCancelledOrReturned(o.status)) return false;
-    if (statusFilter === "cancelled" && !isCancelledOrReturned(o.status)) return false;
-    if (statusFilter === "unverified" && Boolean(o.verified_at)) return false;
-
     if (searchQuery) {
-      const hay = `${o.ml_pack_id || ""} ${o.ml_order_id} ${o.mlb_id} ${o.sku || ""} ${o.product_title} ${o.buyer_name} ${o.buyer_document || ""}`.toLowerCase();
+      const hay = `${o.ml_pack_id || ""} ${o.ml_order_id} ${o.mlb_id} ${o.sku || ""} ${o.product_title} ${o.buyer_name} ${o.buyer_document || ""} ${o.cancellation_reason || ""}`.toLowerCase();
       if (!hay.includes(searchQuery)) return false;
     }
 
     return true;
   });
+
+  const scopeOrdersBeforeStatus = storeAndSearchFiltered.filter((o) => {
+    if (sellerFilter === "all") return true;
+    if (sellerFilter === "unassigned") return !o.assigned_seller_id;
+    return o.assigned_seller_id === sellerFilter;
+  });
+
+  const statusCounts = computeSalesStatusCounts(scopeOrdersBeforeStatus);
+  const returnsAnalytics = computeReturnsAndCancellationsAnalytics({
+    scopeOrders: scopeOrdersBeforeStatus,
+    sellers,
+    analysisMode,
+  });
+
+  const baseFilteredForPills = storeAndSearchFiltered.filter((o) =>
+    matchesSalesStatusFilter(o, statusFilter)
+  );
 
   const sellerOrderCounts: Record<string, number> = {};
   let unassignedCount = 0;
@@ -436,6 +465,8 @@ export async function GET(request: NextRequest) {
     stores: Array.from(storeSet),
     sellerOrderCounts,
     unassignedCount,
+    statusCounts,
+    returnsAnalytics,
     ...analytics,
   };
 
