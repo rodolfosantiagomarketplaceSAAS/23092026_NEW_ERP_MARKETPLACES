@@ -13,6 +13,7 @@ import {
   applyPackShippingProration,
   extractSingleOrder,
   fetchItemThumbnailsMap,
+  isLegacyManualNoonTimestamp,
   mlReadOnlyGet,
   type CachedShipmentFinancials,
   type ExtractedOrderDraft,
@@ -487,17 +488,17 @@ async function upsertDraftsPreservingManualFields(params: {
     }
 
     if (shippingColumnsAvailable) {
-      const isManualShipped =
-        manualShippingColumnsAvailable && Boolean(existing?.shipped_at_manual);
+      const existingShippedStr = existing?.shipped_at ? String(existing.shipped_at) : null;
+      const isManualShipped = manualShippingColumnsAvailable
+        ? Boolean(existing?.shipped_at_manual)
+        : isLegacyManualNoonTimestamp(existingShippedStr);
       const apiResolvedShipped =
         d.shipped_at ??
         (existing?.api_shipped_at ? String(existing.api_shipped_at) : null);
 
       basePayload.shipped_at = isManualShipped
-        ? existing?.shipped_at
-          ? String(existing.shipped_at)
-          : apiResolvedShipped
-        : d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+        ? existingShippedStr ?? apiResolvedShipped
+        : d.shipped_at ?? existingShippedStr;
 
       if (manualShippingColumnsAvailable) {
         basePayload.shipped_at_manual = isManualShipped;
@@ -667,7 +668,20 @@ export async function syncMercadoLivreOrderByShipment(params: {
     { "x-format-new": "true" }
   );
 
-  const orderId = Number(shipRes.data?.order_id ?? 0);
+  let orderId = Number(shipRes.data?.order_id ?? 0);
+  if (!Number.isSafeInteger(orderId) || orderId <= 0) {
+    // Em `x-format-new: true`, `order_id` foi removido de `/shipments/{id}` e movido para `/shipments/{id}/items`
+    const itemsRes = await mlReadOnlyGet<Array<{ order_id?: number | string }>>(
+      `${ML_API_BASE}/shipments/${params.shipmentId}/items`,
+      ctx.account,
+      ctx.tokenRef,
+      { "x-format-new": "true" }
+    );
+    if (itemsRes.ok && Array.isArray(itemsRes.data) && itemsRes.data[0]?.order_id != null) {
+      orderId = Number(itemsRes.data[0].order_id);
+    }
+  }
+
   if (!Number.isSafeInteger(orderId) || orderId <= 0) {
     return {
       synced: false,

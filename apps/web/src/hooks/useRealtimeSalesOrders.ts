@@ -145,6 +145,7 @@ export function useRealtimeSalesOrders({
         body: JSON.stringify({
           from: yesterdayRange.from,
           to: todayRange.to,
+          analysisMode: "shipping_date",
         }),
       });
       const json = await res.json().catch(() => null);

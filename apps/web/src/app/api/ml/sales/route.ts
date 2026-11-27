@@ -88,39 +88,20 @@ function normalizeOrderRow(row: Record<string, unknown>): MlSaleOrder {
   };
 }
 
-/**
- * Pagina de 1.000 em 1.000 linhas no PostgREST para garantir que filtros por Mês, Ano
- * e "Todas as Vendas" nunca sejam truncados pelo limite padrão do Supabase.
- */
-async function fetchPaginatedOrders(params: {
-  admin: ReturnType<typeof createSupabaseAdminClient>;
-  ctx: NonNullable<Awaited<ReturnType<typeof getAuthContext>>>;
-  analysisMode: SalesAnalysisMode;
-  isAllPeriod: boolean;
-  isoStart: string;
-  isoEnd: string;
-}): Promise<{ data: Array<Record<string, unknown>> | null; error: { code?: string; message?: string } | null }> {
-  const { admin, ctx, analysisMode, isAllPeriod, isoStart, isoEnd } = params;
+type PaginatedQueryResult = {
+  data: Array<Record<string, unknown>> | null;
+  error: { code?: string; message?: string } | null;
+};
+
+async function runPaginatedSelect(
+  ctx: NonNullable<Awaited<ReturnType<typeof getAuthContext>>>,
+  buildBaseQuery: () => any
+): Promise<PaginatedQueryResult> {
   const rows: Array<Record<string, unknown>> = [];
   let offset = 0;
 
   while (rows.length < MAX_FETCH_ROWS) {
-    let baseQuery = admin.from("ml_sales_orders").select("*");
-
-    if (analysisMode === "shipping_date") {
-      baseQuery = baseQuery.not("shipped_at", "is", null);
-      if (!isAllPeriod) {
-        baseQuery = baseQuery.gte("shipped_at", isoStart).lte("shipped_at", isoEnd);
-      }
-      baseQuery = baseQuery.order("shipped_at", { ascending: false });
-    } else {
-      if (!isAllPeriod) {
-        baseQuery = baseQuery.gte("order_date", isoStart).lte("order_date", isoEnd);
-      }
-      baseQuery = baseQuery.order("order_date", { ascending: false });
-    }
-
-    const scopedQuery = applyTenantFilter(baseQuery, ctx).range(
+    const scopedQuery = applyTenantFilter(buildBaseQuery(), ctx).range(
       offset,
       offset + SUPABASE_PAGE_SIZE - 1
     );
@@ -140,6 +121,113 @@ async function fetchPaginatedOrders(params: {
   }
 
   return { data: rows, error: null };
+}
+
+function getRowShippingSortMs(row: Record<string, unknown>): number {
+  const ref =
+    (row.shipped_at ? String(row.shipped_at) : "") ||
+    (row.status === "paid" && row.shipping_deadline
+      ? String(row.shipping_deadline)
+      : "") ||
+    (row.order_date ? String(row.order_date) : "");
+  const ms = Date.parse(ref);
+  return Number.isNaN(ms) ? 0 : ms;
+}
+
+/**
+ * Pagina de 1.000 em 1.000 linhas no PostgREST para garantir que filtros por Mês, Ano
+ * e "Todas as Vendas" nunca sejam truncados pelo limite padrão do Supabase.
+ *
+ * No modo `shipping_date` (Opção 1A):
+ * - Traz todas as vendas enviadas dentro do período (`shipped_at` entre `[isoStart, isoEnd]`)
+ * - E também todas as vendas ainda sem `shipped_at` realizadas ou com prazo de envio no período,
+ *   evitando que vendas não marcadas manualmente desapareçam da tela.
+ */
+async function fetchPaginatedOrders(params: {
+  admin: ReturnType<typeof createSupabaseAdminClient>;
+  ctx: NonNullable<Awaited<ReturnType<typeof getAuthContext>>>;
+  analysisMode: SalesAnalysisMode;
+  isAllPeriod: boolean;
+  isoStart: string;
+  isoEnd: string;
+}): Promise<PaginatedQueryResult> {
+  const { admin, ctx, analysisMode, isAllPeriod, isoStart, isoEnd } = params;
+
+  if (analysisMode === "order_date") {
+    return runPaginatedSelect(ctx, () => {
+      let q = admin.from("ml_sales_orders").select("*");
+      if (!isAllPeriod) {
+        q = q.gte("order_date", isoStart).lte("order_date", isoEnd);
+      }
+      return q.order("order_date", { ascending: false });
+    });
+  }
+
+  if (isAllPeriod) {
+    const allRes = await runPaginatedSelect(ctx, () =>
+      admin.from("ml_sales_orders").select("*").order("order_date", { ascending: false })
+    );
+    if (allRes.error || !allRes.data) return allRes;
+    const sorted = [...allRes.data].sort(
+      (a, b) => getRowShippingSortMs(b) - getRowShippingSortMs(a)
+    );
+    return { data: sorted, error: null };
+  }
+
+  const [shippedRes, unshippedByOrderDateRes, unshippedByDeadlineRes] = await Promise.all([
+    runPaginatedSelect(ctx, () =>
+      admin
+        .from("ml_sales_orders")
+        .select("*")
+        .not("shipped_at", "is", null)
+        .gte("shipped_at", isoStart)
+        .lte("shipped_at", isoEnd)
+        .order("shipped_at", { ascending: false })
+    ),
+    runPaginatedSelect(ctx, () =>
+      admin
+        .from("ml_sales_orders")
+        .select("*")
+        .is("shipped_at", null)
+        .gte("order_date", isoStart)
+        .lte("order_date", isoEnd)
+        .order("order_date", { ascending: false })
+    ),
+    runPaginatedSelect(ctx, () =>
+      admin
+        .from("ml_sales_orders")
+        .select("*")
+        .is("shipped_at", null)
+        .eq("status", "paid")
+        .gte("shipping_deadline", isoStart)
+        .lte("shipping_deadline", isoEnd)
+        .order("shipping_deadline", { ascending: true })
+    ),
+  ]);
+
+  if (shippedRes.error) return shippedRes;
+  if (unshippedByOrderDateRes.error) return unshippedByOrderDateRes;
+
+  const mergedById = new Map<string, Record<string, unknown>>();
+  for (const row of shippedRes.data ?? []) {
+    mergedById.set(String(row.id), row);
+  }
+  for (const row of unshippedByOrderDateRes.data ?? []) {
+    const key = String(row.id);
+    if (!mergedById.has(key)) mergedById.set(key, row);
+  }
+  if (!unshippedByDeadlineRes.error && unshippedByDeadlineRes.data) {
+    for (const row of unshippedByDeadlineRes.data) {
+      const key = String(row.id);
+      if (!mergedById.has(key)) mergedById.set(key, row);
+    }
+  }
+
+  const mergedRows = Array.from(mergedById.values()).sort(
+    (a, b) => getRowShippingSortMs(b) - getRowShippingSortMs(a)
+  );
+
+  return { data: mergedRows, error: null };
 }
 
 export async function GET(request: NextRequest) {
@@ -206,7 +294,7 @@ export async function GET(request: NextRequest) {
     admin
       .from("ml_sales_orders")
       .select("id", { count: "exact", head: true })
-      .in("status", ["shipped", "delivered"])
+      .in("status", ["shipped", "delivered", "returned"])
       .is("shipped_at", null),
     ctx
   );
@@ -335,7 +423,10 @@ export async function GET(request: NextRequest) {
   const pendingShipmentCount = pendingRes.count ?? 0;
   const backfillMissingShippedAtCount = shippingDateSchemaReady ? backfillRes.count ?? 0 : 0;
 
-  if (ordersRes.error && isMissingColumnError(ordersRes.error, "shipped_at")) {
+  if (
+    !shippingDateSchemaReady ||
+    (ordersRes.error && isMissingColumnError(ordersRes.error, "shipped_at"))
+  ) {
     const emptyAnalytics = computeSalesDashboardAnalytics({
       filteredOrders: [],
       sellers,

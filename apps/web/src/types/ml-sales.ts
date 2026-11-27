@@ -10,6 +10,8 @@ export type SalesAnalysisMode = "order_date" | "shipping_date";
 export type SalesStatusFilter =
   | "all"
   | "valid"
+  | "shipped_only"
+  | "pending_shipment"
   | "returned"
   | "cancelled_only"
   | "cancelled"

@@ -4,11 +4,13 @@ import {
   computeReturnsAndCancellationsAnalytics,
   computeSalesDashboardAnalytics,
   computeSalesStatusCounts,
+  computeShippingBreakdownCounts,
   filterOrdersByAnalysisMode,
   matchesSalesStatusFilter,
 } from "../sales-analytics";
 import {
   extractShipmentDatesAndLogistics,
+  isLegacyManualNoonTimestamp,
   normalizeManualShippedAtInput,
   normalizeSyncIsoRange,
   splitIsoRangeIntoMonthlyWindows,
@@ -624,4 +626,149 @@ test("filtros separados de devoluções/cancelamentos e ranking por MLB calculam
   assert.equal(reportShippingDate.returned_orders_count, 1);
   assert.equal(reportShippingDate.cancelled_orders_count, 0);
   assert.equal(reportShippingDate.return_rate_pct, 33.33);
+});
+
+test("API ML x-format-new (/shipments/{id}/history) captura dropped_off/picked_up antes da saída do Hub e faz fallback seguro em status shipped", () => {
+  // 1. Payload moderno x-format-new (sem status_history nem substatus_history no detalhe principal) + /history modularizado:
+  // Pacote postado na Agência ML em 25/11 (`dropped_off`) e expedido do Hub apenas em 27/11 (`shipped`)
+  const modernHistoryAgency = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 4900112233,
+      status: "shipped",
+      substatus: "waiting_for_handover",
+      last_updated: "2026-11-27T08:15:00.000-03:00",
+      logistic: { mode: "me2", type: "xd_drop_off" },
+    },
+    classicDetail: null,
+    historyEntries: [
+      { status: "ready_to_ship", substatus: "printed", date: "2026-11-25T09:10:00.000-03:00" },
+      { status: "ready_to_ship", substatus: "dropped_off", date: "2026-11-25T13:45:00.000-03:00" },
+      { status: "ready_to_ship", substatus: "in_hub", date: "2026-11-25T19:20:00.000-03:00" },
+      { status: "shipped", substatus: "waiting_for_handover", date: "2026-11-27T08:15:00.000-03:00" },
+    ],
+  });
+  assert.equal(modernHistoryAgency.shippedAt, "2026-11-25T13:45:00.000-03:00");
+  assert.equal(toBrazilInputDate(modernHistoryAgency.shippedAt), "2026-11-25");
+
+  // 2. Pacote bipado hoje na Coleta (`ready_to_ship` + `picked_up`) no endpoint `/history` (ainda sem status = shipped)
+  const modernHistoryPickedUpToday = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 4900112234,
+      status: "ready_to_ship",
+      substatus: "picked_up",
+      last_updated: "2026-11-27T14:05:00.000-03:00",
+      logistic: { mode: "me2", type: "cross_docking" },
+    },
+    classicDetail: null,
+    historyEntries: [
+      { status: "ready_to_ship", substatus: "ready_to_print", date: "2026-11-27T08:00:00.000-03:00" },
+      { status: "ready_to_ship", substatus: "picked_up", date: "2026-11-27T14:05:00.000-03:00" },
+    ],
+  });
+  assert.equal(modernHistoryPickedUpToday.shippedAt, "2026-11-27T14:05:00.000-03:00");
+
+  // 3. Fallback seguro quando `status === "shipped"` mas `/history` e `/tracking/timeline` vierem vazios (ex: Flex/Full restrito)
+  const shippedWithoutHistory = extractShipmentDatesAndLogistics({
+    modernDetail: {
+      id: 4900112235,
+      status: "shipped",
+      substatus: null,
+      last_updated: "2026-11-26T16:30:00.000-03:00",
+      logistic: { mode: "me2", type: "self_service" },
+    },
+    classicDetail: null,
+    historyEntries: [],
+    timelineEvents: [],
+  });
+  assert.equal(shippedWithoutHistory.shippedAt, "2026-11-26T16:30:00.000-03:00");
+
+  // 4. Proteção de marcações manuais legadas (12:00 BRT = 15:00:00.000Z)
+  assert.equal(isLegacyManualNoonTimestamp(normalizeManualShippedAtInput("2026-11-25")), true);
+  assert.equal(isLegacyManualNoonTimestamp("2026-11-25T13:45:00.000-03:00"), false);
+});
+
+test("Opção 1A: modo Por Dia do Envio com includePendingShipments exibe vendas enviadas + aguardando envio na tabela mantendo KPIs estritos de envio", () => {
+  const seller = makeSeller({
+    id: "11111111-1111-4111-8111-111111111111",
+    name: "Rodolfo",
+    commission_pct: 100,
+  });
+
+  const apiShippedOrder = makeOrder({
+    id: "e1",
+    ml_order_id: 5001,
+    status: "shipped",
+    order_date: "2026-11-24T18:00:00.000Z",
+    shipped_at: "2026-11-27T13:30:00.000Z",
+    shipped_at_manual: false,
+    gross_sale_amount: 200,
+    assigned_seller_id: seller.id,
+  });
+
+  const manualShippedOrder = makeOrder({
+    id: "e2",
+    ml_order_id: 5002,
+    status: "paid",
+    order_date: "2026-11-25T15:00:00.000Z",
+    shipped_at: normalizeManualShippedAtInput("2026-11-27"),
+    shipped_at_manual: true,
+    gross_sale_amount: 150,
+    assigned_seller_id: seller.id,
+  });
+
+  const paidPendingTodayOrder = makeOrder({
+    id: "e3",
+    ml_order_id: 5003,
+    status: "paid",
+    order_date: "2026-11-27T14:00:00.000Z",
+    shipping_deadline: "2026-11-28T16:00:00.000Z",
+    shipped_at: null,
+    gross_sale_amount: 300,
+    assigned_seller_id: seller.id,
+  });
+
+  const paidDeadlineTodayOrder = makeOrder({
+    id: "e4",
+    ml_order_id: 5004,
+    status: "paid",
+    order_date: "2026-11-25T20:00:00.000Z",
+    shipping_deadline: "2026-11-27T16:00:00.000Z",
+    shipped_at: null,
+    gross_sale_amount: 180,
+    assigned_seller_id: seller.id,
+  });
+
+  const visibleInTable = filterOrdersByAnalysisMode({
+    orders: [apiShippedOrder, manualShippedOrder, paidPendingTodayOrder, paidDeadlineTodayOrder],
+    fromDate: "2026-11-27",
+    toDate: "2026-11-27",
+    analysisMode: "shipping_date",
+    includePendingShipments: true,
+  });
+
+  // Todas as 4 vendas aparecem na tabela (2 enviadas em 27/11 + 1 comprada em 27/11 aguardando envio + 1 com prazo 27/11 aguardando envio)
+  assert.equal(visibleInTable.length, 4);
+
+  const breakdown = computeShippingBreakdownCounts(visibleInTable);
+  assert.deepEqual(breakdown, { shippedValidCount: 2, pendingShipmentCount: 2 });
+
+  assert.equal(
+    visibleInTable.filter((o) => matchesSalesStatusFilter(o, "shipped_only")).length,
+    2
+  );
+  assert.equal(
+    visibleInTable.filter((o) => matchesSalesStatusFilter(o, "pending_shipment")).length,
+    2
+  );
+
+  // KPIs financeiros de envio somam estritamente os 2 pedidos efetivamente enviados (200 + 150 = R$ 350)
+  const analytics = computeSalesDashboardAnalytics({
+    filteredOrders: visibleInTable,
+    sellers: [seller],
+    analysisMode: "shipping_date",
+  });
+  assert.equal(analytics.kpis.valid_orders_count, 2);
+  assert.equal(analytics.kpis.gross_valid_sales, 350);
+  assert.equal(analytics.dailyClosing.length, 1);
+  assert.equal(analytics.dailyClosing[0].valid_orders_count, 2);
 });

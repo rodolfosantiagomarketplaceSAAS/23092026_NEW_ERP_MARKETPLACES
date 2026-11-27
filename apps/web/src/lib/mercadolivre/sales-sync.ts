@@ -36,6 +36,7 @@ import {
 import {
   extractShipmentDatesAndLogistics,
   isDispatchedShipmentSubstatus,
+  isLegacyManualNoonTimestamp,
   isValidIsoTimestamp,
   normalizeManualShippedAtInput,
   normalizeSyncIsoRange,
@@ -50,6 +51,7 @@ import {
 export {
   applyPackShippingProration,
   extractShipmentDatesAndLogistics,
+  isLegacyManualNoonTimestamp,
   normalizeManualShippedAtInput,
   normalizeSyncIsoRange,
   reconcileOrderFinancials,
@@ -70,7 +72,8 @@ const MP_API_BASE = "https://api.mercadopago.com";
 const MAX_RETRIES = 4;
 const PAGE_LIMIT = 50;
 const CONCURRENCY = 5;
-const MAX_FOLLOWUP_LOCAL_ORDERS = 200;
+const MAX_FOLLOWUP_LOCAL_ORDERS = 500;
+const EXISTING_LOOKUP_CHUNK_SIZE = 200;
 
 const ALLOWED_READONLY_HOSTS = new Set([
   "api.mercadolibre.com",
@@ -241,6 +244,8 @@ interface RawMlOrderDetail {
   status_detail?: { code?: string; description?: string } | null;
   cancel_detail?: { code?: string; description?: string } | null;
   date_created?: string;
+  date_closed?: string | null;
+  last_updated?: string | null;
   total_amount?: number;
   paid_amount?: number;
   tags?: string[];
@@ -419,13 +424,26 @@ async function fetchOrderIdsInPeriod(
 /**
  * Busca no Supabase local os pedidos desta conta ML que:
  * 1) Ainda estão com `status = 'paid'` (aguardando envio — podem ter sido despachados hoje mesmo comprados há semanas);
- * 2) Já estão `shipped` ou `delivered`, mas ainda estão com `shipped_at IS NULL` (backfill automático pós-migração).
+ * 2) Já estão `shipped`, `delivered` ou `returned`, mas ainda estão com `shipped_at IS NULL` (backfill automático);
+ * 3) Quando `reconcileShippingDates` ou `analysisMode === "shipping_date"`, pedidos não manuais com `api_shipped_at IS NULL`
+ *    ou cujo `shipped_at` cai perto do intervalo consultado (para corrigir datas antigas de saída do Hub pelo `dropped_off` real).
  */
 async function fetchFollowUpLocalOrderIds(params: {
   scope: IntegrationScope;
   sellerId: string;
+  isoStart?: string;
+  isoEnd?: string;
+  analysisMode?: SalesAnalysisMode;
+  reconcileShippingDates?: boolean;
 }): Promise<number[]> {
-  const { scope, sellerId } = params;
+  const {
+    scope,
+    sellerId,
+    isoStart,
+    isoEnd,
+    analysisMode = "order_date",
+    reconcileShippingDates = false,
+  } = params;
   const admin = createSupabaseAdminClient();
   const ids = new Set<number>();
 
@@ -450,13 +468,13 @@ async function fetchFollowUpLocalOrderIds(params: {
     if (Number.isSafeInteger(n) && n > 0) ids.add(n);
   }
 
-  // 2. Backfill automático de pedidos já enviados/entregues ainda sem shipped_at gravado
+  // 2. Backfill automático de pedidos já enviados/entregues/devolvidos ainda sem shipped_at gravado
   const backfillRes = await applyTenant(
     admin
       .from("ml_sales_orders")
       .select("ml_order_id")
       .eq("ml_seller_id", sellerId)
-      .in("status", ["shipped", "delivered"])
+      .in("status", ["shipped", "delivered", "returned"])
       .is("shipped_at", null)
       .order("order_date", { ascending: false })
       .limit(MAX_FOLLOWUP_LOCAL_ORDERS)
@@ -466,6 +484,55 @@ async function fetchFollowUpLocalOrderIds(params: {
     for (const row of (backfillRes.data ?? []) as Array<{ ml_order_id?: number }>) {
       const n = Number(row.ml_order_id);
       if (Number.isSafeInteger(n) && n > 0) ids.add(n);
+    }
+  }
+
+  // 3. Reconciliação de pedidos não-manuais que ainda não possuem api_shipped_at ou estão na janela de envio
+  if (reconcileShippingDates || analysisMode === "shipping_date") {
+    const missingApiMirrorRes = await applyTenant(
+      admin
+        .from("ml_sales_orders")
+        .select("ml_order_id")
+        .eq("ml_seller_id", sellerId)
+        .eq("shipped_at_manual", false)
+        .in("status", ["shipped", "delivered", "returned"])
+        .is("api_shipped_at", null)
+        .order("order_date", { ascending: false })
+        .limit(MAX_FOLLOWUP_LOCAL_ORDERS)
+    );
+
+    if (!missingApiMirrorRes.error) {
+      for (const row of (missingApiMirrorRes.data ?? []) as Array<{ ml_order_id?: number }>) {
+        const n = Number(row.ml_order_id);
+        if (Number.isSafeInteger(n) && n > 0) ids.add(n);
+      }
+    }
+
+    if (isoStart && isoEnd) {
+      const startMs = Date.parse(isoStart);
+      const endMs = Date.parse(isoEnd);
+      if (Number.isFinite(startMs) && Number.isFinite(endMs)) {
+        const paddedStart = new Date(startMs - 5 * 24 * 60 * 60 * 1000).toISOString();
+        const paddedEnd = new Date(endMs + 5 * 24 * 60 * 60 * 1000).toISOString();
+        const inWindowRes = await applyTenant(
+          admin
+            .from("ml_sales_orders")
+            .select("ml_order_id")
+            .eq("ml_seller_id", sellerId)
+            .eq("shipped_at_manual", false)
+            .gte("shipped_at", paddedStart)
+            .lte("shipped_at", paddedEnd)
+            .order("shipped_at", { ascending: false })
+            .limit(MAX_FOLLOWUP_LOCAL_ORDERS)
+        );
+
+        if (!inWindowRes.error) {
+          for (const row of (inWindowRes.data ?? []) as Array<{ ml_order_id?: number }>) {
+            const n = Number(row.ml_order_id);
+            if (Number.isSafeInteger(n) && n > 0) ids.add(n);
+          }
+        }
+      }
     }
   }
 
@@ -567,19 +634,51 @@ export async function fetchItemThumbnailsMap(
   return result;
 }
 
+const PRE_DISPATCH_READY_SUBSTATUSES = new Set([
+  "printed",
+  "ready_to_print",
+  "invoice_pending",
+  "waiting_for_carrier_authorization",
+  "authorized_by_carrier",
+  "waiting_for_label_generation",
+  "shipment_paid",
+  "buffered",
+  "delayed",
+  "handling_delayed",
+  "regenerating",
+]);
+
 function hasShipmentEnteredTransit(
   shipment: RawShipmentDetail | null,
   order: RawMlOrderDetail
 ): boolean {
   const st = (shipment?.status || "").toLowerCase();
+  const sub = (shipment?.substatus || "").trim().toLowerCase();
   if (st === "shipped" || st === "delivered" || st === "not_delivered") {
     return true;
   }
-  if (isDispatchedShipmentSubstatus(shipment?.substatus)) {
+  if (isDispatchedShipmentSubstatus(sub)) {
+    return true;
+  }
+  // Em `ready_to_ship`, se o substatus vier vazio ou desconhecido (não sendo apenas etiqueta gerada/impressa),
+  // consultamos `/history` para não perder `dropped_off` / `picked_up` omitidos no resumo `x-format-new`.
+  if (st === "ready_to_ship" && sub && !PRE_DISPATCH_READY_SUBSTATUSES.has(sub)) {
+    return true;
+  }
+  // Pedidos devolvidos/cancelados pós-envio podem ter `shipment.status = "cancelled"`, mas possuem tracking/mediação
+  if (
+    st === "cancelled" &&
+    (Boolean(shipment?.tracking_number) ||
+      (Array.isArray(order.mediations) && order.mediations.length > 0))
+  ) {
     return true;
   }
   const tags = Array.isArray(order.tags) ? order.tags : [];
-  return tags.includes("delivered") || tags.includes("shipped");
+  return (
+    tags.includes("delivered") ||
+    tags.includes("shipped") ||
+    tags.includes("not_delivered")
+  );
 }
 
 /**
@@ -690,57 +789,98 @@ export async function extractSingleOrder(
 
       shipmentDetail = shipRes.data ?? null;
 
-      // Extração em cascata da data real de envio (`dropped_off`/`picked_up` em `substatus_history` + `status_history.date_shipped`):
-      // O header `x-format-new: true` omite `substatus_history` e `status_history`.
-      // Quando o pacote já foi postado/coletado ou entrou em trânsito/entrega, consultamos o schema padrão `/shipments/{id}`
-      // (que contém `substatus_history` com o timestamp exato da postagem na Agência ML / Coleta) e só acionamos fallbacks se ainda ausente.
+      // Extração em cascata da data real de envio (`dropped_off`/`picked_up` em `/history` + `substatus_history` + `status_history.date_shipped`):
+      // O header obrigatório `x-format-new: true` remove `status_history` e `substatus_history` do payload principal `/shipments/{id}`,
+      // modularizando o histórico em `/shipments/{id}/history` (ou `/marketplace/shipments/{id}/history`).
       let classicShipmentDetail: RawShipmentDetail | null = null;
       let historyEntries: RawShipmentHistoryEntry[] | null = null;
       let timelineEvents: RawShipmentTimelineEvent[] | null = null;
+      let leadTimeDeadline: string | null = null;
 
       const enteredTransit = hasShipmentEnteredTransit(shipmentDetail, order);
-      if (enteredTransit && !Array.isArray(shipmentDetail?.substatus_history)) {
-        const classicRes = await mlReadOnlyGet<RawShipmentDetail>(
-          `${ML_API_BASE}/shipments/${shipmentId}`,
-          account,
-          tokenRef
-        );
+      if (enteredTransit) {
+        const [historyNewRes, classicRes] = await Promise.all([
+          mlReadOnlyGet<RawShipmentHistoryEntry[]>(
+            `${ML_API_BASE}/shipments/${shipmentId}/history`,
+            account,
+            tokenRef,
+            { "x-format-new": "true" }
+          ),
+          !Array.isArray(shipmentDetail?.substatus_history)
+            ? mlReadOnlyGet<RawShipmentDetail>(
+                `${ML_API_BASE}/shipments/${shipmentId}`,
+                account,
+                tokenRef
+              )
+            : Promise.resolve({ ok: false, status: 0, data: null }),
+        ]);
+
+        if (historyNewRes.ok && Array.isArray(historyNewRes.data)) {
+          historyEntries = historyNewRes.data;
+        }
         classicShipmentDetail = classicRes.data ?? null;
 
-        const preliminary = extractShipmentDatesAndLogistics({
+        let preliminary = extractShipmentDatesAndLogistics({
           modernDetail: shipmentDetail,
           classicDetail: classicShipmentDetail,
+          historyEntries,
         });
 
         if (!isValidIsoTimestamp(preliminary.shippedAt)) {
-          const historyRes = await mlReadOnlyGet<RawShipmentHistoryEntry[]>(
-            `${ML_API_BASE}/shipments/${shipmentId}/history`,
-            account,
-            tokenRef
-          );
-          if (historyRes.ok && Array.isArray(historyRes.data)) {
-            historyEntries = historyRes.data;
-          }
-
-          const hasHistoryShipped = Array.isArray(historyEntries)
-            ? historyEntries.some((h) => {
-                const st = (h?.status || "").toLowerCase();
-                return (st === "shipped" || st === "in_transit") && isValidIsoTimestamp(h.date || h.date_created);
-              })
-            : false;
-
-          if (!hasHistoryShipped) {
-            const timelineRes = await mlReadOnlyGet<{
+          const [mktHistoryRes, timelineRes] = await Promise.all([
+            !historyEntries || historyEntries.length === 0
+              ? mlReadOnlyGet<RawShipmentHistoryEntry[]>(
+                  `${ML_API_BASE}/marketplace/shipments/${shipmentId}/history`,
+                  account,
+                  tokenRef,
+                  { "x-format-new": "true" }
+                )
+              : Promise.resolve({ ok: false, status: 0, data: null }),
+            mlReadOnlyGet<{
               timeline?: RawShipmentTimelineEvent[];
             }>(
               `${ML_API_BASE}/shipments/${shipmentId}/tracking/timeline`,
               account,
-              tokenRef
-            );
-            if (timelineRes.ok && Array.isArray(timelineRes.data?.timeline)) {
-              timelineEvents = timelineRes.data.timeline;
-            }
+              tokenRef,
+              { "x-format-new": "true" }
+            ),
+          ]);
+
+          if (mktHistoryRes.ok && Array.isArray(mktHistoryRes.data)) {
+            historyEntries = mktHistoryRes.data;
           }
+          if (timelineRes.ok && Array.isArray(timelineRes.data?.timeline)) {
+            timelineEvents = timelineRes.data.timeline;
+          }
+
+          preliminary = extractShipmentDatesAndLogistics({
+            modernDetail: shipmentDetail,
+            classicDetail: classicShipmentDetail,
+            historyEntries,
+            timelineEvents,
+          });
+        }
+      } else if (
+        !shipmentDetail?.shipping_option?.estimated_handling_limit?.date &&
+        !shipmentDetail?.lead_time?.estimated_handling_limit?.date &&
+        !shipmentDetail?.lead_time?.buffering?.date
+      ) {
+        const leadRes = await mlReadOnlyGet<{
+          estimated_handling_limit?: { date?: string | null };
+          buffering?: { date?: string | null };
+          estimated_schedule_limit?: { date?: string | null };
+        }>(
+          `${ML_API_BASE}/shipments/${shipmentId}/lead_time`,
+          account,
+          tokenRef,
+          { "x-format-new": "true" }
+        );
+        if (leadRes.ok && leadRes.data) {
+          leadTimeDeadline =
+            leadRes.data.estimated_handling_limit?.date ||
+            leadRes.data.buffering?.date ||
+            leadRes.data.estimated_schedule_limit?.date ||
+            null;
         }
       }
 
@@ -754,6 +894,16 @@ export async function extractSingleOrder(
       shippedAt = extractedLogistics.shippedAt;
       deliveredAt = extractedLogistics.deliveredAt;
       logisticType = extractedLogistics.logisticType;
+
+      if (leadTimeDeadline && shipmentDetail) {
+        shipmentDetail = {
+          ...shipmentDetail,
+          lead_time: {
+            ...(shipmentDetail.lead_time ?? {}),
+            estimated_handling_limit: { date: leadTimeDeadline },
+          },
+        };
+      }
 
       if (costsRes.ok && costsRes.data) {
         const senders = Array.isArray(costsRes.data.senders)
@@ -811,6 +961,19 @@ export async function extractSingleOrder(
         deliveredAt,
         logisticType,
       });
+    }
+  }
+
+  if (!shipmentId && !shippedAt) {
+    const orderTags = Array.isArray(order.tags) ? order.tags : [];
+    if (orderTags.includes("delivered") || orderTags.includes("shipped")) {
+      const orderFallbackDate = order.date_closed || order.last_updated || null;
+      if (isValidIsoTimestamp(orderFallbackDate)) {
+        shippedAt = orderFallbackDate;
+        if (orderTags.includes("delivered") && !deliveredAt) {
+          deliveredAt = orderFallbackDate;
+        }
+      }
     }
   }
 
@@ -936,8 +1099,16 @@ export async function syncMercadoLivreSales(params: {
   to: string;
   sellerAccountId?: string;
   analysisMode?: SalesAnalysisMode;
+  reconcileShippingDates?: boolean;
 }): Promise<MlSalesSyncSummary> {
-  const { scope, from, to, sellerAccountId, analysisMode = "order_date" } = params;
+  const {
+    scope,
+    from,
+    to,
+    sellerAccountId,
+    analysisMode = "order_date",
+    reconcileShippingDates = false,
+  } = params;
   const { isoStart, isoEnd } = normalizeSyncIsoRange(from, to, analysisMode);
 
   const allIntegrations = await getMarketplaceIntegrations(scope);
@@ -1021,7 +1192,14 @@ export async function syncMercadoLivreSales(params: {
       const tokenRef = { current: initialToken };
       const [periodOrderIds, followUpLocalIds] = await Promise.all([
         fetchOrderIdsInPeriod(account, tokenRef, isoStart, isoEnd),
-        fetchFollowUpLocalOrderIds({ scope, sellerId: account.seller_id }),
+        fetchFollowUpLocalOrderIds({
+          scope,
+          sellerId: account.seller_id,
+          isoStart,
+          isoEnd,
+          analysisMode,
+          reconcileShippingDates,
+        }),
       ]);
 
       pendingOrdersChecked += followUpLocalIds.length;
@@ -1055,73 +1233,91 @@ export async function syncMercadoLivreSales(params: {
         }
       }
 
-      // Consulta pedidos já existentes no Supabase para preservar vendedor, conferência, custos congelados/manuais e shipped_at manual
+      // Consulta pedidos já existentes no Supabase em lotes de 200 IDs (evitando limite de URL e truncamento de 1.000 linhas no PostgREST)
       const draftOrderIds = drafts.map((d) => d.ml_order_id);
-      let existingRows: Array<Record<string, unknown>> | null = null;
+      const existingRows: Array<Record<string, unknown>> = [];
       let shippingColumnsAvailable = true;
       let manualShippingColumnsAvailable = true;
       let costSnapshotColumnsAvailable = true;
 
-      const snapshotSelectRes = await admin
-        .from("ml_sales_orders")
-        .select(
-          "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, cost_snapshot_locked, cost_snapshot_locked_at, cost_snapshot_source, cost_lot_summary, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
-        )
-        .in("ml_order_id", draftOrderIds);
+      for (let offset = 0; offset < draftOrderIds.length; offset += EXISTING_LOOKUP_CHUNK_SIZE) {
+        const idBatch = draftOrderIds.slice(offset, offset + EXISTING_LOOKUP_CHUNK_SIZE);
 
-      if (snapshotSelectRes.error && isMissingColumnError(snapshotSelectRes.error)) {
-        costSnapshotColumnsAvailable = false;
-        const fullSelectRes = await admin
-          .from("ml_sales_orders")
-          .select(
-            "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
-          )
-          .in("ml_order_id", draftOrderIds);
+        if (costSnapshotColumnsAvailable) {
+          const snapshotSelectRes = await admin
+            .from("ml_sales_orders")
+            .select(
+              "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, cost_snapshot_locked, cost_snapshot_locked_at, cost_snapshot_source, cost_lot_summary, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
+            )
+            .in("ml_order_id", idBatch);
 
-        if (fullSelectRes.error && isMissingColumnError(fullSelectRes.error)) {
+          if (!snapshotSelectRes.error) {
+            existingRows.push(
+              ...((snapshotSelectRes.data ?? []) as Array<Record<string, unknown>>)
+            );
+            continue;
+          }
+          if (!isMissingColumnError(snapshotSelectRes.error)) {
+            throw new Error(
+              `Erro ao consultar ml_sales_orders (${snapshotSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
+            );
+          }
+          costSnapshotColumnsAvailable = false;
+        }
+
+        if (manualShippingColumnsAvailable) {
+          const fullSelectRes = await admin
+            .from("ml_sales_orders")
+            .select(
+              "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, api_shipped_at, shipped_at_manual, delivered_at, logistic_type"
+            )
+            .in("ml_order_id", idBatch);
+
+          if (!fullSelectRes.error) {
+            existingRows.push(...((fullSelectRes.data ?? []) as Array<Record<string, unknown>>));
+            continue;
+          }
+          if (!isMissingColumnError(fullSelectRes.error)) {
+            throw new Error(
+              `Erro ao consultar ml_sales_orders (${fullSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
+            );
+          }
           manualShippingColumnsAvailable = false;
+        }
+
+        if (shippingColumnsAvailable) {
           const midSelectRes = await admin
             .from("ml_sales_orders")
             .select(
               "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink, shipped_at, delivered_at, logistic_type"
             )
-            .in("ml_order_id", draftOrderIds);
+            .in("ml_order_id", idBatch);
 
-          if (midSelectRes.error && isMissingColumnError(midSelectRes.error)) {
-            shippingColumnsAvailable = false;
-            const legacySelectRes = await admin
-              .from("ml_sales_orders")
-              .select(
-                "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
-              )
-              .in("ml_order_id", draftOrderIds);
-
-            if (legacySelectRes.error) {
-              throw new Error(
-                `Erro ao consultar ml_sales_orders (${legacySelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
-              );
-            }
-            existingRows = (legacySelectRes.data ?? []) as Array<Record<string, unknown>>;
-          } else if (midSelectRes.error) {
+          if (!midSelectRes.error) {
+            existingRows.push(...((midSelectRes.data ?? []) as Array<Record<string, unknown>>));
+            continue;
+          }
+          if (!isMissingColumnError(midSelectRes.error)) {
             throw new Error(
               `Erro ao consultar ml_sales_orders (${midSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
             );
-          } else {
-            existingRows = (midSelectRes.data ?? []) as Array<Record<string, unknown>>;
           }
-        } else if (fullSelectRes.error) {
-          throw new Error(
-            `Erro ao consultar ml_sales_orders (${fullSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
-          );
-        } else {
-          existingRows = (fullSelectRes.data ?? []) as Array<Record<string, unknown>>;
+          shippingColumnsAvailable = false;
         }
-      } else if (snapshotSelectRes.error) {
-        throw new Error(
-          `Erro ao consultar ml_sales_orders (${snapshotSelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
-        );
-      } else {
-        existingRows = (snapshotSelectRes.data ?? []) as Array<Record<string, unknown>>;
+
+        const legacySelectRes = await admin
+          .from("ml_sales_orders")
+          .select(
+            "ml_order_id, assigned_seller_id, verified_at, costs_manually_edited, tax_pct, cost_material, cost_packaging, cost_logistics, cost_printing, cost_accessories_kit, product_thumbnail, permalink"
+          )
+          .in("ml_order_id", idBatch);
+
+        if (legacySelectRes.error) {
+          throw new Error(
+            `Erro ao consultar ml_sales_orders (${legacySelectRes.error.message}). Verifique se a migration SQL foi executada no Supabase.`
+          );
+        }
+        existingRows.push(...((legacySelectRes.data ?? []) as Array<Record<string, unknown>>));
       }
 
       const existingMap = new Map<number, Record<string, unknown>>();
@@ -1312,17 +1508,17 @@ export async function syncMercadoLivreSales(params: {
         }
 
         if (shippingColumnsAvailable) {
-          const isManualShipped =
-            manualShippingColumnsAvailable && Boolean(existing?.shipped_at_manual);
+          const existingShippedStr = existing?.shipped_at ? String(existing.shipped_at) : null;
+          const isManualShipped = manualShippingColumnsAvailable
+            ? Boolean(existing?.shipped_at_manual)
+            : isLegacyManualNoonTimestamp(existingShippedStr);
           const apiResolvedShipped =
             d.shipped_at ??
             (existing?.api_shipped_at ? String(existing.api_shipped_at) : null);
 
           basePayload.shipped_at = isManualShipped
-            ? existing?.shipped_at
-              ? String(existing.shipped_at)
-              : apiResolvedShipped
-            : d.shipped_at ?? (existing?.shipped_at ? String(existing.shipped_at) : null);
+            ? existingShippedStr ?? apiResolvedShipped
+            : d.shipped_at ?? existingShippedStr;
 
           if (manualShippingColumnsAvailable) {
             basePayload.shipped_at_manual = isManualShipped;

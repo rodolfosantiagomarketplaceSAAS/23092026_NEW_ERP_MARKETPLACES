@@ -7,6 +7,7 @@ export const syncSalesRequestSchema = z
     allSales: z.boolean().optional().default(false),
     sellerAccountId: z.string().optional(),
     analysisMode: z.enum(["order_date", "shipping_date"]).optional().default("order_date"),
+    reconcileShippingDates: z.boolean().optional().default(false),
   })
   .refine(
     (data) =>

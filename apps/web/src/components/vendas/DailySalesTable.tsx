@@ -368,26 +368,16 @@ export function DailySalesTable({
         )}
         <div className="text-sm font-bold text-slate-800">
           {emptyTitle ||
-            (isShippingMode
-              ? "Nenhum pedido enviado (bipado/coletado ou com data manual) encontrado neste período"
-              : "Nenhuma venda encontrada para os filtros selecionados")}
+            "Nenhuma venda encontrada para os filtros e período selecionados"}
         </div>
         <p className="text-xs text-slate-500 max-w-lg mx-auto">
           {emptyDescription ? (
             emptyDescription
-          ) : isShippingMode ? (
-            <>
-              No modo <strong>Por Dia do Envio</strong> aparecem as vendas despachadas na
-              transportadora/agência ou com <strong>Data de Envio definida manualmente</strong>{" "}
-              dentro das datas filtradas. Clique em{" "}
-              <strong>&ldquo;Forçar Sincronização ML&rdquo;</strong> ou altere para{" "}
-              <strong>Por Data da Venda</strong> para atribuir uma data de envio em pedidos pagos.
-            </>
           ) : (
             <>
               Clique em <strong>&ldquo;Forçar Sincronização ML&rdquo;</strong> no topo para buscar
-              os pedidos mais recentes na API oficial do Mercado Livre ou ajuste o intervalo de
-              datas.
+              os pedidos e datas reais de envio na API oficial do Mercado Livre ou ajuste o
+              intervalo de datas.
             </>
           )}
         </p>
@@ -483,52 +473,90 @@ export function DailySalesTable({
                   <td className="py-2.5 px-2.5 align-top whitespace-nowrap">
                     {isShippingMode ? (
                       <>
-                        <div className="flex items-center gap-1">
-                          <div
-                            className="inline-flex items-center gap-1 font-mono font-black text-emerald-800 text-[11px]"
-                            title={
-                              order.shipped_at_manual
-                                ? "Data de envio definida manualmente pelo gestor (protegida contra sobrescrita da API)"
-                                : "Data e hora real em que o produto foi postado/coletado no Mercado Livre"
-                            }
-                          >
-                            <Truck className="w-3 h-3 text-emerald-700 shrink-0" />
-                            <span>
-                              Env:{" "}
-                              {order.shipped_at_manual
-                                ? formatShortDateBR(order.shipped_at)
-                                : formatDateTimeBR(order.shipped_at)}
-                            </span>
-                          </div>
-                          {order.shipped_at_manual && (
-                            <span className="px-1 py-0.2 rounded-xs bg-sky-100 text-sky-900 border border-sky-300 text-[9px] font-bold">
-                              Manual
-                            </span>
-                          )}
-                          <button
-                            type="button"
-                            disabled={isRowBusy}
-                            onClick={() => startEditingShippedDate(order)}
-                            className="p-0.5 rounded-xs text-slate-400 hover:text-sky-700 hover:bg-sky-50"
-                            title="Alterar data de envio desta venda"
-                            aria-label={`Alterar data de envio do pedido ${order.ml_order_id}`}
-                          >
-                            <PencilLine className="w-3 h-3" />
-                          </button>
-                          {order.shipped_at_manual && (
+                        {order.shipped_at ? (
+                          <div className="flex items-center gap-1">
+                            <div
+                              className="inline-flex items-center gap-1 font-mono font-black text-emerald-800 text-[11px]"
+                              title={
+                                order.shipped_at_manual
+                                  ? "Data de envio definida manualmente pelo gestor (protegida contra sobrescrita da API)"
+                                  : "Data e hora real em que o produto foi postado/coletado na API do Mercado Livre"
+                              }
+                            >
+                              <Truck className="w-3 h-3 text-emerald-700 shrink-0" />
+                              <span>
+                                Env:{" "}
+                                {order.shipped_at_manual
+                                  ? formatShortDateBR(order.shipped_at)
+                                  : formatDateTimeBR(order.shipped_at)}
+                              </span>
+                            </div>
+                            {order.shipped_at_manual && (
+                              <span className="px-1 py-0.2 rounded-xs bg-sky-100 text-sky-900 border border-sky-300 text-[9px] font-bold">
+                                Manual
+                              </span>
+                            )}
                             <button
                               type="button"
                               disabled={isRowBusy}
-                              onClick={() => handleRevertSingleShippedDateToApi(order)}
-                              className="p-0.5 rounded-xs text-amber-700 hover:text-amber-950 hover:bg-amber-100"
-                              title="Reverter para a data automática oficial da API do Mercado Livre"
-                              aria-label="Reverter para data oficial do ML"
+                              onClick={() => startEditingShippedDate(order)}
+                              className="p-0.5 rounded-xs text-slate-400 hover:text-sky-700 hover:bg-sky-50"
+                              title="Alterar data de envio desta venda"
+                              aria-label={`Alterar data de envio do pedido ${order.ml_order_id}`}
                             >
-                              <RotateCcw className="w-3 h-3" />
+                              <PencilLine className="w-3 h-3" />
                             </button>
-                          )}
-                        </div>
-                        <div className="text-[10px] font-mono text-slate-500">
+                            {order.shipped_at_manual && (
+                              <button
+                                type="button"
+                                disabled={isRowBusy}
+                                onClick={() => handleRevertSingleShippedDateToApi(order)}
+                                className="p-0.5 rounded-xs text-amber-700 hover:text-amber-950 hover:bg-amber-100"
+                                title="Reverter para a data automática oficial da API do Mercado Livre"
+                                aria-label="Reverter para data oficial do ML"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1">
+                            {cancelled ? (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs bg-rose-50 text-rose-800 border border-rose-200 text-[10px] font-bold">
+                                Sem Envio
+                              </span>
+                            ) : order.status === "shipped" || order.status === "delivered" ? (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs bg-sky-50 text-sky-900 border border-sky-300 text-[10px] font-bold"
+                                title="Pedido consta como enviado/entregue no ML — clique em Forçar Sincronização ML ou defina a data"
+                              >
+                                <Truck className="w-3 h-3 text-sky-700 shrink-0" />
+                                Sincronizar Envio
+                              </span>
+                            ) : (
+                              <span
+                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-xs bg-amber-50 text-amber-900 border border-amber-300 text-[10px] font-bold"
+                                title="Venda paga aguardando bipagem/coleta na transportadora (não soma nos cards de envio até ser despachada)"
+                              >
+                                <Clock className="w-3 h-3 text-amber-700 shrink-0" />
+                                Aguardando Envio
+                              </span>
+                            )}
+                            {!cancelled && (
+                              <button
+                                type="button"
+                                disabled={isRowBusy}
+                                onClick={() => startEditingShippedDate(order)}
+                                className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-xs bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-[10px] font-semibold text-emerald-800"
+                                title="Definir manualmente a data de envio desta venda"
+                              >
+                                <CalendarPlus className="w-2.5 h-2.5" />
+                                Definir
+                              </button>
+                            )}
+                          </div>
+                        )}
+                        <div className="text-[10px] font-mono text-slate-500 mt-0.5">
                           Venda: {formatDateTimeBR(order.order_date)}
                         </div>
                       </>
