@@ -32,6 +32,11 @@ import {
   type GroupedVariationNode,
   type SellingOptionItem,
 } from "@/lib/catalogo/mlGroupingEngine";
+import { useErpListingLinks } from "@/hooks/useErpListingLinks";
+import { ErpListingLinkBadge } from "@/components/produtos/ErpListingLinkBadge";
+import { LinkListingModal } from "@/components/produtos/LinkListingModal";
+import { ProductDetailDrawer } from "@/components/produtos/ProductDetailDrawer";
+import type { ErpListingLink, ErpProductWithSummary } from "@/types/erp-products";
 
 export type { MyListingItem };
 
@@ -295,6 +300,24 @@ export function MyListingsTable({
   const [expandedFamilies, setExpandedFamilies] = useState<Record<string, boolean>>({});
   // Controle de "Ver mais opções de venda" quando uma variação possui > 2 opções (ex: Clássico + Premium + Catálogo)
   const [expandedExtraOptions, setExpandedExtraOptions] = useState<Record<string, boolean>>({});
+
+  // Vínculos ERP (Produtos, Kits & Bobinas PPF)
+  const erpLinks = useErpListingLinks();
+  const [erpDetailState, setErpDetailState] = useState<{
+    product: ErpProductWithSummary;
+    qty: number;
+    contextLabel?: string;
+  } | null>(null);
+  const [erpLinkModalState, setErpLinkModalState] = useState<{
+    initialListing: {
+      platform: "mercadolivre";
+      external_listing_id: string;
+      listing_sku?: string | null;
+      listing_title?: string | null;
+      listing_thumbnail?: string | null;
+    };
+    existingLink?: ErpListingLink | null;
+  } | null>(null);
 
   const isFamilyExpanded = (groupKey: string) => {
     return expandedFamilies[groupKey] ?? true;
@@ -1231,6 +1254,39 @@ export function MyListingsTable({
                                               ))}
                                             </div>
 
+                                            {/* Vínculo ERP (Produto / Kit / Consumo Bobina PPF) */}
+                                            {erpLinks.schemaReady && variation.mlbIds[0] && (() => {
+                                              const primaryMlb = variation.mlbIds[0].externalId.toUpperCase();
+                                              const matchedLink =
+                                                variation.mlbIds
+                                                  .map((m) => erpLinks.linkByExternalId.get(m.externalId.toUpperCase()))
+                                                  .find(Boolean) ?? null;
+                                              return (
+                                                <ErpListingLinkBadge
+                                                  link={matchedLink}
+                                                  onInspect={(prod, qty) =>
+                                                    setErpDetailState({
+                                                      product: prod,
+                                                      qty,
+                                                      contextLabel: `Anúncio ${matchedLink?.external_listing_id || primaryMlb}`,
+                                                    })
+                                                  }
+                                                  onLinkClick={() =>
+                                                    setErpLinkModalState({
+                                                      initialListing: {
+                                                        platform: "mercadolivre",
+                                                        external_listing_id: matchedLink?.external_listing_id || primaryMlb,
+                                                        listing_sku: variation.sku && variation.sku !== "SEM-SKU" ? variation.sku : null,
+                                                        listing_title: variation.variationName || primaryMlb,
+                                                        listing_thumbnail: variation.thumbnail || family.thumbnail || null,
+                                                      },
+                                                      existingLink: matchedLink,
+                                                    })
+                                                  }
+                                                />
+                                              );
+                                            })()}
+
                                             {/* SKU da Variação com botão de copiar */}
                                             {variation.sku &&
                                               variation.sku !== "SEM-SKU" && (
@@ -1533,6 +1589,25 @@ export function MyListingsTable({
           </tbody>
         </table>
       </div>
+
+      {/* Modais ERP de Vínculo e Ficha de Produto/Kit */}
+      <LinkListingModal
+        open={Boolean(erpLinkModalState)}
+        products={erpLinks.products}
+        initialListing={erpLinkModalState?.initialListing ?? null}
+        existingLink={erpLinkModalState?.existingLink ?? null}
+        onClose={() => setErpLinkModalState(null)}
+        onSaved={() => erpLinks.refresh()}
+      />
+
+      <ProductDetailDrawer
+        open={Boolean(erpDetailState)}
+        product={erpDetailState?.product ?? null}
+        links={erpLinks.links}
+        quantityMultiplier={erpDetailState?.qty ?? 1}
+        contextLabel={erpDetailState?.contextLabel}
+        onClose={() => setErpDetailState(null)}
+      />
     </div>
   );
 }

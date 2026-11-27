@@ -23,6 +23,7 @@ import {
   UserCheck,
   Download,
   Wallet,
+  Package,
 } from "lucide-react";
 import {
   getCurrentUserProfileAndOrg,
@@ -111,6 +112,12 @@ function SidebarContent() {
       href: "/catalogo",
       icon: Boxes,
       badge: null,
+    },
+    {
+      label: "Produtos, Kits & Bobinas",
+      href: "/produtos",
+      icon: Package,
+      badge: "ERP",
     },
     {
       label: "Gestão de Vendas & Repasse",

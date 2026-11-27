@@ -47,6 +47,11 @@ import { OrderCostsPopover } from "./OrderCostsPopover";
 import { PlatformFeeBreakdownTooltip } from "./PlatformFeeBreakdownTooltip";
 import { ProductThumbnailPreview } from "./ProductThumbnailPreview";
 import { SellerQuickColorPopover } from "./SellerQuickColorPopover";
+import { useErpListingLinks } from "@/hooks/useErpListingLinks";
+import { ErpListingLinkBadge } from "@/components/produtos/ErpListingLinkBadge";
+import { LinkListingModal } from "@/components/produtos/LinkListingModal";
+import { ProductDetailDrawer } from "@/components/produtos/ProductDetailDrawer";
+import type { ErpListingLink, ErpProductWithSummary } from "@/types/erp-products";
 
 interface DailySalesTableProps {
   orders: MlSaleOrder[];
@@ -81,6 +86,24 @@ export function DailySalesTable({
     null
   );
   const [draftShippedDate, setDraftShippedDate] = useState<string>("");
+
+  // Vínculos ERP (Produtos, Kits & Consumo de Bobinas PPF)
+  const erpLinks = useErpListingLinks();
+  const [erpDetailState, setErpDetailState] = useState<{
+    product: ErpProductWithSummary;
+    qty: number;
+    contextLabel?: string;
+  } | null>(null);
+  const [erpLinkModalState, setErpLinkModalState] = useState<{
+    initialListing: {
+      platform: "mercadolivre";
+      external_listing_id: string;
+      listing_sku?: string | null;
+      listing_title?: string | null;
+      listing_thumbnail?: string | null;
+    };
+    existingLink?: ErpListingLink | null;
+  } | null>(null);
 
   const isShippingMode = analysisMode === "shipping_date";
 
@@ -753,6 +776,38 @@ export function DailySalesTable({
                             </span>
                           )}
                         </div>
+
+                        {/* Vínculo ERP: Custo do Produto/Kit & Consumo da Bobina PPF nesta venda */}
+                        {erpLinks.schemaReady && (() => {
+                          const matchedLink =
+                            erpLinks.linkByExternalId.get((order.mlb_id || "").toUpperCase()) ??
+                            null;
+                          return (
+                            <ErpListingLinkBadge
+                              link={matchedLink}
+                              saleQuantity={order.quantity}
+                              onInspect={(prod, qty) =>
+                                setErpDetailState({
+                                  product: prod,
+                                  qty,
+                                  contextLabel: `Venda #${getOfficialMlSaleCode(order)} (${order.quantity}x) • ${order.mlb_id}`,
+                                })
+                              }
+                              onLinkClick={() =>
+                                setErpLinkModalState({
+                                  initialListing: {
+                                    platform: "mercadolivre",
+                                    external_listing_id: order.mlb_id,
+                                    listing_sku: order.sku || null,
+                                    listing_title: order.product_title,
+                                    listing_thumbnail: order.product_thumbnail || null,
+                                  },
+                                  existingLink: matchedLink,
+                                })
+                              }
+                            />
+                          );
+                        })()}
                       </div>
                     </div>
                   </td>
@@ -1109,6 +1164,28 @@ export function DailySalesTable({
           onSaved={onRefresh}
         />
       )}
+
+      {/* Modais ERP de Vínculo e Detalhamento do Produto/Kit da Venda */}
+      <LinkListingModal
+        open={Boolean(erpLinkModalState)}
+        products={erpLinks.products}
+        initialListing={erpLinkModalState?.initialListing ?? null}
+        existingLink={erpLinkModalState?.existingLink ?? null}
+        onClose={() => setErpLinkModalState(null)}
+        onSaved={() => {
+          erpLinks.refresh();
+          onRefresh();
+        }}
+      />
+
+      <ProductDetailDrawer
+        open={Boolean(erpDetailState)}
+        product={erpDetailState?.product ?? null}
+        links={erpLinks.links}
+        quantityMultiplier={erpDetailState?.qty ?? 1}
+        contextLabel={erpDetailState?.contextLabel}
+        onClose={() => setErpDetailState(null)}
+      />
     </div>
   );
 }
